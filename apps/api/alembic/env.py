@@ -12,6 +12,12 @@ config = context.config
 
 # The app settings object is strict, so provide benign defaults when the
 # migration environment imports app modules without a fully populated .env.
+# DATABASE_URL must be set before importing app.* (session.py loads Settings).
+# Default matches local docker-compose Postgres (host port 5433).
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+asyncpg://dev:dev@localhost:5433/codereview",
+)
 os.environ.setdefault("GITHUB_APP_ID", "0")
 os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "placeholder")
 os.environ.setdefault("GITHUB_CLIENT_ID", "placeholder")
