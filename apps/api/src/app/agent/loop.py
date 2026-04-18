@@ -1,10 +1,11 @@
 from anthropic import AsyncAnthropic
 
+from app.config import settings
 from app.agent.tools import TOOLS, execute_tool
 
 MAX_ITERATIONS = 10
 MODEL_NAME = "claude-sonnet-4-5"
-client = AsyncAnthropic()
+client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
 async def run_agent(system_prompt: str, initial_user_message: str, context: dict) -> list[dict]:

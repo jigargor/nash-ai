@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str
     environment: str = "development"
     log_webhook_payloads: bool = False
+    admin_retry_api_key: str | None = None
 
     @model_validator(mode="after")
     def validate_production_database_tls(self) -> "Settings":

@@ -2,8 +2,9 @@ from anthropic import AsyncAnthropic
 
 from app.agent.loop import MODEL_NAME
 from app.agent.schema import ReviewResult
+from app.config import settings
 
-client = AsyncAnthropic()
+client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 FINAL_TOOL = {
     "name": "submit_review",

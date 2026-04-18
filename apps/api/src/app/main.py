@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI
 
+from app.admin.router import router as admin_router
 from app.config import settings
 from app.db.session import engine
 from app.queue.connection import create_redis_pool
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Code Review API", lifespan=lifespan)
 app.include_router(webhook_router, prefix="/webhooks")
+app.include_router(admin_router, prefix="/admin")
 
 
 @app.get("/health")
