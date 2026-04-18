@@ -1,11 +1,12 @@
-import json
 import logging
 import hashlib
 import hmac
 from fastapi import APIRouter, Request, HTTPException
+from pydantic import ValidationError
 
 from app.config import settings
 from app.webhooks.handlers import queue_pull_request_review
+from app.webhooks.schemas import GitHubPullRequestWebhookPayload
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -27,22 +28,30 @@ async def github_webhook(request: Request):
     event = request.headers.get("X-GitHub-Event", "")
     delivery_id = request.headers.get("X-GitHub-Delivery", "")
 
-    payload_raw = payload_bytes.decode("utf-8", errors="replace")
     logger.warning(
-        "GitHub webhook received event=%s delivery_id=%s payload_size=%s payload_raw=%s",
+        "GitHub webhook received event=%s delivery_id=%s payload_size=%s",
         event,
         delivery_id,
         len(payload_bytes),
-        payload_raw,
     )
 
     if not verify_signature(payload_bytes, signature):
         logger.warning("GitHub webhook signature verification failed event=%s delivery_id=%s", event, delivery_id)
         raise HTTPException(status_code=401, detail="Invalid signature")
 
-    payload = json.loads(payload_bytes)
+    if event != "pull_request":
+        return {"ok": True}
 
-    if event == "pull_request" and payload.get("action") in ("opened", "synchronize"):
+    try:
+        payload = GitHubPullRequestWebhookPayload.model_validate_json(payload_bytes)
+    except ValidationError:
+        logger.warning("GitHub webhook payload validation failed delivery_id=%s", delivery_id)
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    if settings.log_webhook_payloads and settings.environment != "production":
+        logger.debug("GitHub webhook payload delivery_id=%s payload=%s", delivery_id, payload.model_dump(mode="json"))
+
+    if payload.action in {"opened", "synchronize"}:
         await queue_pull_request_review(request.app.state.redis, payload)
 
     return {"ok": True}

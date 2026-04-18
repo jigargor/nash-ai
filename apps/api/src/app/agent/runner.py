@@ -9,7 +9,7 @@ from app.agent.loop import run_agent
 from app.agent.prompts import SYSTEM_PROMPT, build_initial_user_prompt
 from app.agent.schema import ReviewResult
 from app.db.models import Review
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
 from app.github.comments import post_review
 
@@ -26,6 +26,7 @@ async def run_review(
     head_sha: str,
 ) -> None:
     async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise RuntimeError(f"Review {review_id} does not exist")
@@ -35,6 +36,7 @@ async def run_review(
 
     context = {
         "review_id": review_id,
+        "installation_id": installation_id,
         "owner": owner,
         "repo": repo,
         "pr_number": pr_number,
@@ -78,6 +80,7 @@ async def run_review(
 async def _mark_review_done(session_data: ReviewResult, context: dict, status: str) -> None:
     cost = _estimate_cost_usd(context.get("input_tokens", 0), context.get("output_tokens", 0))
     async with AsyncSessionLocal() as session:
+        await set_installation_context(session, int(context["installation_id"]))
         review = await session.get(Review, context["review_id"])
         if review is None:
             return

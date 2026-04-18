@@ -1,0 +1,67 @@
+name: API DB Security Checks
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/api-db-security.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/api-db-security.yml"
+
+jobs:
+  api-db-security:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: codereview
+          POSTGRES_USER: dev
+          POSTGRES_PASSWORD: dev
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U dev -d codereview"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://dev:dev@localhost:5433/codereview
+      TEST_DATABASE_URL: postgresql+asyncpg://dev:dev@localhost:5433/codereview_test
+      GITHUB_APP_ID: "0"
+      GITHUB_WEBHOOK_SECRET: test-webhook-secret
+      GITHUB_CLIENT_ID: test-client-id
+      GITHUB_CLIENT_SECRET: test-client-secret
+      FERNET_KEY: 4nYA5RU2f22W4DvwW8Hpt4W6YKfYwQMUqlGQv6ygfA4=
+      ANTHROPIC_API_KEY: test-anthropic-key
+      ENVIRONMENT: development
+
+    defaults:
+      run:
+        working-directory: apps/api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Verify migration head
+        run: uv run alembic current
+
+      - name: Run tests
+        run: uv run pytest

@@ -2,46 +2,45 @@ import logging
 from arq.connections import ArqRedis
 from sqlalchemy import select
 
+from app.db.session import AsyncSessionLocal, set_installation_context
 from app.db.models import Installation, Review
-from app.db.session import AsyncSessionLocal
+from app.webhooks.schemas import GitHubPullRequestWebhookPayload
 
 logger = logging.getLogger(__name__)
 
 
-async def queue_pull_request_review(redis: ArqRedis, payload: dict) -> None:
-    installation_id = payload["installation"]["id"]
-    repo = payload["repository"]
-    pr = payload["pull_request"]
-
-    owner, repo_name = repo["full_name"].split("/")
-    pr_number = pr["number"]
-    head_sha = pr["head"]["sha"]
+async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestWebhookPayload) -> None:
+    installation_id = payload.installation.id
+    repo_full_name = payload.repository.full_name
+    owner, repo_name = repo_full_name.split("/")
+    pr_number = payload.pull_request.number
+    head_sha = payload.pull_request.head.sha
 
     logger.warning(
         "PR webhook parsed installation_id=%s repo=%s pr_number=%s head_sha=%s",
         installation_id,
-        repo["full_name"],
+        repo_full_name,
         pr_number,
         head_sha,
     )
     async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
         installation = await session.scalar(
             select(Installation).where(Installation.installation_id == installation_id)
         )
         if installation is None:
-            owner = repo.get("owner") or {}
             session.add(
                 Installation(
                     installation_id=installation_id,
-                    account_login=owner.get("login", "unknown"),
-                    account_type=owner.get("type", "unknown"),
+                    account_login=payload.repository.owner.login,
+                    account_type=payload.repository.owner.type,
                 )
             )
             await session.flush()
 
         review = Review(
             installation_id=installation_id,
-            repo_full_name=repo["full_name"],
+            repo_full_name=repo_full_name,
             pr_number=pr_number,
             pr_head_sha=head_sha,
             model="claude-sonnet-4-5",
@@ -65,6 +64,6 @@ async def queue_pull_request_review(redis: ArqRedis, payload: dict) -> None:
         "Queued review job review_id=%s job_id=%s repo=%s pr_number=%s",
         review_id,
         job.job_id if job else "unknown",
-        repo["full_name"],
+        repo_full_name,
         pr_number,
     )

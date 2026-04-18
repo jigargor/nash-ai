@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI
 
 from app.config import settings
+from app.db.session import engine
 from app.queue.connection import create_redis_pool
 from app.webhooks.router import router as webhook_router
 
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
     app.state.redis = await create_redis_pool()
     yield
     await app.state.redis.close()
+    await engine.dispose()
 
 
 app = FastAPI(title="AI Code Review API", lifespan=lifespan)
