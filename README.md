@@ -51,8 +51,8 @@ docker compose exec -T redis redis-cli ping
 ```bash
 cd apps/api
 # default compose postgres is exposed on localhost:5433
-DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview?sslmode=require python -m alembic upgrade head
-DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview?sslmode=require python -m alembic current
+DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview?ssl=require python -m alembic upgrade head
+DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview?ssl=require python -m alembic current
 ```
 
 ### 5. Verify GitHub App auth flow
@@ -143,6 +143,15 @@ docker compose exec -T postgres psql -U dev -d codereview -c "select set_config(
 
 `debug_artifacts.validator_dropped` and `debug_artifacts.confidence_dropped` are the fastest way to understand why a finding was not posted.
 
+Optional admin API endpoint (same admin key / tenant checks):
+
+```bash
+curl -s "http://localhost:8000/admin/reviews/<review_id>/debug?installation_id=<installation_id>" \
+  -H "x-admin-api-key: <ADMIN_RETRY_API_KEY>"
+```
+
+This returns `debug_artifacts` plus review summary/status and kept finding count.
+
 ### 11. Local Postgres SSL setup notes
 
 - `docker-compose.yml` expects certs at `apps/api/certs/postgres/server.crt` and `apps/api/certs/postgres/server.key`.
@@ -154,9 +163,9 @@ python scripts/generate_postgres_local_tls.py
 ```
 
 - Keep API, worker, Alembic, and tests on the same SSL URL shape:
-  - `DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview?sslmode=require`
-  - `TEST_DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview_test?sslmode=require`
-- If you intentionally run without SSL, switch both URLs to the plaintext fallback form (without `sslmode=require`).
+  - `DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview?ssl=require`
+  - `TEST_DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview_test?ssl=require`
+- If you intentionally run without SSL, switch both URLs to the plaintext fallback form (without `ssl=require`).
 
 ## Project Structure
 
