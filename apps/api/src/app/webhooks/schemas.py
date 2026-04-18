@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class GitHubInstallation(BaseModel):
@@ -17,6 +17,13 @@ class GitHubRepository(BaseModel):
 
 class GitHubPullRequestHead(BaseModel):
     sha: str = Field(min_length=40, max_length=40, pattern=r"^[0-9a-f]{40}$")
+
+    @field_validator("sha", mode="before")
+    @classmethod
+    def normalize_head_sha(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.lower()
+        return value
 
 
 class GitHubPullRequest(BaseModel):

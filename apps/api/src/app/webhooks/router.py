@@ -44,8 +44,12 @@ async def github_webhook(request: Request):
 
     try:
         payload = GitHubPullRequestWebhookPayload.model_validate_json(payload_bytes)
-    except ValidationError:
-        logger.warning("GitHub webhook payload validation failed delivery_id=%s", delivery_id)
+    except ValidationError as exc:
+        logger.warning(
+            "GitHub webhook payload validation failed delivery_id=%s errors=%s",
+            delivery_id,
+            exc.errors(),
+        )
         raise HTTPException(status_code=400, detail="Invalid payload")
 
     if settings.log_webhook_payloads and settings.environment != "production":
@@ -53,5 +57,11 @@ async def github_webhook(request: Request):
 
     if payload.action in {"opened", "synchronize"}:
         await queue_pull_request_review(request.app.state.redis, payload)
+    else:
+        logger.warning(
+            "GitHub pull_request webhook ignored action=%s delivery_id=%s (only opened/synchronize queue reviews)",
+            payload.action,
+            delivery_id,
+        )
 
     return {"ok": True}
