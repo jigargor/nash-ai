@@ -5,6 +5,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
+from app.db.url import normalize_asyncpg_database_url
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -27,7 +28,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "placeholder")
 
 database_url = os.getenv("DATABASE_URL")
 if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+    config.set_main_option("sqlalchemy.url", normalize_asyncpg_database_url(database_url))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

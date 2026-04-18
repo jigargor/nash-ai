@@ -3,13 +3,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
+from app.db.url import normalize_asyncpg_database_url
 
 connect_args: dict[str, object] = {"command_timeout": settings.db_command_timeout_seconds}
 if settings.db_statement_timeout_ms is not None:
     connect_args["server_settings"] = {"statement_timeout": str(settings.db_statement_timeout_ms)}
 
 engine = create_async_engine(
-    settings.database_url,
+    normalize_asyncpg_database_url(settings.database_url),
     echo=False,
     pool_size=settings.db_pool_size,
     max_overflow=settings.db_max_overflow,
