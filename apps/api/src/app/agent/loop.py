@@ -15,7 +15,13 @@ async def run_agent(system_prompt: str, initial_user_message: str, context: dict
         response = await client.messages.create(
             model=MODEL_NAME,
             max_tokens=4096,
-            system=system_prompt,
+            system=[
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             tools=TOOLS,
             messages=messages,
         )

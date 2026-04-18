@@ -13,6 +13,8 @@ class Finding(BaseModel):
     file_path: str
     line_start: int = Field(..., ge=1)
     line_end: int | None = None
+    target_line_content: str = Field(..., max_length=2000)
+    target_line_content_reasoning: str = Field(..., max_length=2000)
     suggestion: str | None = Field(None, description="Code block to replace lines with")
     confidence: float = Field(..., ge=0.0, le=1.0)
 

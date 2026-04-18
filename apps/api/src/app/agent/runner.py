@@ -6,8 +6,11 @@ from app.agent.context_builder import build_context_bundle, is_diff_too_large
 from app.agent.diff_parser import parse_diff
 from app.agent.finalize import finalize_review
 from app.agent.loop import run_agent
-from app.agent.prompts import SYSTEM_PROMPT, build_initial_user_prompt
-from app.agent.schema import ReviewResult
+from app.agent.profiler import profile_repo
+from app.agent.prompts import build_initial_user_prompt, build_system_prompt
+from app.agent.review_config import ReviewConfig, load_review_config
+from app.agent.schema import Finding, ReviewResult
+from app.agent.validator import FindingValidator
 from app.db.models import Review
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
@@ -60,11 +63,27 @@ async def run_review(
             await _mark_review_done(session_data=result, context=context, status="done")
             return
 
-        hunks = parse_diff(diff_text)
-        context_bundle = await build_context_bundle(gh, owner, repo, head_sha, hunks)
-        user_prompt = build_initial_user_prompt(owner, repo, pr_number, diff_text, context_bundle)
-        messages = await run_agent(SYSTEM_PROMPT, user_prompt, context)
-        result = await finalize_review(SYSTEM_PROMPT, messages, context)
+        files_in_diff = parse_diff(diff_text)
+        context_bundle = await build_context_bundle(gh, owner, repo, head_sha, files_in_diff)
+        repo_profile = await profile_repo(gh, owner, repo, head_sha)
+        review_config = await load_review_config(gh, owner, repo, head_sha)
+        system_prompt = build_system_prompt(repo_profile.frameworks, review_config.prompt_additions)
+        user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
+        messages = await run_agent(system_prompt, user_prompt, context)
+        result = await finalize_review(system_prompt, messages, context)
+
+        validator = FindingValidator(context_bundle.fetched_files)
+        result, dropped, generated = _validate_result(result, validator)
+        if generated > 0 and len(dropped) > generated * 0.5:
+            feedback = _validation_feedback(dropped)
+            logger.warning("Retrying review generation due to high invalid finding rate review_id=%s", review_id)
+            retried = await finalize_review(system_prompt, messages, context, validation_feedback=feedback)
+            result, dropped, generated = _validate_result(retried, validator)
+
+        threshold = review_config.confidence_threshold or 0.85
+        result.findings = [finding for finding in result.findings if finding.confidence >= threshold]
+        _log_quality_metrics(context, repo_profile.frameworks, review_config, generated, dropped, len(result.findings))
+
         await post_review(gh, owner, repo, pr_number, head_sha, result)
         await _mark_review_done(session_data=result, context=context, status="done")
     except Exception as exc:
@@ -96,3 +115,58 @@ def _estimate_cost_usd(input_tokens: int, output_tokens: int) -> Decimal:
     input_cost = Decimal(input_tokens) / Decimal(1_000_000) * Decimal("3.00")
     output_cost = Decimal(output_tokens) / Decimal(1_000_000) * Decimal("15.00")
     return (input_cost + output_cost).quantize(Decimal("0.000001"))
+
+
+def _validate_result(
+    result: ReviewResult,
+    validator: FindingValidator,
+) -> tuple[ReviewResult, list[tuple[Finding, str]], int]:
+    valid_findings: list[Finding] = []
+    dropped: list[tuple[Finding, str]] = []
+    generated = len(result.findings)
+    for finding in result.findings:
+        is_valid, reason = validator.validate(finding)
+        if is_valid:
+            valid_findings.append(finding)
+            continue
+        dropped_reason = reason or "Unknown validation error"
+        dropped.append((finding, dropped_reason))
+        logger.warning("Dropped finding: %s — %s", dropped_reason, finding.message[:80])
+    result.findings = valid_findings
+    return result, dropped, generated
+
+
+def _validation_feedback(dropped: list[tuple[Finding, str]]) -> str:
+    feedback_lines = ["Previous findings were dropped by validation. Regenerate using exact lines and coherent suggestions."]
+    for finding, reason in dropped[:10]:
+        feedback_lines.append(
+            f"- {finding.file_path}:{finding.line_start}-{finding.line_end or finding.line_start} "
+            f"reason={reason} message={finding.message[:120]}"
+        )
+    return "\n".join(feedback_lines)
+
+
+def _log_quality_metrics(
+    context: dict,
+    frameworks: list[str],
+    review_config: ReviewConfig,
+    generated: int,
+    dropped: list[tuple[Finding, str]],
+    posted: int,
+) -> None:
+    dropped_by_reason: dict[str, int] = {}
+    for _, reason in dropped:
+        dropped_by_reason[reason] = dropped_by_reason.get(reason, 0) + 1
+
+    logger.info(
+        "Review quality metrics review_id=%s generated=%s dropped=%s posted=%s threshold=%.2f frameworks=%s "
+        "dropped_reasons=%s prompt_version=%s",
+        context.get("review_id"),
+        generated,
+        len(dropped),
+        posted,
+        review_config.confidence_threshold,
+        ",".join(frameworks),
+        dropped_by_reason,
+        "v2",
+    )
