@@ -16,3 +16,6 @@ Requires-Dist: pydantic-settings>=2.2.0
 Requires-Dist: cryptography>=42.0.0
 Requires-Dist: tiktoken>=0.7.0
 Requires-Dist: anthropic>=0.28.0
+Requires-Dist: unidiff>=0.7.5
+Provides-Extra: dev
+Requires-Dist: pytest>=9.0.0; extra == "dev"

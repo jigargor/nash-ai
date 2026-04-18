@@ -17,9 +17,15 @@ dependencies = [
   "cryptography>=42.0.0",
   "tiktoken>=0.7.0",
   "anthropic>=0.28.0",
+  "unidiff>=0.7.5",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.0",
+]
+
+[tool.pytest.ini_options]
+markers = [
+  "live_github: integration test that hits the real GitHub API",
 ]

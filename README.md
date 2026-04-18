@@ -58,7 +58,10 @@ DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview python -m al
 cd apps/api
 python -m pytest tests/test_github_auth.py
 
-# Integration smoke-check (uses GITHUB_INSTALLATION_ID if provided;
+# Automated live GitHub integration test (requires app env + installation)
+RUN_LIVE_GITHUB_TESTS=1 python -m pytest -m live_github tests/test_github_live_auth.py
+
+# Optional smoke-check command (uses GITHUB_INSTALLATION_ID if provided;
 # otherwise it discovers the first installation of the app)
 python -m app.github.smoke_check
 ```
@@ -75,7 +78,10 @@ npx smee-client --url https://smee.io/YOUR_CHANNEL --target http://localhost:800
 # Terminal 1 — API
 cd apps/api/src && python -m uvicorn app.main:app --reload --port 8000
 
-# Terminal 2 — Web
+# Terminal 2 — Worker
+cd apps/api/src && python -m arq app.queue.worker.WorkerSettings
+
+# Terminal 3 — Web
 cd apps/web && pnpm dev
 ```
 
@@ -85,10 +91,25 @@ cd apps/web && pnpm dev
 2. Open or update a test pull request on an installed repository.
 3. Confirm smee logs a forwarded POST to `/webhooks/github`.
 4. Confirm API logs include:
-   - `GitHub webhook received event=pull_request ... payload_preview=...`
+   - `GitHub webhook received event=pull_request ... payload_raw=...`
+   - `Queued review job review_id=...`
    - `PR webhook parsed installation_id=... repo=... pr_number=... head_sha=...`
 
 If no installation exists yet, install the app first from its GitHub App page, then retry.
+
+### 9. Queue/worker validation checklist
+
+1. Start API + worker (sections 6 and 7).
+2. Trigger a `pull_request` webhook (`opened`/`synchronize`) with a valid signature.
+3. Confirm API logs:
+   - `Queued review job review_id=...`
+4. Confirm review lifecycle in Postgres:
+
+```bash
+docker compose exec -T postgres psql -U dev -d codereview -c "select id, status, repo_full_name, pr_number, tokens_used, cost_usd from reviews order by id desc limit 5;"
+```
+
+Expected state transitions are `queued -> running -> done|failed`.
 
 ## Project Structure
 
