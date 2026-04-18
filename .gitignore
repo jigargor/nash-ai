@@ -5,7 +5,9 @@
 !.env*.example
 *.pem
 *.key
+*.crt
 apps/api/private-key.pem
+apps/api/certs/
 
 # Python
 __pycache__/
@@ -53,5 +55,4 @@ Thumbs.db
 
 # Private docs
 private_docs/
-
 .cursor/

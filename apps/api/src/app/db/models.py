@@ -69,6 +69,7 @@ class Review(Base):
     status: Mapped[str] = mapped_column(Text, server_default="queued")
     model: Mapped[str] = mapped_column(Text, nullable=False)
     findings: Mapped[dict | None] = mapped_column(JSONB)
+    debug_artifacts: Mapped[dict | None] = mapped_column(JSONB)
     tokens_used: Mapped[int | None] = mapped_column(Integer)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

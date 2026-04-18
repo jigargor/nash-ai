@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.agent.loop import MODEL_NAME
 from app.agent.schema import ReviewResult
+from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
 from app.config import settings
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -79,8 +80,22 @@ def _repair_review_input(raw_input: object) -> object:
 
     repaired = dict(raw_input)
     summary = repaired.get("summary")
-    if isinstance(summary, str) and len(summary) > 1000:
-        repaired["summary"] = summary[:1000].rstrip()
+    if isinstance(summary, str):
+        repaired["summary"] = truncate_markdown_text(summary, 1000)
+
+    findings = repaired.get("findings")
+    if isinstance(findings, list):
+        normalized_findings = []
+        for finding in findings:
+            if not isinstance(finding, dict):
+                normalized_findings.append(finding)
+                continue
+            normalized_finding = dict(finding)
+            message = normalized_finding.get("message")
+            if isinstance(message, str):
+                normalized_finding["message"] = sanitize_markdown_text(message)
+            normalized_findings.append(normalized_finding)
+        repaired["findings"] = normalized_findings
     return repaired
 
 

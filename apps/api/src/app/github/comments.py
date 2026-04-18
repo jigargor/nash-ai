@@ -1,11 +1,13 @@
 from app.agent.schema import Finding, ReviewResult
+from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
 from app.github.client import GitHubClient
 
 
 def format_finding(finding: Finding) -> str:
+    message = sanitize_markdown_text(finding.message)
     body = (
         f"**{finding.severity} · {finding.category}** · confidence {finding.confidence:.0%}\n\n"
-        f"{finding.message}"
+        f"{message}"
     )
     if finding.suggestion:
         body = f"{body}\n\n```suggestion\n{finding.suggestion}\n```"
@@ -34,7 +36,7 @@ async def post_review(
 
     payload = {
         "commit_id": head_sha,
-        "body": result.summary,
+        "body": truncate_markdown_text(result.summary, 1000),
         "event": event,
         "comments": comments,
     }

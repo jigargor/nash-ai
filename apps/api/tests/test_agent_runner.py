@@ -1,4 +1,4 @@
-from app.agent.runner import _validate_result, _validation_feedback
+from app.agent.runner import _apply_confidence_threshold, _attach_debug_artifacts, _validate_result, _validation_feedback
 from app.agent.schema import Finding, ReviewResult
 
 
@@ -41,3 +41,29 @@ def test_validation_feedback_contains_reason_and_location() -> None:
     feedback = _validation_feedback(dropped)
     assert "bad.py:1-1" in feedback
     assert "line_start 99 out of range" in feedback
+
+
+def test_apply_confidence_threshold_tracks_dropped_metadata() -> None:
+    result = ReviewResult(findings=[_finding("ok.py", 0.9), _finding("low.py", 0.7)], summary="Summary")
+    filtered, dropped = _apply_confidence_threshold(result, threshold=0.85)
+    assert len(filtered.findings) == 1
+    assert filtered.findings[0].file_path == "ok.py"
+    assert dropped[0]["file_path"] == "low.py"
+    assert dropped[0]["threshold"] == 0.85
+
+
+def test_attach_debug_artifacts_includes_drop_buckets() -> None:
+    context: dict = {}
+    _attach_debug_artifacts(
+        context=context,
+        generated=4,
+        validator_dropped=[(_finding("bad.py"), "invalid range")],
+        confidence_dropped=[{"file_path": "low.py", "line_start": 1, "line_end": 1, "confidence": 0.5, "threshold": 0.85}],
+        retry_triggered=True,
+        threshold=0.85,
+    )
+    artifacts = context["debug_artifacts"]
+    assert artifacts["generated_findings_count"] == 4
+    assert artifacts["retry_triggered"] is True
+    assert artifacts["validator_dropped"][0]["reason"] == "invalid range"
+    assert artifacts["confidence_dropped"][0]["file_path"] == "low.py"

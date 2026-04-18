@@ -73,16 +73,34 @@ async def run_review(
         result = await finalize_review(system_prompt, messages, context)
 
         validator = FindingValidator(context_bundle.fetched_files)
-        result, dropped, generated = _validate_result(result, validator)
-        if generated > 0 and len(dropped) > generated * 0.5:
-            feedback = _validation_feedback(dropped)
+        result, validator_dropped, generated = _validate_result(result, validator)
+        retry_triggered = False
+        if generated > 0 and len(validator_dropped) > generated * 0.5:
+            retry_triggered = True
+            feedback = _validation_feedback(validator_dropped)
             logger.warning("Retrying review generation due to high invalid finding rate review_id=%s", review_id)
             retried = await finalize_review(system_prompt, messages, context, validation_feedback=feedback)
-            result, dropped, generated = _validate_result(retried, validator)
+            result, validator_dropped, generated = _validate_result(retried, validator)
 
         threshold = review_config.confidence_threshold or 0.85
-        result.findings = [finding for finding in result.findings if finding.confidence >= threshold]
-        _log_quality_metrics(context, repo_profile.frameworks, review_config, generated, dropped, len(result.findings))
+        result, confidence_dropped = _apply_confidence_threshold(result, threshold)
+        _attach_debug_artifacts(
+            context=context,
+            generated=generated,
+            validator_dropped=validator_dropped,
+            confidence_dropped=confidence_dropped,
+            retry_triggered=retry_triggered,
+            threshold=threshold,
+        )
+        _log_quality_metrics(
+            context=context,
+            frameworks=repo_profile.frameworks,
+            review_config=review_config,
+            generated=generated,
+            validator_dropped=validator_dropped,
+            confidence_dropped=confidence_dropped,
+            posted=len(result.findings),
+        )
 
         await post_review(gh, owner, repo, pr_number, head_sha, result)
         await _mark_review_done(session_data=result, context=context, status="done")
@@ -105,6 +123,7 @@ async def _mark_review_done(session_data: ReviewResult, context: dict, status: s
             return
         review.status = status
         review.findings = session_data.model_dump(mode="json")
+        review.debug_artifacts = context.get("debug_artifacts")
         review.tokens_used = int(context.get("tokens_used", 0))
         review.cost_usd = cost
         review.completed_at = datetime.now(timezone.utc)
@@ -136,6 +155,27 @@ def _validate_result(
     return result, dropped, generated
 
 
+def _apply_confidence_threshold(result: ReviewResult, threshold: float) -> tuple[ReviewResult, list[dict[str, object]]]:
+    kept_findings: list[Finding] = []
+    dropped: list[dict[str, object]] = []
+    for finding in result.findings:
+        if finding.confidence >= threshold:
+            kept_findings.append(finding)
+            continue
+        dropped.append(
+            {
+                "file_path": finding.file_path,
+                "line_start": finding.line_start,
+                "line_end": finding.line_end or finding.line_start,
+                "confidence": finding.confidence,
+                "threshold": threshold,
+                "message_excerpt": finding.message[:120],
+            }
+        )
+    result.findings = kept_findings
+    return result, dropped
+
+
 def _validation_feedback(dropped: list[tuple[Finding, str]]) -> str:
     feedback_lines = ["Previous findings were dropped by validation. Regenerate using exact lines and coherent suggestions."]
     for finding, reason in dropped[:10]:
@@ -151,22 +191,53 @@ def _log_quality_metrics(
     frameworks: list[str],
     review_config: ReviewConfig,
     generated: int,
-    dropped: list[tuple[Finding, str]],
+    validator_dropped: list[tuple[Finding, str]],
+    confidence_dropped: list[dict[str, object]],
     posted: int,
 ) -> None:
     dropped_by_reason: dict[str, int] = {}
-    for _, reason in dropped:
+    for _, reason in validator_dropped:
         dropped_by_reason[reason] = dropped_by_reason.get(reason, 0) + 1
+    dropped_by_reason["below_confidence_threshold"] = len(confidence_dropped)
 
     logger.info(
-        "Review quality metrics review_id=%s generated=%s dropped=%s posted=%s threshold=%.2f frameworks=%s "
+        "Review quality metrics review_id=%s generated=%s validator_dropped=%s confidence_dropped=%s posted=%s threshold=%.2f frameworks=%s "
         "dropped_reasons=%s prompt_version=%s",
         context.get("review_id"),
         generated,
-        len(dropped),
+        len(validator_dropped),
+        len(confidence_dropped),
         posted,
         review_config.confidence_threshold,
         ",".join(frameworks),
         dropped_by_reason,
         "v2",
     )
+
+
+def _attach_debug_artifacts(
+    context: dict,
+    generated: int,
+    validator_dropped: list[tuple[Finding, str]],
+    confidence_dropped: list[dict[str, object]],
+    retry_triggered: bool,
+    threshold: float,
+) -> None:
+    validator_entries = [
+        {
+            "file_path": finding.file_path,
+            "line_start": finding.line_start,
+            "line_end": finding.line_end or finding.line_start,
+            "reason": reason,
+            "message_excerpt": finding.message[:120],
+        }
+        for finding, reason in validator_dropped
+    ]
+    context["debug_artifacts"] = {
+        "generated_findings_count": generated,
+        "validator_dropped": validator_entries,
+        "confidence_dropped": confidence_dropped,
+        "retry_triggered": retry_triggered,
+        "retry_reason": "validator_drop_rate_above_50_percent" if retry_triggered else None,
+        "confidence_threshold": threshold,
+    }

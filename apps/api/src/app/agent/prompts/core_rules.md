@@ -61,3 +61,4 @@ Otherwise, describe the fix in the `message` field and leave `suggestion` null.
 - Do not emit speculative findings.
 - Do not report issues unrelated to changed lines unless required to explain a direct regression.
 - Prefer one concrete issue over many weak guesses.
+- Ensure markdown is complete: do not end summaries/messages with empty bullet lines like `-` or `*`.
