@@ -3,10 +3,10 @@ from app.agent.schema import Finding, ReviewResult
 
 
 class FakeValidator:
-    def validate(self, finding: Finding) -> tuple[bool, str | None]:
+    def validate(self, finding: Finding) -> tuple[bool, str | None, str | None]:
         if finding.file_path == "bad.py":
-            return False, "line_start 99 out of range"
-        return True, None
+            return False, "line_out_of_range", "line_start 99 out of range"
+        return True, None, None
 
 
 def _finding(file_path: str, confidence: float = 0.9) -> Finding:
@@ -33,11 +33,12 @@ def test_validate_result_drops_invalid_findings() -> None:
     assert len(validated.findings) == 1
     assert validated.findings[0].file_path == "ok.py"
     assert len(dropped) == 1
-    assert dropped[0][1] == "line_start 99 out of range"
+    assert dropped[0][1] == "line_out_of_range"
+    assert dropped[0][2] == "line_start 99 out of range"
 
 
 def test_validation_feedback_contains_reason_and_location() -> None:
-    dropped = [(_finding("bad.py"), "line_start 99 out of range")]
+    dropped = [(_finding("bad.py"), "line_out_of_range", "line_start 99 out of range")]
     feedback = _validation_feedback(dropped)
     assert "bad.py:1-1" in feedback
     assert "line_start 99 out of range" in feedback
@@ -57,13 +58,15 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
     _attach_debug_artifacts(
         context=context,
         generated=4,
-        validator_dropped=[(_finding("bad.py"), "invalid range")],
+        validator_dropped=[(_finding("bad.py"), "line_out_of_range", "invalid range")],
         confidence_dropped=[{"file_path": "low.py", "line_start": 1, "line_end": 1, "confidence": 0.5, "threshold": 0.85}],
         retry_triggered=True,
         threshold=0.85,
+        context_telemetry={"anchor_coverage": 1.0},
     )
     artifacts = context["debug_artifacts"]
     assert artifacts["generated_findings_count"] == 4
     assert artifacts["retry_triggered"] is True
-    assert artifacts["validator_dropped"][0]["reason"] == "invalid range"
+    assert artifacts["validator_dropped"][0]["reason"] == "line_out_of_range"
+    assert artifacts["validator_dropped"][0]["detail"] == "invalid range"
     assert artifacts["confidence_dropped"][0]["file_path"] == "low.py"

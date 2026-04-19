@@ -22,17 +22,32 @@ def _base_finding(**overrides) -> Finding:
 def test_validator_rejects_when_target_line_content_does_not_match() -> None:
     validator = FindingValidator({"a.py": "value = int(input_value)\nprint(value)"})
     finding = _base_finding()
-    is_valid, reason = validator.validate(finding)
+    is_valid, reason, detail = validator.validate(finding)
     assert not is_valid
-    assert reason == "target_line_content does not match file content at line_start"
+    assert reason == "target_line_mismatch"
+    assert detail == "target_line_content does not match file content at line_start"
 
 
 def test_validator_accepts_valid_replacement() -> None:
     validator = FindingValidator({"a.py": "value = int(user_input)\nprint(value)"})
     finding = _base_finding()
-    is_valid, reason = validator.validate(finding)
+    is_valid, reason, detail = validator.validate(finding)
     assert is_valid
     assert reason is None
+    assert detail is None
+
+
+def test_validator_rejects_when_line_not_in_pr_diff() -> None:
+    validator = FindingValidator(
+        {"a.py": "value = int(user_input)\nprint(value)"},
+        commentable_lines={("a.py", 2)},
+    )
+    finding = _base_finding()
+    is_valid, reason, detail = validator.validate(finding)
+    assert not is_valid
+    assert reason == "line_not_in_diff"
+    assert detail is not None
+    assert "not part of the pull request diff" in detail
 
 
 def test_validator_rejects_incoherent_suggestion() -> None:
@@ -41,6 +56,7 @@ def test_validator_rejects_incoherent_suggestion() -> None:
         message="Completely unrelated feedback text",
         suggestion="print('hello world')",
     )
-    is_valid, reason = validator.validate(finding)
+    is_valid, reason, detail = validator.validate(finding)
     assert not is_valid
-    assert reason == "Suggestion does not coherently replace the target region"
+    assert reason == "incoherent_suggestion"
+    assert detail == "Suggestion does not coherently replace the target region"

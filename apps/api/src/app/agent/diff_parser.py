@@ -58,6 +58,20 @@ def parse_diff(diff_text: str) -> list[FileInDiff]:
     return files
 
 
+def right_side_diff_line_set(files: list[FileInDiff]) -> set[tuple[str, int]]:
+    """(path, line) pairs for the PR head that appear in the pull request diff.
+
+    GitHub's create-review API only accepts inline comments on lines present in the
+    diff; commenting on other lines returns HTTP 422.
+    """
+    out: set[tuple[str, int]] = set()
+    for file_in_diff in files:
+        for numbered in file_in_diff.numbered_lines:
+            if numbered.new_line_no is not None:
+                out.add((file_in_diff.path, numbered.new_line_no))
+    return out
+
+
 def _detect_language(path: str) -> str:
     ext = Path(path).suffix.lower()
     language_map = {

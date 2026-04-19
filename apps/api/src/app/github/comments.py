@@ -14,6 +14,25 @@ def format_finding(finding: Finding) -> str:
     return body
 
 
+def build_review_comment_payload(finding: Finding) -> dict[str, str | int]:
+    """Build a single inline comment for POST .../pulls/{n}/reviews.
+
+    Multi-line comments require start_line + line per GitHub API; omitting them
+    causes validation errors on the review submission.
+    """
+    line_end = finding.line_end or finding.line_start
+    payload: dict[str, str | int] = {
+        "path": finding.file_path,
+        "line": line_end,
+        "side": "RIGHT",
+        "body": format_finding(finding),
+    }
+    if finding.line_end is not None and finding.line_start < finding.line_end:
+        payload["start_line"] = finding.line_start
+        payload["start_side"] = "RIGHT"
+    return payload
+
+
 async def post_review(
     gh: GitHubClient,
     owner: str,
@@ -22,15 +41,7 @@ async def post_review(
     head_sha: str,
     result: ReviewResult,
 ) -> None:
-    comments = [
-        {
-            "path": finding.file_path,
-            "line": finding.line_end or finding.line_start,
-            "side": "RIGHT",
-            "body": format_finding(finding),
-        }
-        for finding in result.findings
-    ]
+    comments = [build_review_comment_payload(finding) for finding in result.findings]
 
     event = "REQUEST_CHANGES" if any(finding.severity == "critical" for finding in result.findings) else "COMMENT"
 

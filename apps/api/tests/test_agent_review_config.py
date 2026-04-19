@@ -1,3 +1,40 @@
+from app.agent.review_config import _parse_budgets, _parse_model_config, _parse_packaging
+
+
+def test_parse_model_config_accepts_custom_pricing_override() -> None:
+    model = _parse_model_config(
+        {
+            "name": "claude-3-5-haiku-latest",
+            "pricing": {"input_per_1m": 1.5, "output_per_1m": 6.5},
+        }
+    )
+    assert model.name == "claude-3-5-haiku-latest"
+    assert str(model.input_per_1m_usd) == "1.5"
+    assert str(model.output_per_1m_usd) == "6.5"
+
+
+def test_parse_budgets_overrides_known_values() -> None:
+    budgets = _parse_budgets({"diff_hunks": 12345, "surrounding_context": 9000})
+    assert budgets.diff_hunks == 12345
+    assert budgets.surrounding_context == 9000
+
+
+def test_parse_packaging_applies_threshold_paths_and_summary_cap() -> None:
+    packaging = _parse_packaging(
+        {
+            "layered_context_enabled": True,
+            "partial_review_mode_enabled": True,
+            "summarization_enabled": False,
+            "partial_review_changed_lines_threshold": 700,
+            "max_summary_calls_per_review": 2,
+            "generated_paths": ["src/generated/types.ts"],
+            "vendor_paths": ["vendor/lib"],
+        }
+    )
+    assert packaging.partial_review_changed_lines_threshold == 700
+    assert packaging.max_summary_calls_per_review == 2
+    assert packaging.generated_paths == ["src/generated/types.ts"]
+    assert packaging.vendor_paths == ["vendor/lib"]
 import asyncio
 import httpx
 

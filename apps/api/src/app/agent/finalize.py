@@ -3,7 +3,7 @@ import logging
 
 from pydantic import ValidationError
 
-from app.agent.loop import MODEL_NAME
+from app.agent.review_config import DEFAULT_MODEL_NAME
 from app.agent.schema import ReviewResult
 from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
 from app.config import settings
@@ -22,6 +22,8 @@ async def finalize_review(
     system_prompt: str,
     messages: list[dict],
     context: dict,
+    *,
+    model_name: str = DEFAULT_MODEL_NAME,
     validation_feedback: str | None = None,
     allow_retry: bool = True,
 ) -> ReviewResult:
@@ -33,7 +35,7 @@ async def finalize_review(
             "Now submit your corrected review using the submit_review tool."
         )
     response = await client.messages.create(
-        model=MODEL_NAME,
+        model=model_name,
         max_tokens=8192,
         system=[
             {
@@ -67,6 +69,7 @@ async def finalize_review(
                         system_prompt=system_prompt,
                         messages=messages,
                         context=context,
+                        model_name=model_name,
                         validation_feedback=retry_feedback,
                         allow_retry=False,
                     )

@@ -1,4 +1,4 @@
-from app.agent.schema import Finding
+from app.agent.schema import DropReason, Finding
 
 try:
     from tree_sitter_language_pack import get_parser
@@ -7,30 +7,57 @@ except Exception:  # pragma: no cover - import fallback for constrained environm
 
 
 class FindingValidator:
-    def __init__(self, file_contents: dict[str, str]):
-        """file_contents: path -> full text at PR head"""
+    def __init__(
+        self,
+        file_contents: dict[str, str],
+        *,
+        commentable_lines: set[tuple[str, int]] | None = None,
+    ):
+        """file_contents: path -> full text at PR head.
+
+        When commentable_lines is set, findings must lie entirely on lines that
+        appear in the PR diff (GitHub cannot anchor inline comments elsewhere).
+        """
         self._files = file_contents
+        self._commentable_lines = commentable_lines
         self._parsers: dict[str, object] = {}
 
-    def validate(self, finding: Finding) -> tuple[bool, str | None]:
-        """Return (is_valid, reason_if_invalid)."""
+    def validate(self, finding: Finding) -> tuple[bool, DropReason | None, str | None]:
+        """Return (is_valid, drop_reason, detail_if_invalid)."""
         if finding.file_path not in self._files:
-            return False, f"File {finding.file_path} not in PR context"
+            return False, "file_not_in_context", f"File {finding.file_path} not in PR context"
 
         content = self._files[finding.file_path]
         lines = content.split("\n")
 
         end_line = finding.line_end or finding.line_start
         if finding.line_start < 1 or finding.line_start > len(lines):
-            return False, f"line_start {finding.line_start} out of range"
+            return False, "line_out_of_range", f"line_start {finding.line_start} out of range"
         if end_line < finding.line_start:
-            return False, f"line_end {end_line} before line_start {finding.line_start}"
+            return False, "line_out_of_range", f"line_end {end_line} before line_start {finding.line_start}"
         if end_line > len(lines):
-            return False, f"line_end {end_line} out of range"
+            return False, "line_out_of_range", f"line_end {end_line} out of range"
 
         actual_target_line = lines[finding.line_start - 1]
         if finding.target_line_content != actual_target_line:
-            return False, "target_line_content does not match file content at line_start"
+            matched_line = _find_line_by_content(lines, finding.target_line_content)
+            if matched_line is not None and matched_line >= finding.line_start and matched_line <= end_line:
+                pass
+            else:
+                return (
+                    False,
+                    "target_line_mismatch",
+                    "target_line_content does not match file content at line_start",
+                )
+
+        if self._commentable_lines is not None:
+            for line_no in range(finding.line_start, end_line + 1):
+                if (finding.file_path, line_no) not in self._commentable_lines:
+                    return (
+                        False,
+                        "line_not_in_diff",
+                        f"line {line_no} is not part of the pull request diff (inline comment not allowed)",
+                    )
 
         if finding.suggestion:
             new_lines = (
@@ -40,13 +67,13 @@ class FindingValidator:
             )
             new_content = "\n".join(new_lines)
             if not self._parses(finding.file_path, new_content):
-                return False, "Suggestion produces syntactically invalid code"
+                return False, "syntax_invalid_suggestion", "Suggestion produces syntactically invalid code"
 
             replaced = "\n".join(lines[finding.line_start - 1 : end_line])
             if not self._suggestion_is_coherent(replaced, finding.suggestion, finding.message):
-                return False, "Suggestion does not coherently replace the target region"
+                return False, "incoherent_suggestion", "Suggestion does not coherently replace the target region"
 
-        return True, None
+        return True, None, None
 
     def _parses(self, path: str, content: str) -> bool:
         language = self._detect_language(path)
@@ -102,3 +129,10 @@ class FindingValidator:
         if replaced_tokens and suggestion_tokens and not replaced_tokens.intersection(suggestion_tokens):
             return False
         return True
+
+
+def _find_line_by_content(lines: list[str], target_line_content: str) -> int | None:
+    for index, line in enumerate(lines, start=1):
+        if line == target_line_content:
+            return index
+    return None
