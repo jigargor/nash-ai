@@ -6,7 +6,7 @@ Automated pull request reviews powered by Claude and the GitHub App API.
 
 - **Backend**: Python 3.12 + FastAPI + SQLAlchemy 2.0 (async) + ARQ (Redis queue)
 - **Frontend**: Next.js 15 + TypeScript + Zustand + TanStack Query
-- **AI**: Anthropic Claude (claude-sonnet-4-5)
+- **AI**: Anthropic Claude; default model `claude-sonnet-4-5`, overridable per repo via `.codereview.yml` (see below)
 - **Infra**: Postgres + Redis (docker-compose locally, Railway in prod)
 
 ## Quick Start
@@ -114,12 +114,36 @@ docker compose exec -T postgres psql -U dev -d codereview -c "select id, status,
 
 Expected state transitions are `queued -> running -> done|failed`.
 
-### 10. Inspect dropped findings safely (tenant-scoped SQL)
+### 10. Repository review configuration (`.codereview.yml`)
 
-The agent now stores development diagnostics in `reviews.debug_artifacts`, including:
-- validator drops (`reason`, `file_path`, line range, message excerpt)
+Each repo can add a `.codereview.yml` at the default branch ref used for the review. The worker loads it for confidence threshold, optional prompt additions, **model name and pricing** (for `cost_usd` estimates), **token budgets**, and **context packaging** flags.
+
+Typical keys:
+
+| Key | Purpose |
+|-----|---------|
+| `confidence_threshold` | Minimum finding confidence (0–1); default `0.85`. |
+| `prompt_additions` | Extra repo-specific instructions appended to the system prompt. |
+| `model.name` | Anthropic model id (e.g. `claude-sonnet-4-5`). |
+| `model.pricing` | Optional `input_per_1m` / `output_per_1m` (USD per 1M tokens) for cost estimation when defaults don’t match your billing. |
+| `budgets` | Token budgets for layers, e.g. `system_prompt`, `repo_profile`, `diff_hunks`, `surrounding_context`, `total_cap`, etc. |
+| `layered_context_enabled` | Use layered project/repo/review context packing (default on). |
+| `partial_review_mode_enabled` | For large PRs, scope review to top-ranked files (default on). |
+| `partial_review_changed_lines_threshold` | Approximate changed-line count before partial mode applies (default `600`). |
+| `summarization_enabled` | Structured fallback summaries for evicted context segments (default off). |
+| `max_summary_calls_per_review` | Cap on summarization steps per review. |
+| `generated_paths` / `vendor_paths` | Glob-style path patterns to treat generated or vendored files differently when packing context. |
+
+Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. `tokens_used` / `cost_usd` on each `reviews` row reflect the selected model’s pricing when configured.
+
+### 11. Inspect dropped findings safely (tenant-scoped SQL)
+
+The agent stores development diagnostics in `reviews.debug_artifacts`, including:
+- validator drops (`reason`, `detail`, `file_path`, line range, message excerpt)
 - confidence-threshold drops (`confidence`, `threshold`)
 - retry metadata (`retry_triggered`, `retry_reason`)
+- **context telemetry** (`context_telemetry`: layer token usage, anchor coverage, summarization flags, dropped segments)
+- **agent metrics** (`agent_metrics`: e.g. turn count, `fetch_file_content` calls)
 
 Because review tables use RLS, set the tenant context before querying.
 
@@ -141,7 +165,7 @@ docker compose exec -T postgres psql -U dev -d codereview -c "select set_config(
 docker compose exec -T postgres psql -U dev -d codereview -c "select set_config('app.current_installation_id','<installation_id>', true); select id, findings, debug_artifacts from reviews where id=<review_id>;"
 ```
 
-`debug_artifacts.validator_dropped` and `debug_artifacts.confidence_dropped` are the fastest way to understand why a finding was not posted.
+`debug_artifacts.validator_dropped` (with structured `reason` codes such as `target_line_mismatch`, `line_not_in_diff`, `syntax_invalid_suggestion`) and `debug_artifacts.confidence_dropped` are the fastest way to understand why a finding was not posted.
 
 Optional admin API endpoint (same admin key / tenant checks):
 
@@ -152,7 +176,7 @@ curl -s "http://localhost:8000/admin/reviews/<review_id>/debug?installation_id=<
 
 This returns `debug_artifacts` plus review summary/status and kept finding count.
 
-### 11. Local Postgres SSL setup notes
+### 12. Local Postgres SSL setup notes
 
 - `docker-compose.yml` expects certs at `apps/api/certs/postgres/server.crt` and `apps/api/certs/postgres/server.key`.
 - Regenerate certs any time with:
@@ -176,7 +200,7 @@ apps/
     main.py         FastAPI app + lifespan
     github/         App JWT auth + API client
     webhooks/       HMAC verification + event routing
-    agent/          ReAct loop (Phase 2)
+    agent/          ReAct loop, context packing, prompts, review config
     db/             Models, session, migrations
   web/src/
     app/            Next.js App Router pages
