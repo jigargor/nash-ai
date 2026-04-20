@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI
 from starlette.requests import Request
 
+from app.api.router import router as api_router
 from app.admin.router import router as admin_router
 from app.config import settings
 from app.db.session import engine
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AI Code Review API", lifespan=lifespan)
 app.include_router(webhook_router, prefix="/webhooks")
 app.include_router(admin_router, prefix="/admin")
+app.include_router(api_router)
 
 
 @app.get("/health")

@@ -1,4 +1,10 @@
-from app.agent.runner import _apply_confidence_threshold, _attach_debug_artifacts, _validate_result, _validation_feedback
+from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
+
+from app.agent.review_config import ReviewConfig, ReviewModelConfig
+from app.agent.runner import _apply_confidence_threshold, _attach_debug_artifacts, _mark_review_done, _validate_result, _validation_feedback
 from app.agent.schema import Finding, ReviewResult
 
 
@@ -70,3 +76,54 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
     assert artifacts["validator_dropped"][0]["reason"] == "line_out_of_range"
     assert artifacts["validator_dropped"][0]["detail"] == "invalid range"
     assert artifacts["confidence_dropped"][0]["file_path"] == "low.py"
+
+
+@pytest.mark.anyio
+async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    review = SimpleNamespace(
+        status="running",
+        model="claude-sonnet-4-5",
+        findings=None,
+        debug_artifacts=None,
+        tokens_used=None,
+        cost_usd=None,
+        completed_at=None,
+    )
+
+    class FakeSession:
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, _model: object, _review_id: int) -> object:
+            return review
+
+        async def commit(self) -> None:
+            return None
+
+    async def fake_set_installation_context(_session: object, _installation_id: int) -> None:
+        return None
+
+    monkeypatch.setattr("app.agent.runner.AsyncSessionLocal", lambda: FakeSession())
+    monkeypatch.setattr("app.agent.runner.set_installation_context", fake_set_installation_context)
+
+    context = {
+        "installation_id": 1,
+        "review_id": 123,
+        "tokens_used": 1000,
+        "input_tokens": 800,
+        "output_tokens": 200,
+    }
+    review_config = ReviewConfig(
+        model=ReviewModelConfig(
+            name="claude-3-5-haiku-latest",
+            input_per_1m_usd=Decimal("0.80"),
+            output_per_1m_usd=Decimal("4.00"),
+        )
+    )
+    await _mark_review_done(ReviewResult(findings=[], summary="ok"), context, "done", review_config)
+
+    assert review.status == "done"
+    assert review.model == "claude-3-5-haiku-latest"

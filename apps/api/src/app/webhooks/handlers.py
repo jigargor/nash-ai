@@ -38,6 +38,29 @@ async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestW
             )
             await session.flush()
 
+        existing_review = await session.scalar(
+            select(Review)
+            .where(Review.installation_id == installation_id)
+            .where(Review.repo_full_name == repo_full_name)
+            .where(Review.pr_number == pr_number)
+            .where(Review.pr_head_sha == head_sha)
+            .where(Review.status != "failed")
+            .order_by(Review.id.desc())
+            .limit(1)
+        )
+        if existing_review is not None:
+            existing_review_id = existing_review.id
+            await session.rollback()
+            logger.warning(
+                "Skipping duplicate review enqueue for installation_id=%s repo=%s pr_number=%s head_sha=%s existing_review_id=%s",
+                installation_id,
+                repo_full_name,
+                pr_number,
+                head_sha,
+                existing_review_id,
+            )
+            return
+
         review = Review(
             installation_id=installation_id,
             repo_full_name=repo_full_name,

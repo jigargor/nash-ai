@@ -6,6 +6,7 @@ from arq.constants import default_queue_name
 
 from app.config import settings
 from app.queue.connection import format_redis_target
+from app.queue.recovery import recover_stale_running_reviews
 
 # Import order: log which DB URL this process will use *before* session.engine is created
 # (runner → session binds engine at import). Worker is a separate process from uvicorn —
@@ -45,6 +46,11 @@ async def review_pr(
     await run_review(review_id, installation_id, owner, repo, pr_number, head_sha)
 
 
+async def worker_startup(ctx: dict) -> None:
+    recovered = await recover_stale_running_reviews()
+    ctx["recovered_stale_reviews"] = recovered
+
+
 class WorkerSettings:
     functions = [review_pr]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
@@ -52,3 +58,4 @@ class WorkerSettings:
     max_jobs = 5
     job_timeout = 300
     keep_result = 3600
+    on_startup = worker_startup

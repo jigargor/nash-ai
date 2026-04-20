@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "description": "Representative synthetic baseline cases for Stage 1 hardening.",
+  "cases": [
+    {
+      "id": "py-sql-injection",
+      "stack": "fastapi",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["high", "critical"],
+        "max_confidence_drops": 2
+      }
+    },
+    {
+      "id": "py-unhandled-exception",
+      "stack": "fastapi",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["medium", "high", "critical"],
+        "max_confidence_drops": 2
+      }
+    },
+    {
+      "id": "ts-auth-bypass",
+      "stack": "nextjs",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["high", "critical"],
+        "max_confidence_drops": 2
+      }
+    },
+    {
+      "id": "tsx-xss-rendering",
+      "stack": "react",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["high", "critical"],
+        "max_confidence_drops": 3
+      }
+    },
+    {
+      "id": "py-n-plus-one-query",
+      "stack": "fastapi",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["medium", "high"],
+        "max_confidence_drops": 2
+      }
+    },
+    {
+      "id": "ts-unsafe-any-cast",
+      "stack": "typescript",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["low", "medium"],
+        "max_confidence_drops": 4
+      }
+    },
+    {
+      "id": "py-timeout-missing",
+      "stack": "python",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["medium", "high"],
+        "max_confidence_drops": 3
+      }
+    },
+    {
+      "id": "sql-migration-risk",
+      "stack": "sql",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["medium", "high"],
+        "max_confidence_drops": 3
+      }
+    },
+    {
+      "id": "go-error-ignore",
+      "stack": "go",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["medium", "high"],
+        "max_confidence_drops": 3
+      }
+    },
+    {
+      "id": "rust-unwrap-hot-path",
+      "stack": "rust",
+      "expected": {
+        "min_findings": 1,
+        "must_include_severity": ["medium", "high"],
+        "max_confidence_drops": 3
+      }
+    }
+  ]
+}

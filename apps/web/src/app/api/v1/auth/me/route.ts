@@ -1,13 +1,16 @@
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
+import { NextResponse } from "next/server";
 
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
 import { parseSessionToken } from "@/lib/auth/session";
 
-export default async function Home() {
+export async function GET(): Promise<NextResponse> {
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE_NAME)?.value;
   const session = parseSessionToken(token);
-  if (session) redirect("/dashboard");
-  redirect("/login");
+  if (!session) return NextResponse.json({ authenticated: false }, { status: 401 });
+  return NextResponse.json({
+    authenticated: true,
+    user: session.user,
+  });
 }

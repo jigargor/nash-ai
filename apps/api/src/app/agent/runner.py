@@ -162,6 +162,8 @@ async def _mark_review_done(
         if review is None:
             return
         review.status = status
+        if review_config is not None:
+            review.model = review_config.model.name
         review.findings = session_data.model_dump(mode="json")
         review.debug_artifacts = context.get("debug_artifacts")
         review.tokens_used = int(context.get("tokens_used", 0))
