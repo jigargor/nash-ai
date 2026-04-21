@@ -1,0 +1,104 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "nash: uvicorn",
+      "type": "shell",
+      "command": "python -m uvicorn app.main:app --reload --port 8000",
+      "options": {
+        "cwd": "${workspaceFolder}/apps/api/src"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "nash"
+      }
+    },
+    {
+      "label": "nash: arq",
+      "type": "shell",
+      "command": "python -m arq app.queue.worker.WorkerSettings",
+      "options": {
+        "cwd": "${workspaceFolder}/apps/api/src"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "nash"
+      }
+    },
+    {
+      "label": "nash: smee",
+      "type": "shell",
+      "command": "npx smee-client --url \"${env:SMEE_URL}\" --target http://localhost:8000/webhooks/github",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "nash"
+      }
+    },
+    {
+      "label": "nash: web",
+      "type": "shell",
+      "command": "pnpm --filter web dev",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "nash"
+      }
+    },
+    {
+      "label": "nash: web (port 3001)",
+      "type": "shell",
+      "command": "pnpm --filter web dev -- --port 3001",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "nash"
+      }
+    },
+    {
+      "label": "nash-quickstart-3",
+      "dependsOn": ["nash: uvicorn", "nash: arq", "nash: smee"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
+      "label": "nash-quickstart-4",
+      "dependsOn": ["nash: uvicorn", "nash: arq", "nash: smee", "nash: web"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
+      "label": "nash-quickstart-5",
+      "dependsOn": [
+        "nash: uvicorn",
+        "nash: arq",
+        "nash: smee",
+        "nash: web",
+        "nash: web (port 3001)"
+      ],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    }
+  ]
+}

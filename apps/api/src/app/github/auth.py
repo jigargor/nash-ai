@@ -8,15 +8,22 @@ from app.config import settings
 
 
 def _load_private_key() -> str:
-    return Path(settings.github_private_key_path).read_text()
+    path = Path(settings.github_private_key_path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"GitHub App private key not found at {path}. "
+            "Set GITHUB_PRIVATE_KEY_PATH in apps/api/.env (paths are relative to apps/api)."
+        )
+    return path.read_text()
 
 
 def create_jwt() -> str:
     now = int(time.time())
+    # GitHub requires iss to be the App ID numeric value (see GitHub App JWT docs).
     payload = {
         "iat": now - 60,
         "exp": now + 600,
-        "iss": settings.github_app_id,
+        "iss": int(settings.github_app_id),
     }
     return jwt.encode(payload, _load_private_key(), algorithm="RS256")
 
@@ -36,6 +43,19 @@ async def get_installation_token(installation_id: int) -> str:
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
+            json={},
         )
-        r.raise_for_status()
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            body = (e.response.text or "")[:800]
+            hint = ""
+            if e.response.status_code == 401:
+                hint = (
+                    " Check GITHUB_APP_ID matches the App that owns this key, and that "
+                    f"GITHUB_PRIVATE_KEY_PATH points to the correct .pem ({settings.github_private_key_path})."
+                )
+            raise RuntimeError(
+                f"GitHub installation token request failed ({e.response.status_code}): {body}{hint}"
+            ) from e
         return r.json()["token"]

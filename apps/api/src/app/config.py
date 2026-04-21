@@ -1,7 +1,7 @@
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,6 +51,26 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_webhook_payloads: bool = False
     admin_retry_api_key: str | None = None
+
+    @field_validator("github_app_id", mode="before")
+    @classmethod
+    def strip_github_app_id(cls, v: object) -> str:
+        if v is None:
+            raise ValueError("GITHUB_APP_ID is required")
+        return str(v).strip()
+
+    @field_validator("github_private_key_path", mode="after")
+    @classmethod
+    def resolve_github_private_key_path(cls, v: Path) -> Path:
+        """Paths from .env are relative to apps/api (not the process cwd).
+
+        Workers are often started from apps/api/src; without this, ./private-key.pem
+        resolves to apps/api/src/private-key.pem and GitHub JWT auth returns 401.
+        """
+        if v.is_absolute():
+            return v.resolve()
+        apps_api = Path(__file__).resolve().parent.parent.parent
+        return (apps_api / v).resolve()
 
     @model_validator(mode="after")
     def validate_production_database_tls(self) -> "Settings":
