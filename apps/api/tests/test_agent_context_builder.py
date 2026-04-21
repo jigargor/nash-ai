@@ -14,6 +14,11 @@ class FakeGitHubClient:
         return "\n".join([f"line_{index}" for index in range(1, 220)])
 
 
+class FakeGitHubClientFetchFails:
+    async def get_file_content(self, owner: str, repo: str, path: str, ref: str) -> str:
+        raise RuntimeError("simulated fetch failure")
+
+
 def test_build_context_bundle_includes_numbered_hunks_and_surrounding_context() -> None:
     diff_text = """diff --git a/app.py b/app.py
 index 1111111..2222222 100644
@@ -46,6 +51,36 @@ index 1111111..2222222 100644
     assert bundle.package.anchor_coverage == 1.0
     assert bundle.telemetry["anchor_coverage"] == 1.0
     assert bundle.fetched_files["app.py"].startswith("line_1")
+
+
+def test_build_context_bundle_keeps_anchor_coverage_when_file_fetch_fails() -> None:
+    diff_text = """diff --git a/app.py b/app.py
+index 1111111..2222222 100644
+--- a/app.py
++++ b/app.py
+@@ -145,2 +145,2 @@
+-value = old_call()
++value = new_call()
+ keep = "same"
+"""
+    files = parse_diff(diff_text)
+    bundle = asyncio.run(
+        build_context_bundle(
+            FakeGitHubClientFetchFails(),
+            owner="acme",
+            repo="demo",
+            head_sha="abc123",
+            files_in_diff=files,
+            budgets=ContextBudgets(diff_hunks=2000, surrounding_context=2000),
+            packaging=ContextPackagingConfig(partial_review_mode_enabled=False),
+        )
+    )
+
+    assert bundle.package.anchor_coverage == 1.0
+    assert bundle.telemetry["anchor_coverage"] == 1.0
+    assert bundle.fetched_files == {}
+    assert "## Anchor map (content-validated)" in bundle.rendered
+    assert "app.py:145 => value = new_call()" in bundle.rendered
 
 
 def test_context_bundle_quality_at_cost_curve_keeps_anchor_coverage() -> None:
