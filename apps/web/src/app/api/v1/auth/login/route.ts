@@ -10,6 +10,16 @@ function callbackUrl(requestUrl: string): string {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
+  if (!process.env.GITHUB_CLIENT_ID?.trim() || !process.env.GITHUB_CLIENT_SECRET?.trim()) {
+    return NextResponse.json(
+      {
+        error:
+          "GitHub OAuth is not configured. Copy apps/web/.env.example to apps/web/.env.local and set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET (Next.js reads env from apps/web, not the repo root).",
+      },
+      { status: 503 },
+    );
+  }
+
   const state = createOAuthState();
   const redirectUri = callbackUrl(request.url);
   const authorizeUrl = buildGitHubAuthorizeUrl(state, redirectUri);
