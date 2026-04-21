@@ -27,6 +27,15 @@ When you propose a fix via the `suggestion` field, these rules apply:
 6. Do NOT propose a suggestion if the fix requires changes outside the current
    PR's diff — those changes are out of scope for a PR review.
 
+## target_line_content precision
+
+When producing `target_line_content`:
+
+- Copy the EXACT text from the numbered context at `line_start`.
+- Do not reformat, trim, or normalize whitespace.
+- Do not include line numbers, diff markers, or context labels.
+- If you are not fully confident in exact text, call `fetch_file_content` before submitting.
+
 ## Severity rubric (STRICT)
 
 - critical: Production will break or data will be lost. Examples: SQL injection,

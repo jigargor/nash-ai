@@ -2,6 +2,7 @@ import json
 
 import httpx
 
+from app.agent.normalization import normalize_file_content
 from app.github.client import GitHubClient
 
 TOOLS = [
@@ -68,7 +69,11 @@ async def execute_tool(name: str, tool_input: dict, context: dict) -> str:
 
         if name == "fetch_file_content":
             path = tool_input["path"]
-            return await gh.get_file_content(owner, repo, path, head_sha)
+            normalized_content = normalize_file_content(await gh.get_file_content(owner, repo, path, head_sha))
+            fetched_files = context.setdefault("fetched_files", {})
+            if isinstance(fetched_files, dict):
+                fetched_files[path] = normalized_content
+            return normalized_content
 
         if name == "search_codebase":
             pattern = tool_input["pattern"]

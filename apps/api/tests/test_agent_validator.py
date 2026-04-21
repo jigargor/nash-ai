@@ -60,3 +60,39 @@ def test_validator_rejects_incoherent_suggestion() -> None:
     assert not is_valid
     assert reason == "incoherent_suggestion"
     assert detail == "Suggestion does not coherently replace the target region"
+
+
+def test_validator_accepts_target_line_with_crlf_file_content() -> None:
+    validator = FindingValidator({"a.py": "value = int(user_input)\r\nprint(value)\r\n"})
+    finding = _base_finding()
+    is_valid, reason, detail = validator.validate(finding)
+    assert is_valid
+    assert reason is None
+    assert detail is None
+
+
+def test_validator_rejects_target_line_with_trailing_whitespace_mismatch() -> None:
+    validator = FindingValidator({"a.py": "value = int(user_input)  \nprint(value)"})
+    finding = _base_finding()
+    is_valid, reason, detail = validator.validate(finding)
+    assert not is_valid
+    assert reason == "target_line_mismatch"
+    assert detail == "target_line_content does not match file content at line_start"
+
+
+def test_validator_rejects_target_line_with_bom_character_mismatch() -> None:
+    validator = FindingValidator({"a.py": "\ufeffvalue = int(user_input)\nprint(value)"})
+    finding = _base_finding()
+    is_valid, reason, detail = validator.validate(finding)
+    assert not is_valid
+    assert reason == "target_line_mismatch"
+    assert detail == "target_line_content does not match file content at line_start"
+
+
+def test_validator_rejects_target_line_with_tab_space_mismatch() -> None:
+    validator = FindingValidator({"a.py": "value\t= int(user_input)\nprint(value)"})
+    finding = _base_finding(target_line_content="value    = int(user_input)")
+    is_valid, reason, detail = validator.validate(finding)
+    assert not is_valid
+    assert reason == "target_line_mismatch"
+    assert detail == "target_line_content does not match file content at line_start"

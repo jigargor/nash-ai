@@ -6,6 +6,7 @@ from app.agent.context_builder import build_context_bundle, is_diff_too_large
 from app.agent.diff_parser import parse_diff, right_side_diff_line_set
 from app.agent.finalize import finalize_review
 from app.agent.loop import run_agent
+from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
 from app.agent.prompts import build_initial_user_prompt, build_system_prompt
 from app.agent.review_config import ReviewConfig, load_review_config
@@ -18,6 +19,10 @@ from app.github.comments import post_review
 
 logger = logging.getLogger(__name__)
 PROMPT_VERSION = "v3"
+REPAIR_SEARCH_WINDOW = 3
+REPAIR_RETRY_DROP_RATE = 0.20
+FULL_REGENERATE_RETRY_DROP_RATE = 0.50
+MIN_RECOVERY_RATIO_FOR_SUCCESS = 0.50
 
 
 async def run_review(
@@ -77,6 +82,8 @@ async def run_review(
             packaging=review_config.packaging,
             repo_segments=repo_segments,
         )
+        context["fetched_files"] = dict(context_bundle.fetched_files)
+        _warn_if_carriage_returns(context["fetched_files"])
         system_prompt = build_system_prompt(repo_profile.frameworks, review_config.prompt_additions)
         user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
         messages = await run_agent(system_prompt, user_prompt, context, model_name=review_config.model.name)
@@ -89,23 +96,101 @@ async def run_review(
 
         commentable_lines = right_side_diff_line_set(files_in_diff)
         validator = FindingValidator(
-            context_bundle.fetched_files,
+            context["fetched_files"],
             commentable_lines=commentable_lines,
+        )
+        result.findings = _repair_findings_from_files(
+            result.findings,
+            context["fetched_files"],
+            commentable_lines=commentable_lines,
+            window=REPAIR_SEARCH_WINDOW,
         )
         result, validator_dropped, generated = _validate_result(result, validator)
         retry_triggered = False
-        if generated > 0 and len(validator_dropped) > generated * 0.5:
-            retry_triggered = True
-            feedback = _validation_feedback(validator_dropped)
-            logger.warning("Retrying review generation due to high invalid finding rate review_id=%s", review_id)
-            retried = await finalize_review(
-                system_prompt,
-                messages,
-                context,
-                validation_feedback=feedback,
-                model_name=review_config.model.name,
-            )
-            result, validator_dropped, generated = _validate_result(retried, validator)
+        retry_mode: str | None = None
+        retry_recovered: int = 0
+        retry_attempted: int = 0
+        mismatch_subtypes = _summarize_target_line_mismatch_subtypes(
+            validator_dropped,
+            context["fetched_files"],
+            commentable_lines=commentable_lines,
+            window=REPAIR_SEARCH_WINDOW,
+        )
+
+        dropped_count = len(validator_dropped)
+        drop_rate = dropped_count / generated if generated else 0.0
+        mismatch_dropped = [entry for entry in validator_dropped if entry[1] == "target_line_mismatch"]
+        if generated > 0 and drop_rate >= REPAIR_RETRY_DROP_RATE:
+            if mismatch_dropped:
+                retry_triggered = True
+                retry_mode = "repair_only"
+                retry_attempted = len(mismatch_dropped)
+                repair_prompt = _repair_retry_feedback(
+                    mismatch_dropped,
+                    context["fetched_files"],
+                    window=REPAIR_SEARCH_WINDOW,
+                )
+                logger.warning(
+                    "Retrying with focused repair pass review_id=%s dropped=%s generated=%s",
+                    review_id,
+                    dropped_count,
+                    generated,
+                )
+                repaired = await finalize_review(
+                    system_prompt,
+                    [{"role": "user", "content": repair_prompt}],
+                    context,
+                    model_name=review_config.model.name,
+                    allow_retry=False,
+                )
+                repaired.findings = _repair_findings_from_files(
+                    repaired.findings,
+                    context["fetched_files"],
+                    commentable_lines=commentable_lines,
+                    window=REPAIR_SEARCH_WINDOW,
+                )
+                repaired_validated, repaired_dropped, _ = _validate_result(repaired, validator)
+                retry_recovered = len(repaired_validated.findings)
+                recovery_ratio = retry_recovered / retry_attempted if retry_attempted else 0.0
+                if recovery_ratio >= MIN_RECOVERY_RATIO_FOR_SUCCESS:
+                    result.findings.extend(repaired_validated.findings)
+                validator_dropped.extend(repaired_dropped)
+                mismatch_subtypes = _summarize_target_line_mismatch_subtypes(
+                    validator_dropped,
+                    context["fetched_files"],
+                    commentable_lines=commentable_lines,
+                    window=REPAIR_SEARCH_WINDOW,
+                )
+            elif drop_rate >= FULL_REGENERATE_RETRY_DROP_RATE:
+                retry_triggered = True
+                retry_mode = "full_regenerate"
+                retry_attempted = dropped_count
+                feedback = _validation_feedback(validator_dropped)
+                logger.warning(
+                    "Retrying review generation due to high invalid finding rate review_id=%s",
+                    review_id,
+                )
+                retried = await finalize_review(
+                    system_prompt,
+                    messages,
+                    context,
+                    validation_feedback=feedback,
+                    model_name=review_config.model.name,
+                )
+                retried.findings = _repair_findings_from_files(
+                    retried.findings,
+                    context["fetched_files"],
+                    commentable_lines=commentable_lines,
+                    window=REPAIR_SEARCH_WINDOW,
+                )
+                result, validator_dropped, generated = _validate_result(retried, validator)
+                retry_recovered = len(result.findings)
+                mismatch_subtypes = _summarize_target_line_mismatch_subtypes(
+                    validator_dropped,
+                    context["fetched_files"],
+                    commentable_lines=commentable_lines,
+                    window=REPAIR_SEARCH_WINDOW,
+                )
 
         threshold = review_config.confidence_threshold or 0.85
         result, confidence_dropped = _apply_confidence_threshold(result, threshold)
@@ -115,8 +200,12 @@ async def run_review(
             validator_dropped=validator_dropped,
             confidence_dropped=confidence_dropped,
             retry_triggered=retry_triggered,
+            retry_mode=retry_mode,
+            retry_attempted=retry_attempted,
+            retry_recovered=retry_recovered,
             threshold=threshold,
             context_telemetry=context_bundle.telemetry,
+            mismatch_subtypes=mismatch_subtypes,
         )
         _log_quality_metrics(
             context=context,
@@ -274,8 +363,12 @@ def _attach_debug_artifacts(
     validator_dropped: list[tuple[Finding, DropReason, str]],
     confidence_dropped: list[dict[str, object]],
     retry_triggered: bool,
+    retry_mode: str | None,
+    retry_attempted: int,
+    retry_recovered: int,
     threshold: float,
     context_telemetry: dict[str, object],
+    mismatch_subtypes: dict[str, int],
 ) -> None:
     validator_entries = [
         {
@@ -293,11 +386,221 @@ def _attach_debug_artifacts(
         "validator_dropped": validator_entries,
         "confidence_dropped": confidence_dropped,
         "retry_triggered": retry_triggered,
-        "retry_reason": "validator_drop_rate_above_50_percent" if retry_triggered else None,
+        "retry_mode": retry_mode,
+        "retry_attempted": retry_attempted,
+        "retry_recovered": retry_recovered,
+        "retry_reason": "validator_drop_rate_above_20_percent" if retry_triggered else None,
+        "acceptance_quality_check": {
+            "target_sample_size": 50,
+            "manual_review_required": retry_recovered > 0,
+            "manual_review_hint": "Review a sample of repaired findings to confirm precision remains high.",
+        },
         "confidence_threshold": threshold,
+        "target_line_mismatch_subtypes": mismatch_subtypes,
         "context_telemetry": context_telemetry,
         "agent_metrics": context.get("agent_metrics", {}),
     }
+
+
+def _warn_if_carriage_returns(fetched_files: dict[str, str]) -> None:
+    with_carriage_return = [path for path, content in fetched_files.items() if "\r" in content]
+    if with_carriage_return:
+        logger.warning(
+            "Found carriage returns in normalized fetched_files paths=%s",
+            with_carriage_return[:10],
+        )
+
+
+def _repair_findings_from_files(
+    findings: list[Finding],
+    fetched_files: dict[str, str],
+    *,
+    commentable_lines: set[tuple[str, int]] | None,
+    window: int,
+) -> list[Finding]:
+    repaired: list[Finding] = []
+    for finding in findings:
+        repaired.append(
+            _repair_finding(
+                finding,
+                fetched_files,
+                commentable_lines=commentable_lines,
+                window=window,
+            )
+        )
+    return repaired
+
+
+def _repair_finding(
+    finding: Finding,
+    fetched_files: dict[str, str],
+    *,
+    commentable_lines: set[tuple[str, int]] | None,
+    window: int,
+) -> Finding:
+    file_content = fetched_files.get(finding.file_path)
+    if file_content is None:
+        return finding
+
+    lines = file_content.split("\n")
+    start_line = finding.line_start
+    end_line = finding.line_end or finding.line_start
+    if not (1 <= start_line <= len(lines)):
+        return finding
+
+    actual = lines[start_line - 1]
+    if normalize_for_match(actual) == normalize_for_match(finding.target_line_content):
+        finding.target_line_content = actual
+        return finding
+
+    line_span = max(0, end_line - start_line)
+    search_start = max(1, start_line - window)
+    search_end = min(len(lines), end_line + window)
+    matched_line = _find_normalized_line(lines, finding.target_line_content, search_start, search_end)
+    if matched_line is None:
+        return finding
+
+    new_end_line = min(len(lines), matched_line + line_span)
+    if commentable_lines is not None and not _is_commentable_range(finding.file_path, matched_line, new_end_line, commentable_lines):
+        return finding
+
+    finding.line_start = matched_line
+    finding.line_end = new_end_line
+    finding.target_line_content = lines[matched_line - 1]
+    return finding
+
+
+def _find_normalized_line(lines: list[str], target_line_content: str, start_line: int, end_line: int) -> int | None:
+    normalized_target = normalize_for_match(target_line_content)
+    for line_no in range(start_line, end_line + 1):
+        if normalize_for_match(lines[line_no - 1]) == normalized_target:
+            return line_no
+    return None
+
+
+def _is_commentable_range(
+    path: str,
+    start_line: int,
+    end_line: int,
+    commentable_lines: set[tuple[str, int]],
+) -> bool:
+    return all((path, line_no) in commentable_lines for line_no in range(start_line, end_line + 1))
+
+
+def _summarize_target_line_mismatch_subtypes(
+    dropped: list[tuple[Finding, DropReason, str]],
+    fetched_files: dict[str, str],
+    *,
+    commentable_lines: set[tuple[str, int]] | None,
+    window: int,
+) -> dict[str, int]:
+    subtype_counts = {
+        "target_line_mismatch_crlf": 0,
+        "target_line_mismatch_whitespace": 0,
+        "target_line_mismatch_wrong_line": 0,
+        "target_line_mismatch_hallucinated": 0,
+    }
+    for finding, reason, _ in dropped:
+        if reason != "target_line_mismatch":
+            continue
+        subtype = _target_line_mismatch_subtype(
+            finding,
+            fetched_files,
+            commentable_lines=commentable_lines,
+            window=window,
+        )
+        subtype_counts[subtype] = subtype_counts.get(subtype, 0) + 1
+    return subtype_counts
+
+
+def _target_line_mismatch_subtype(
+    finding: Finding,
+    fetched_files: dict[str, str],
+    *,
+    commentable_lines: set[tuple[str, int]] | None,
+    window: int,
+) -> str:
+    file_content = fetched_files.get(finding.file_path)
+    if file_content is None:
+        return "target_line_mismatch_hallucinated"
+    lines = file_content.split("\n")
+    line_no = finding.line_start
+    if not (1 <= line_no <= len(lines)):
+        return "target_line_mismatch_hallucinated"
+
+    actual = lines[line_no - 1]
+    if finding.target_line_content.replace("\r\n", "\n").replace("\r", "\n") == actual:
+        return "target_line_mismatch_crlf"
+    if normalize_for_match(actual) == normalize_for_match(finding.target_line_content):
+        return "target_line_mismatch_whitespace"
+
+    end_line = finding.line_end or line_no
+    search_start = max(1, line_no - window)
+    search_end = min(len(lines), end_line + window)
+    matched_line = _find_normalized_line(lines, finding.target_line_content, search_start, search_end)
+    if matched_line is not None and (
+        commentable_lines is None or _is_commentable_range(finding.file_path, matched_line, matched_line, commentable_lines)
+    ):
+        return "target_line_mismatch_wrong_line"
+    return "target_line_mismatch_hallucinated"
+
+
+def _repair_retry_feedback(
+    dropped: list[tuple[Finding, DropReason, str]],
+    fetched_files: dict[str, str],
+    *,
+    window: int,
+) -> str:
+    lines = [
+        "These findings were dropped because target_line_content did not match file content.",
+        "Return ONLY repaired findings that remain valid. Omit discarded findings.",
+        "For each repaired finding, provide corrected line_start/line_end and exact target_line_content from snippets.",
+    ]
+    for index, (finding, _, detail) in enumerate(dropped[:20], start=1):
+        snippet = _render_file_snippet(
+            file_path=finding.file_path,
+            line_start=finding.line_start,
+            line_end=finding.line_end or finding.line_start,
+            fetched_files=fetched_files,
+            window=window,
+        )
+        lines.extend(
+            [
+                f"",
+                f"Finding {index}",
+                f"file: {finding.file_path}",
+                f"your_line_start: {finding.line_start}",
+                f"your_line_end: {finding.line_end or finding.line_start}",
+                f"drop_detail: {detail}",
+                f"your_target_line_content: {finding.target_line_content}",
+                f"your_message: {finding.message}",
+                "actual_snippet:",
+                snippet,
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _render_file_snippet(
+    *,
+    file_path: str,
+    line_start: int,
+    line_end: int,
+    fetched_files: dict[str, str],
+    window: int,
+) -> str:
+    content = fetched_files.get(file_path)
+    if content is None:
+        return "  <file content unavailable>"
+    file_lines = content.split("\n")
+    if not file_lines:
+        return "  <file is empty>"
+    start = max(1, line_start - window)
+    end = min(len(file_lines), line_end + window)
+    out: list[str] = []
+    for line_no in range(start, end + 1):
+        out.append(f"  {line_no}: {file_lines[line_no - 1]}")
+    return "\n".join(out)
 
 
 def _build_repo_segments(frameworks: list[str], prompt_additions: str | None) -> list[str]:

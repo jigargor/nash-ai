@@ -5,6 +5,7 @@ import hashlib
 import tiktoken
 
 from app.agent.diff_parser import FileInDiff, NumberedLine, right_side_diff_line_set
+from app.agent.normalization import normalize_file_content
 from app.agent.review_config import ContextPackagingConfig
 from app.agent.schema import ContextAnchor, ContextBudgets, ContextSegment, LayeredContextPackage
 from app.github.client import GitHubClient
@@ -230,7 +231,7 @@ async def _try_fetch_file(
     ref: str,
 ) -> str | None:
     try:
-        return await gh.get_file_content(owner, repo, path, ref)
+        return normalize_file_content(await gh.get_file_content(owner, repo, path, ref))
     except Exception:
         return None
 

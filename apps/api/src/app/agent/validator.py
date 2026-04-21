@@ -1,4 +1,5 @@
 from app.agent.schema import DropReason, Finding
+from app.agent.normalization import normalize_file_content
 
 try:
     from tree_sitter_language_pack import get_parser
@@ -27,7 +28,7 @@ class FindingValidator:
         if finding.file_path not in self._files:
             return False, "file_not_in_context", f"File {finding.file_path} not in PR context"
 
-        content = self._files[finding.file_path]
+        content = normalize_file_content(self._files[finding.file_path])
         lines = content.split("\n")
 
         end_line = finding.line_end or finding.line_start

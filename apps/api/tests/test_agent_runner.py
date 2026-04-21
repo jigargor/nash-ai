@@ -4,7 +4,15 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent.review_config import ReviewConfig, ReviewModelConfig
-from app.agent.runner import _apply_confidence_threshold, _attach_debug_artifacts, _mark_review_done, _validate_result, _validation_feedback
+from app.agent.runner import (
+    _apply_confidence_threshold,
+    _attach_debug_artifacts,
+    _mark_review_done,
+    _repair_findings_from_files,
+    _summarize_target_line_mismatch_subtypes,
+    _validate_result,
+    _validation_feedback,
+)
 from app.agent.schema import Finding, ReviewResult
 
 
@@ -67,15 +75,68 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
         validator_dropped=[(_finding("bad.py"), "line_out_of_range", "invalid range")],
         confidence_dropped=[{"file_path": "low.py", "line_start": 1, "line_end": 1, "confidence": 0.5, "threshold": 0.85}],
         retry_triggered=True,
+        retry_mode="repair_only",
+        retry_attempted=1,
+        retry_recovered=1,
         threshold=0.85,
         context_telemetry={"anchor_coverage": 1.0},
+        mismatch_subtypes={"target_line_mismatch_whitespace": 1},
     )
     artifacts = context["debug_artifacts"]
     assert artifacts["generated_findings_count"] == 4
     assert artifacts["retry_triggered"] is True
+    assert artifacts["retry_mode"] == "repair_only"
+    assert artifacts["retry_attempted"] == 1
+    assert artifacts["retry_recovered"] == 1
     assert artifacts["validator_dropped"][0]["reason"] == "line_out_of_range"
     assert artifacts["validator_dropped"][0]["detail"] == "invalid range"
     assert artifacts["confidence_dropped"][0]["file_path"] == "low.py"
+    assert artifacts["target_line_mismatch_subtypes"]["target_line_mismatch_whitespace"] == 1
+    assert artifacts["acceptance_quality_check"]["target_sample_size"] == 50
+
+
+def test_repair_findings_from_files_rewrites_line_start_when_match_in_window() -> None:
+    finding = _finding("a.py")
+    finding.line_start = 1
+    finding.line_end = 1
+    finding.target_line_content = "value = int(user_input)"
+    repaired = _repair_findings_from_files(
+        [finding],
+        {"a.py": "x = 1\nvalue = int(user_input)\nprint(value)"},
+        commentable_lines={("a.py", 1), ("a.py", 2), ("a.py", 3)},
+        window=3,
+    )
+    assert repaired[0].line_start == 2
+    assert repaired[0].line_end == 2
+    assert repaired[0].target_line_content == "value = int(user_input)"
+
+
+def test_repair_findings_from_files_keeps_original_when_repaired_line_not_commentable() -> None:
+    finding = _finding("a.py")
+    finding.line_start = 1
+    finding.line_end = 1
+    finding.target_line_content = "value = int(user_input)"
+    repaired = _repair_findings_from_files(
+        [finding],
+        {"a.py": "x = 1\nvalue = int(user_input)\nprint(value)"},
+        commentable_lines={("a.py", 1), ("a.py", 3)},
+        window=3,
+    )
+    assert repaired[0].line_start == 1
+
+
+def test_summarize_target_line_mismatch_subtypes_breaks_down_reasons() -> None:
+    mismatch = _finding("a.py")
+    mismatch.line_start = 1
+    mismatch.target_line_content = "value = int(user_input)\t"
+    dropped = [(mismatch, "target_line_mismatch", "target_line_content does not match file content at line_start")]
+    counts = _summarize_target_line_mismatch_subtypes(
+        dropped,
+        {"a.py": "value = int(user_input)"},
+        commentable_lines=None,
+        window=3,
+    )
+    assert counts["target_line_mismatch_whitespace"] == 1
 
 
 @pytest.mark.anyio
