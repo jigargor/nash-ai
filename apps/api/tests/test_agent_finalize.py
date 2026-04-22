@@ -35,6 +35,7 @@ def test_repair_review_input_sanitizes_finding_message() -> None:
                     "severity": "low",
                     "category": "style",
                     "confidence": 90,
+                    "evidence": "diff_visible",
                 }
             ],
         }

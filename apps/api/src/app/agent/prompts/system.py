@@ -27,6 +27,15 @@ def _load_verified_facts() -> list[dict[str, object]]:
     return normalized
 
 
+def load_verified_fact_ids() -> set[str]:
+    fact_ids: set[str] = set()
+    for fact in _load_verified_facts():
+        fact_id = fact.get("id")
+        if isinstance(fact_id, str) and fact_id.strip():
+            fact_ids.add(fact_id.strip())
+    return fact_ids
+
+
 def build_system_prompt(frameworks: list[str], diff: str, repo_additions: str | None = None) -> str:
     parts = [
         _load_file("reviewer_system.md"),

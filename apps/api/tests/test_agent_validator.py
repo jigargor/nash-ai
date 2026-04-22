@@ -13,6 +13,8 @@ def _base_finding(**overrides) -> Finding:
         "target_line_content": "value = int(user_input)",
         "suggestion": "try:\n    value = int(user_input)\nexcept ValueError:\n    value = 0",
         "confidence": 95,
+        "evidence": "tool_verified",
+        "evidence_tool_calls": ["fetch_file_content"],
     }
     payload.update(overrides)
     return Finding.model_validate(payload)

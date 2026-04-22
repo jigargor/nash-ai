@@ -1,10 +1,11 @@
 import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Severity = Literal["critical", "high", "medium", "low"]
 Category = Literal["security", "performance", "correctness", "style", "maintainability"]
+Evidence = Literal["tool_verified", "diff_visible", "verified_fact", "inference"]
 ContextFidelity = Literal["high", "summary", "reference"]
 DropReason = Literal[
     "target_line_mismatch",
@@ -46,6 +47,22 @@ class Finding(BaseModel):
         default=False,
         description="True if a tool call was made that touched this file during the review.",
     )
+    evidence: Evidence
+    evidence_tool_calls: list[str] | None = Field(
+        default=None,
+        description="Tool names called to verify this finding. Required when evidence == 'tool_verified'.",
+    )
+    evidence_fact_id: str | None = Field(
+        default=None,
+        description="ID from verified_facts.yaml. Required when evidence == 'verified_fact'.",
+    )
+    is_vendor_claim: bool = Field(
+        default=False,
+        description=(
+            "True if the finding's correctness depends on external vendor, "
+            "platform, framework, or library behavior. See vendor-claim rules."
+        ),
+    )
 
     @field_validator("message")
     @classmethod
@@ -54,6 +71,44 @@ class Finding(BaseModel):
         if word_count > 80:
             raise ValueError(f"message exceeds 80 words ({word_count})")
         return value
+
+    @model_validator(mode="after")
+    def check_evidence_consistency(self) -> "Finding":
+        if self.severity == "critical" and self.evidence != "tool_verified":
+            raise ValueError(
+                f"critical severity requires evidence='tool_verified', got '{self.evidence}'"
+            )
+        if self.severity == "high" and self.evidence == "inference":
+            raise ValueError("high severity may not use evidence='inference'")
+
+        if self.evidence == "inference":
+            if self.severity not in {"low", "medium"}:
+                raise ValueError("evidence='inference' is permitted only for low/medium severity")
+            if self.confidence > 75:
+                raise ValueError(f"inference evidence caps confidence at 75, got {self.confidence}")
+
+        if self.evidence == "tool_verified" and not self.evidence_tool_calls:
+            raise ValueError("evidence='tool_verified' requires evidence_tool_calls")
+        if self.evidence == "verified_fact" and not self.evidence_fact_id:
+            raise ValueError("evidence='verified_fact' requires evidence_fact_id")
+
+        return self
+
+    @model_validator(mode="after")
+    def check_vendor_claim_evidence(self) -> "Finding":
+        if not self.is_vendor_claim:
+            return self
+
+        if self.severity == "critical" and self.evidence != "tool_verified":
+            raise ValueError("Vendor claims at critical severity require evidence='tool_verified'")
+        if self.severity == "high" and self.evidence not in ("tool_verified", "verified_fact"):
+            raise ValueError(
+                "Vendor claims at high severity require 'tool_verified' or 'verified_fact'"
+            )
+        if self.evidence != "tool_verified" and self.confidence > 85:
+            raise ValueError("Vendor claims without tool_verified evidence cap confidence at 85")
+
+        return self
 
 
 class ReviewResult(BaseModel):

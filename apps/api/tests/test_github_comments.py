@@ -14,6 +14,7 @@ def test_build_review_comment_payload_adds_start_line_for_multiline() -> None:
             "target_line_content": "first",
             "suggestion": None,
             "confidence": 90,
+            "evidence": "diff_visible",
         }
     )
     payload = build_review_comment_payload(finding)
@@ -34,6 +35,7 @@ def test_build_review_comment_payload_omits_start_line_when_single_line() -> Non
             "target_line_content": "x",
             "suggestion": None,
             "confidence": 90,
+            "evidence": "diff_visible",
         }
     )
     payload = build_review_comment_payload(finding)
@@ -52,6 +54,7 @@ def test_format_finding_sanitizes_message_tail() -> None:
             "target_line_content": "x = 1",
             "suggestion": None,
             "confidence": 90,
+            "evidence": "diff_visible",
         }
     )
     body = format_finding(finding)

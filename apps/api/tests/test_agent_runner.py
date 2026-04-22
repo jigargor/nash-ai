@@ -13,6 +13,9 @@ from app.agent.runner import (
     _summarize_target_line_mismatch_subtypes,
     _validate_result,
     _validation_feedback,
+    cross_check_fact_ids,
+    cross_check_tool_evidence,
+    extract_tool_call_history,
 )
 from app.agent.schema import Finding, ReviewResult
 
@@ -36,6 +39,7 @@ def _finding(file_path: str, confidence: int = 90) -> Finding:
             "target_line_content": "x = 1",
             "suggestion": None,
             "confidence": confidence,
+            "evidence": "diff_visible",
         }
     )
 
@@ -82,6 +86,9 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
         severity_final=Counter({"medium": 2}),
         confidence_draft=Counter({"80-94": 2, "60-79": 1}),
         confidence_final=Counter({"80-94": 2}),
+        evidence_distribution=Counter({"diff_visible": 2}),
+        evidence_rejections_total=1,
+        evidence_rejection_reasons=Counter({"unknown fact id: bad_id": 1}),
         retry_triggered=True,
         retry_mode="repair_only",
         retry_attempted=1,
@@ -99,6 +106,8 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
     assert artifacts["draft_findings_total"] == 3
     assert artifacts["final_findings_total"] == 2
     assert artifacts["editor_actions"]["keep"] == 1
+    assert artifacts["evidence_distribution"]["diff_visible"] == 2
+    assert artifacts["evidence_rejections_total"] == 1
     assert artifacts["validator_dropped"][0]["reason"] == "line_out_of_range"
     assert artifacts["validator_dropped"][0]["detail"] == "invalid range"
     assert artifacts["confidence_dropped"][0]["file_path"] == "low.py"
@@ -199,3 +208,41 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
 
     assert review.status == "done"
     assert review.model == "claude-3-5-haiku-latest"
+
+
+def test_extract_tool_call_history_collects_tool_use_blocks() -> None:
+    history = extract_tool_call_history(
+        [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "name": "fetch_file_content", "input": {"path": "a.py"}},
+                    {"type": "text", "text": "ignored"},
+                ],
+            }
+        ]
+    )
+    assert history == [{"name": "fetch_file_content", "input": {"path": "a.py"}}]
+
+
+def test_cross_check_tool_evidence_rejects_missing_claimed_tool() -> None:
+    finding = _finding("a.py")
+    finding.evidence = "tool_verified"
+    finding.evidence_tool_calls = ["search_codebase"]
+    accepted, rejected = cross_check_tool_evidence(
+        [finding],
+        [{"name": "fetch_file_content", "input": {"path": "a.py"}}],
+    )
+    assert not accepted
+    assert len(rejected) == 1
+    assert "claimed tool calls not in history" in rejected[0][1]
+
+
+def test_cross_check_fact_ids_rejects_unknown_fact() -> None:
+    finding = _finding("a.py")
+    finding.evidence = "verified_fact"
+    finding.evidence_fact_id = "unknown_id"
+    accepted, rejected = cross_check_fact_ids([finding], {"known_id"})
+    assert not accepted
+    assert len(rejected) == 1
+    assert "unknown fact id" in rejected[0][1]
