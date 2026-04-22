@@ -6,7 +6,7 @@ import yaml
 
 from app.agent.schema import ContextBudgets
 
-DEFAULT_CONFIDENCE_THRESHOLD = 0.85
+DEFAULT_CONFIDENCE_THRESHOLD = 85
 DEFAULT_MODEL_NAME = "claude-sonnet-4-5"
 DEFAULT_MODEL_PRICING_USD_PER_1M: dict[str, tuple[Decimal, Decimal]] = {
     "claude-sonnet-4-5": (Decimal("3.00"), Decimal("15.00")),
@@ -35,7 +35,7 @@ class ContextPackagingConfig:
 
 @dataclass
 class ReviewConfig:
-    confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
+    confidence_threshold: int = DEFAULT_CONFIDENCE_THRESHOLD
     prompt_additions: str | None = None
     model: ReviewModelConfig = field(default_factory=ReviewModelConfig)
     budgets: ContextBudgets = field(default_factory=ContextBudgets)
@@ -73,16 +73,18 @@ async def load_review_config(gh, owner: str, repo: str, ref: str) -> ReviewConfi
     )
 
 
-def _normalize_threshold(raw_value: object) -> float:
+def _normalize_threshold(raw_value: object) -> int:
     if raw_value is None:
         return DEFAULT_CONFIDENCE_THRESHOLD
     try:
         value = float(raw_value)
     except (TypeError, ValueError):
         return DEFAULT_CONFIDENCE_THRESHOLD
-    if value < 0.0 or value > 1.0:
+    if 0.0 <= value <= 1.0:
+        value *= 100
+    if value < 0.0 or value > 100.0:
         return DEFAULT_CONFIDENCE_THRESHOLD
-    return value
+    return int(round(value))
 
 
 def _parse_model_config(raw_value: object) -> ReviewModelConfig:

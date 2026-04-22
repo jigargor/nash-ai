@@ -11,9 +11,8 @@ def _base_finding(**overrides) -> Finding:
         "line_start": 1,
         "line_end": 1,
         "target_line_content": "value = int(user_input)",
-        "target_line_content_reasoning": "Direct int conversion can raise ValueError.",
         "suggestion": "try:\n    value = int(user_input)\nexcept ValueError:\n    value = 0",
-        "confidence": 0.95,
+        "confidence": 95,
     }
     payload.update(overrides)
     return Finding.model_validate(payload)

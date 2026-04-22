@@ -1,16 +1,19 @@
+from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging
 
+from app.agent.acknowledgments import extract_todo_fixme_markers
 from app.agent.context_builder import build_context_bundle, is_diff_too_large
 from app.agent.diff_parser import parse_diff, right_side_diff_line_set
+from app.agent.editor import run_editor
 from app.agent.finalize import finalize_review
 from app.agent.loop import run_agent
 from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
 from app.agent.prompts import build_initial_user_prompt, build_system_prompt
 from app.agent.review_config import ReviewConfig, load_review_config
-from app.agent.schema import DropReason, Finding, ReviewResult
+from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
 from app.agent.validator import FindingValidator
 from app.db.models import Review
 from app.db.session import AsyncSessionLocal, set_installation_context
@@ -18,7 +21,7 @@ from app.github.client import GitHubClient
 from app.github.comments import post_review
 
 logger = logging.getLogger(__name__)
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4-reviewer-editor"
 REPAIR_SEARCH_WINDOW = 3
 REPAIR_RETRY_DROP_RATE = 0.20
 FULL_REGENERATE_RETRY_DROP_RATE = 0.50
@@ -59,6 +62,8 @@ async def run_review(
         context["github_client"] = gh
 
         diff_text = await gh.get_pull_request_diff(owner, repo, pr_number)
+        pr = await gh.get_pull_request(owner, repo, pr_number)
+        commits = await gh.get_pull_request_commits(owner, repo, pr_number)
         if is_diff_too_large(diff_text):
             result = ReviewResult(
                 findings=[],
@@ -84,7 +89,7 @@ async def run_review(
         )
         context["fetched_files"] = dict(context_bundle.fetched_files)
         _warn_if_carriage_returns(context["fetched_files"])
-        system_prompt = build_system_prompt(repo_profile.frameworks, review_config.prompt_additions)
+        system_prompt = build_system_prompt(repo_profile.frameworks, diff_text, review_config.prompt_additions)
         user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
         messages = await run_agent(system_prompt, user_prompt, context, model_name=review_config.model.name)
         result = await finalize_review(
@@ -93,6 +98,9 @@ async def run_review(
             context,
             model_name=review_config.model.name,
         )
+        tools_called_per_file = extract_tool_usage_by_file(messages)
+        for finding in result.findings:
+            finding.verified_via_tool = finding.file_path in tools_called_per_file
 
         commentable_lines = right_side_diff_line_set(files_in_diff)
         validator = FindingValidator(
@@ -192,13 +200,38 @@ async def run_review(
                     window=REPAIR_SEARCH_WINDOW,
                 )
 
-        threshold = review_config.confidence_threshold or 0.85
+        threshold = review_config.confidence_threshold or 85
         result, confidence_dropped = _apply_confidence_threshold(result, threshold)
+        draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
+        code_acknowledgments = extract_todo_fixme_markers(context["fetched_files"])
+        prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+        edited_result = await run_editor(
+            draft=draft_result,
+            pr_context={
+                "title": pr.get("title", ""),
+                "description": pr.get("body", "") or "",
+                "commits": [str((commit.get("commit") or {}).get("message", "")) for commit in commits],
+            },
+            prior_reviews=prior_reviews,
+            code_acknowledgments=code_acknowledgments,
+            model_name=review_config.model.name,
+        )
+        final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
         _attach_debug_artifacts(
             context=context,
             generated=generated,
             validator_dropped=validator_dropped,
             confidence_dropped=confidence_dropped,
+            draft_findings=len(draft_result.findings),
+            final_findings=len(final_result.findings),
+            editor_actions=Counter(decision.action for decision in edited_result.decisions),
+            editor_drop_reasons=Counter(
+                decision.reason for decision in edited_result.decisions if decision.action == "drop" and decision.reason
+            ),
+            severity_draft=Counter(finding.severity for finding in draft_result.findings),
+            severity_final=Counter(finding.severity for finding in final_result.findings),
+            confidence_draft=Counter(_confidence_bucket(finding.confidence) for finding in draft_result.findings),
+            confidence_final=Counter(_confidence_bucket(finding.confidence) for finding in final_result.findings),
             retry_triggered=retry_triggered,
             retry_mode=retry_mode,
             retry_attempted=retry_attempted,
@@ -214,12 +247,14 @@ async def run_review(
             generated=generated,
             validator_dropped=validator_dropped,
             confidence_dropped=confidence_dropped,
-            posted=len(result.findings),
+            draft_posted=len(draft_result.findings),
+            final_posted=len(final_result.findings),
+            editor_result=edited_result,
             context_telemetry=context_bundle.telemetry,
         )
 
-        await post_review(gh, owner, repo, pr_number, head_sha, result)
-        await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
+        await post_review(gh, owner, repo, pr_number, head_sha, final_result)
+        await _mark_review_done(session_data=final_result, context=context, status="done", review_config=review_config)
     except Exception as exc:
         logger.exception("Review job failed review_id=%s", review_id)
         await _mark_review_done(
@@ -293,7 +328,7 @@ def _validate_result(
     return result, dropped, generated
 
 
-def _apply_confidence_threshold(result: ReviewResult, threshold: float) -> tuple[ReviewResult, list[dict[str, object]]]:
+def _apply_confidence_threshold(result: ReviewResult, threshold: int) -> tuple[ReviewResult, list[dict[str, object]]]:
     kept_findings: list[Finding] = []
     dropped: list[dict[str, object]] = []
     for finding in result.findings:
@@ -331,7 +366,9 @@ def _log_quality_metrics(
     generated: int,
     validator_dropped: list[tuple[Finding, DropReason, str]],
     confidence_dropped: list[dict[str, object]],
-    posted: int,
+    draft_posted: int,
+    final_posted: int,
+    editor_result: EditedReview,
     context_telemetry: dict[str, object],
 ) -> None:
     dropped_by_reason: dict[str, int] = {}
@@ -339,18 +376,26 @@ def _log_quality_metrics(
         dropped_by_reason[reason] = dropped_by_reason.get(reason, 0) + 1
     dropped_by_reason["below_confidence_threshold"] = len(confidence_dropped)
     agent_metrics = context.get("agent_metrics", {})
+    editor_actions = Counter(decision.action for decision in editor_result.decisions)
+    editor_drop_reasons = Counter(
+        decision.reason for decision in editor_result.decisions if decision.action == "drop" and decision.reason
+    )
 
     logger.info(
-        "Review quality metrics review_id=%s generated=%s validator_dropped=%s confidence_dropped=%s posted=%s threshold=%.2f "
-        "frameworks=%s dropped_reasons=%s context_telemetry=%s agent_metrics=%s prompt_version=%s",
+        "Review quality metrics review_id=%s generated=%s validator_dropped=%s confidence_dropped=%s draft_posted=%s "
+        "final_posted=%s threshold=%s frameworks=%s dropped_reasons=%s editor_actions=%s editor_drop_reasons=%s "
+        "context_telemetry=%s agent_metrics=%s prompt_version=%s",
         context.get("review_id"),
         generated,
         len(validator_dropped),
         len(confidence_dropped),
-        posted,
+        draft_posted,
+        final_posted,
         review_config.confidence_threshold,
         ",".join(frameworks),
         dropped_by_reason,
+        dict(editor_actions),
+        dict(editor_drop_reasons),
         context_telemetry,
         agent_metrics,
         PROMPT_VERSION,
@@ -362,11 +407,19 @@ def _attach_debug_artifacts(
     generated: int,
     validator_dropped: list[tuple[Finding, DropReason, str]],
     confidence_dropped: list[dict[str, object]],
+    draft_findings: int,
+    final_findings: int,
+    editor_actions: Counter[str],
+    editor_drop_reasons: Counter[str],
+    severity_draft: Counter[str],
+    severity_final: Counter[str],
+    confidence_draft: Counter[str],
+    confidence_final: Counter[str],
     retry_triggered: bool,
     retry_mode: str | None,
     retry_attempted: int,
     retry_recovered: int,
-    threshold: float,
+    threshold: int,
     context_telemetry: dict[str, object],
     mismatch_subtypes: dict[str, int],
 ) -> None:
@@ -385,6 +438,14 @@ def _attach_debug_artifacts(
         "generated_findings_count": generated,
         "validator_dropped": validator_entries,
         "confidence_dropped": confidence_dropped,
+        "draft_findings_total": draft_findings,
+        "final_findings_total": final_findings,
+        "editor_actions": dict(editor_actions),
+        "editor_drop_reasons": dict(editor_drop_reasons),
+        "severity_draft": dict(severity_draft),
+        "severity_final": dict(severity_final),
+        "confidence_draft": dict(confidence_draft),
+        "confidence_final": dict(confidence_final),
         "retry_triggered": retry_triggered,
         "retry_mode": retry_mode,
         "retry_attempted": retry_attempted,
@@ -400,6 +461,45 @@ def _attach_debug_artifacts(
         "context_telemetry": context_telemetry,
         "agent_metrics": context.get("agent_metrics", {}),
     }
+
+
+def extract_tool_usage_by_file(messages: list[dict[str, object]]) -> set[str]:
+    touched_paths: set[str] = set()
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            block_type: str | None = None
+            tool_input: dict[str, object] | None = None
+            if isinstance(block, dict):
+                block_type = str(block.get("type", ""))
+                maybe_input = block.get("input")
+                if isinstance(maybe_input, dict):
+                    tool_input = maybe_input
+            else:
+                block_type = str(getattr(block, "type", ""))
+                maybe_input = getattr(block, "input", None)
+                if isinstance(maybe_input, dict):
+                    tool_input = maybe_input
+            if block_type != "tool_use" or tool_input is None:
+                continue
+            candidate = tool_input.get("path") or tool_input.get("file_path")
+            if isinstance(candidate, str) and candidate.strip():
+                touched_paths.add(candidate.strip())
+    return touched_paths
+
+
+def _confidence_bucket(value: int) -> str:
+    if value >= 95:
+        return "95-100"
+    if value >= 80:
+        return "80-94"
+    if value >= 60:
+        return "60-79"
+    if value >= 40:
+        return "40-59"
+    return "0-39"
 
 
 def _warn_if_carriage_returns(fetched_files: dict[str, str]) -> None:

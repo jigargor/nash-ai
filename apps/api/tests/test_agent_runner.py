@@ -1,3 +1,4 @@
+from collections import Counter
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ class FakeValidator:
         return True, None, None
 
 
-def _finding(file_path: str, confidence: float = 0.9) -> Finding:
+def _finding(file_path: str, confidence: int = 90) -> Finding:
     return Finding.model_validate(
         {
             "severity": "medium",
@@ -33,7 +34,6 @@ def _finding(file_path: str, confidence: float = 0.9) -> Finding:
             "line_start": 1,
             "line_end": 1,
             "target_line_content": "x = 1",
-            "target_line_content_reasoning": "This value is overwritten unexpectedly.",
             "suggestion": None,
             "confidence": confidence,
         }
@@ -59,12 +59,12 @@ def test_validation_feedback_contains_reason_and_location() -> None:
 
 
 def test_apply_confidence_threshold_tracks_dropped_metadata() -> None:
-    result = ReviewResult(findings=[_finding("ok.py", 0.9), _finding("low.py", 0.7)], summary="Summary")
-    filtered, dropped = _apply_confidence_threshold(result, threshold=0.85)
+    result = ReviewResult(findings=[_finding("ok.py", 90), _finding("low.py", 70)], summary="Summary")
+    filtered, dropped = _apply_confidence_threshold(result, threshold=85)
     assert len(filtered.findings) == 1
     assert filtered.findings[0].file_path == "ok.py"
     assert dropped[0]["file_path"] == "low.py"
-    assert dropped[0]["threshold"] == 0.85
+    assert dropped[0]["threshold"] == 85
 
 
 def test_attach_debug_artifacts_includes_drop_buckets() -> None:
@@ -73,12 +73,20 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
         context=context,
         generated=4,
         validator_dropped=[(_finding("bad.py"), "line_out_of_range", "invalid range")],
-        confidence_dropped=[{"file_path": "low.py", "line_start": 1, "line_end": 1, "confidence": 0.5, "threshold": 0.85}],
+        confidence_dropped=[{"file_path": "low.py", "line_start": 1, "line_end": 1, "confidence": 50, "threshold": 85}],
+        draft_findings=3,
+        final_findings=2,
+        editor_actions=Counter({"keep": 1, "drop": 1, "modify": 1}),
+        editor_drop_reasons=Counter({"duplicate": 1}),
+        severity_draft=Counter({"medium": 2, "high": 1}),
+        severity_final=Counter({"medium": 2}),
+        confidence_draft=Counter({"80-94": 2, "60-79": 1}),
+        confidence_final=Counter({"80-94": 2}),
         retry_triggered=True,
         retry_mode="repair_only",
         retry_attempted=1,
         retry_recovered=1,
-        threshold=0.85,
+        threshold=85,
         context_telemetry={"anchor_coverage": 1.0},
         mismatch_subtypes={"target_line_mismatch_whitespace": 1},
     )
@@ -88,6 +96,9 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
     assert artifacts["retry_mode"] == "repair_only"
     assert artifacts["retry_attempted"] == 1
     assert artifacts["retry_recovered"] == 1
+    assert artifacts["draft_findings_total"] == 3
+    assert artifacts["final_findings_total"] == 2
+    assert artifacts["editor_actions"]["keep"] == 1
     assert artifacts["validator_dropped"][0]["reason"] == "line_out_of_range"
     assert artifacts["validator_dropped"][0]["detail"] == "invalid range"
     assert artifacts["confidence_dropped"][0]["file_path"] == "low.py"

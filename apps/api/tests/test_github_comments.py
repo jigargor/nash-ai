@@ -12,9 +12,8 @@ def test_build_review_comment_payload_adds_start_line_for_multiline() -> None:
             "line_start": 2,
             "line_end": 5,
             "target_line_content": "first",
-            "target_line_content_reasoning": "Reason",
             "suggestion": None,
-            "confidence": 0.9,
+            "confidence": 90,
         }
     )
     payload = build_review_comment_payload(finding)
@@ -33,9 +32,8 @@ def test_build_review_comment_payload_omits_start_line_when_single_line() -> Non
             "line_start": 1,
             "line_end": None,
             "target_line_content": "x",
-            "target_line_content_reasoning": "Reason",
             "suggestion": None,
-            "confidence": 0.9,
+            "confidence": 90,
         }
     )
     payload = build_review_comment_payload(finding)
@@ -52,9 +50,8 @@ def test_format_finding_sanitizes_message_tail() -> None:
             "file_path": "a.py",
             "line_start": 1,
             "target_line_content": "x = 1",
-            "target_line_content_reasoning": "Reason",
             "suggestion": None,
-            "confidence": 0.9,
+            "confidence": 90,
         }
     )
     body = format_finding(finding)

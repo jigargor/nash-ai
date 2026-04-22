@@ -1,6 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
 
+import yaml
+
 PROMPTS_DIR = Path(__file__).parent
 
 
@@ -9,9 +11,25 @@ def _load_file(relative_path: str) -> str:
     return (PROMPTS_DIR / relative_path).read_text(encoding="utf-8").strip()
 
 
-def build_system_prompt(frameworks: list[str], repo_additions: str | None = None) -> str:
+@lru_cache(maxsize=1)
+def _load_verified_facts() -> list[dict[str, object]]:
+    facts_path = PROMPTS_DIR / "verified_facts.yaml"
+    if not facts_path.exists():
+        return []
+    raw = yaml.safe_load(facts_path.read_text(encoding="utf-8")) or []
+    if not isinstance(raw, list):
+        return []
+    normalized: list[dict[str, object]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(item)
+    return normalized
+
+
+def build_system_prompt(frameworks: list[str], diff: str, repo_additions: str | None = None) -> str:
     parts = [
-        _load_file("core_rules.md"),
+        _load_file("reviewer_system.md"),
         _load_file("fewshot_examples.md"),
     ]
 
@@ -20,6 +38,19 @@ def build_system_prompt(frameworks: list[str], repo_additions: str | None = None
         if stack_path.exists():
             stack_rules = _load_file(f"stacks/{framework}.md")
             parts.append(f"## Stack-specific rules: {framework}\n\n{stack_rules}")
+
+    relevant_facts: list[str] = []
+    diff_lower = diff.lower()
+    for fact in _load_verified_facts():
+        fact_id = str(fact.get("id", "")).strip()
+        fact_text = str(fact.get("fact", "")).strip()
+        keywords = fact.get("keywords", [])
+        if not fact_id or not fact_text or not isinstance(keywords, list):
+            continue
+        if any(str(keyword).lower() in diff_lower for keyword in keywords):
+            relevant_facts.append(f"**{fact_id}**: {fact_text}")
+    if relevant_facts:
+        parts.append("## Reminders from past reviews\n\n" + "\n\n".join(relevant_facts))
 
     if repo_additions:
         parts.append(f"## Additional context for this repository\n\n{repo_additions.strip()}")

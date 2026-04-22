@@ -76,5 +76,5 @@ def test_load_review_config_reads_threshold_and_prompt_additions() -> None:
             "sha",
         )
     )
-    assert config.confidence_threshold == 0.9
+    assert config.confidence_threshold == 90
     assert config.prompt_additions == "This repo uses generated types."

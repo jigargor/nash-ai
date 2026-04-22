@@ -84,7 +84,7 @@ def _repair_review_input(raw_input: object) -> object:
     repaired = dict(raw_input)
     summary = repaired.get("summary")
     if isinstance(summary, str):
-        repaired["summary"] = truncate_markdown_text(summary, 1000)
+        repaired["summary"] = truncate_markdown_text(summary, 800)
 
     findings = repaired.get("findings")
     if isinstance(findings, list):

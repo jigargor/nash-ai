@@ -1,0 +1,22 @@
+- id: vercel_forwarded_for
+  keywords: ["x-vercel-forwarded-for", "vercel forwarded"]
+  fact: |
+    Vercel's `x-vercel-forwarded-for` is set by Vercel at the edge and is not
+    user-controllable at that boundary. The client IP is at position 0 (first).
+    This differs from generic `x-forwarded-for` where client IP is typically the
+    last trusted hop after proxy appends.
+  source: https://vercel.com/docs/edge-network/headers
+
+- id: supabase_generated_types
+  keywords: ["supabase/types.ts", "Database = {", "generated from schema"]
+  fact: |
+    Supabase type files (commonly lib/supabase/types.ts) are generated.
+    Do not suggest manual edits. If types are wrong, suggest regeneration or a
+    schema/migration correction.
+
+- id: csp_report_uri
+  keywords: ["report-uri", "report-to", "content-security-policy"]
+  fact: |
+    `report-uri` remains supported by modern browsers. `report-to` is preferred
+    for structured reporting but not strictly required. Do not claim `report-uri`
+    usage is broken without context-specific requirements.

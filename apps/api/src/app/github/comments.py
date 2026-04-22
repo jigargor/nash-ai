@@ -6,7 +6,7 @@ from app.github.client import GitHubClient
 def format_finding(finding: Finding) -> str:
     message = sanitize_markdown_text(finding.message)
     body = (
-        f"**{finding.severity} · {finding.category}** · confidence {finding.confidence:.0%}\n\n"
+        f"**{finding.severity} · {finding.category}** · confidence {finding.confidence}%\n\n"
         f"{message}"
     )
     if finding.suggestion:

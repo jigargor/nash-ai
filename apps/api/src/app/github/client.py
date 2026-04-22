@@ -23,6 +23,19 @@ class GitHubClient:
     async def get_pull_request(self, owner: str, repo: str, pr_number: int) -> dict:
         return await self.get_json(f"/repos/{owner}/{repo}/pulls/{pr_number}")
 
+    async def get_pull_request_commits(self, owner: str, repo: str, pr_number: int) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/commits",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict)]
+
     async def get_pull_request_diff(self, owner: str, repo: str, pr_number: int) -> str:
         headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
         async with httpx.AsyncClient() as client:
@@ -43,6 +56,41 @@ class GitHubClient:
 
     async def get_file_history(self, owner: str, repo: str, path: str) -> list[dict]:
         return await self.get_json(f"/repos/{owner}/{repo}/commits", params={"path": path, "per_page": 10})
+
+    async def get_pr_reviews_by_bot(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        bot_login: str | None = None,
+    ) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/comments",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        bot_comments: list[dict] = []
+        normalized_login = bot_login.strip().lower() if isinstance(bot_login, str) and bot_login.strip() else None
+        for comment in payload:
+            if not isinstance(comment, dict):
+                continue
+            user = comment.get("user")
+            if not isinstance(user, dict):
+                continue
+            login = user.get("login")
+            user_type = str(user.get("type", "")).lower()
+            if normalized_login:
+                if isinstance(login, str) and login.lower() == normalized_login:
+                    bot_comments.append(comment)
+                continue
+            if user_type == "bot":
+                bot_comments.append(comment)
+        return bot_comments
 
     async def get_json(self, path: str, params: dict | None = None) -> dict:
         async with httpx.AsyncClient() as client:
