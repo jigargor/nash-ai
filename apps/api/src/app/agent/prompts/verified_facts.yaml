@@ -1,22 +1,40 @@
 - id: vercel_forwarded_for
+  vendor: vercel
+  topic: x-vercel-forwarded-for header
   keywords: ["x-vercel-forwarded-for", "vercel forwarded"]
   fact: |
-    Vercel's `x-vercel-forwarded-for` is set by Vercel at the edge and is not
-    user-controllable at that boundary. The client IP is at position 0 (first).
-    This differs from generic `x-forwarded-for` where client IP is typically the
-    last trusted hop after proxy appends.
+    Vercel's `x-vercel-forwarded-for` is set by Vercel's edge. The client IP is
+    at position 0 (first). Extracting parts[0] is correct for Vercel-hosted apps.
+  anti_fact: |
+    Do NOT suggest extracting the last IP. That applies to generic x-forwarded-for
+    behind untrusted proxy chains, not to Vercel's header.
   source: https://vercel.com/docs/edge-network/headers
+  severity_ceiling_without_tool: medium
+  confidence_ceiling_without_tool: 85
 
 - id: supabase_generated_types
+  vendor: supabase
+  topic: generated types files
   keywords: ["supabase/types.ts", "Database = {", "generated from schema"]
   fact: |
     Supabase type files (commonly lib/supabase/types.ts) are generated.
     Do not suggest manual edits. If types are wrong, suggest regeneration or a
     schema/migration correction.
+  anti_fact: |
+    Do NOT suggest hand-editing generated Supabase types. Fix by regenerating
+    types or updating the underlying migration/schema.
+  severity_ceiling_without_tool: medium
+  confidence_ceiling_without_tool: 85
 
 - id: csp_report_uri
+  vendor: browser
+  topic: CSP report-uri vs report-to
   keywords: ["report-uri", "report-to", "content-security-policy"]
   fact: |
     `report-uri` remains supported by modern browsers. `report-to` is preferred
     for structured reporting but not strictly required. Do not claim `report-uri`
     usage is broken without context-specific requirements.
+  anti_fact: |
+    Do NOT claim `report-uri` is outright broken or unusable in modern browsers.
+  severity_ceiling_without_tool: medium
+  confidence_ceiling_without_tool: 85

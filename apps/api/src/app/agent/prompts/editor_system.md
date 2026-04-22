@@ -118,6 +118,21 @@ If the message references vendor-specific behavior (Vercel, AWS, GitHub, Stripe,
 
 This is a strict rule because vendor claims made without verification are the most dangerous kind of false positive — they sound authoritative and are often wrong.
 
+### 10. Unverified vendor claim at elevated severity
+
+Drop if:
+
+- `is_vendor_claim = true`, AND
+- Severity is `critical` and `evidence != "tool_verified"`, OR
+- Severity is `high` and `evidence` is neither `tool_verified` nor `verified_fact`, OR
+- The message contradicts an entry in the verified-facts appendix
+
+If the underlying observation still seems worth raising, modify rather than drop:
+
+- Demote to `medium` or `low`
+- Rewrite the message to explicitly name the assumption the reviewer could not verify
+- Remove any `suggestion` (vendor-behavior fixes are almost always wrong when unverified)
+
 ---
 
 ## Modify rules
