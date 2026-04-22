@@ -1,4 +1,5 @@
 import base64
+from datetime import datetime
 
 import httpx
 
@@ -36,6 +37,19 @@ class GitHubClient:
             return []
         return [item for item in payload if isinstance(item, dict)]
 
+    async def get_pull_request_files(self, owner: str, repo: str, pr_number: int) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/files",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        return [item for item in payload if isinstance(item, dict)]
+
     async def get_pull_request_diff(self, owner: str, repo: str, pr_number: int) -> str:
         headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
         async with httpx.AsyncClient() as client:
@@ -56,6 +70,141 @@ class GitHubClient:
 
     async def get_file_history(self, owner: str, repo: str, path: str) -> list[dict]:
         return await self.get_json(f"/repos/{owner}/{repo}/commits", params={"path": path, "per_page": 10})
+
+    async def get_commits_touching_file(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        path: str,
+        since: datetime | None = None,
+    ) -> list[dict]:
+        params: dict[str, object] = {"path": path, "per_page": 100}
+        if since is not None:
+            params["since"] = since.isoformat()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE}/repos/{owner}/{repo}/commits",
+                headers=self._headers,
+                params=params,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        normalized: list[dict] = []
+        for commit in payload:
+            if not isinstance(commit, dict):
+                continue
+            commit_message = str((commit.get("commit") or {}).get("message", ""))
+            normalized.append(
+                {
+                    "sha": commit.get("sha"),
+                    "message": commit_message,
+                    "co_authored_by": _extract_co_author(commit_message),
+                    "files": await self.get_commit_files(owner, repo, str(commit.get("sha", ""))),
+                }
+            )
+        return normalized
+
+    async def get_commit_files(self, owner: str, repo: str, sha: str) -> list[dict]:
+        if not sha:
+            return []
+        data = await self.get_json(f"/repos/{owner}/{repo}/commits/{sha}")
+        files = data.get("files")
+        if not isinstance(files, list):
+            return []
+        return [item for item in files if isinstance(item, dict)]
+
+    async def get_pull_review_comment_reactions(self, owner: str, repo: str, comment_id: int) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE}/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        normalized: list[dict] = []
+        for reaction in payload:
+            if not isinstance(reaction, dict):
+                continue
+            user = reaction.get("user") if isinstance(reaction.get("user"), dict) else {}
+            normalized.append(
+                {
+                    "user": user.get("login"),
+                    "content": reaction.get("content"),
+                    "created_at": reaction.get("created_at"),
+                }
+            )
+        return normalized
+
+    async def get_pull_review_comment_replies(self, owner: str, repo: str, comment_id: int) -> list[dict]:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE}/repos/{owner}/{repo}/pulls/comments/{comment_id}/replies",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        normalized: list[dict] = []
+        for reply in payload:
+            if not isinstance(reply, dict):
+                continue
+            user = reply.get("user") if isinstance(reply.get("user"), dict) else {}
+            normalized.append(
+                {
+                    "user": user.get("login"),
+                    "body": reply.get("body"),
+                    "created_at": reply.get("created_at"),
+                }
+            )
+        return normalized
+
+    async def is_pull_review_thread_resolved(self, owner: str, repo: str, pr_number: int, comment_id: int) -> bool:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/threads",
+                headers=self._headers,
+                params={"per_page": 100},
+            )
+            if response.status_code >= 400:
+                return False
+            payload = response.json()
+        if not isinstance(payload, list):
+            return False
+        for thread in payload:
+            if not isinstance(thread, dict):
+                continue
+            comments = thread.get("comments")
+            if not isinstance(comments, list):
+                continue
+            if any(isinstance(comment, dict) and comment.get("id") == comment_id for comment in comments):
+                return bool(thread.get("resolved"))
+        return False
+
+    async def line_exists_in_pull_request_final_state(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        pr_state: dict,
+        file_path: str,
+        line_text: str,
+    ) -> bool:
+        ref = pr_state.get("merge_commit_sha") or (pr_state.get("head") or {}).get("sha")
+        if not isinstance(ref, str) or not ref:
+            return True
+        try:
+            content = await self.get_file_content(owner, repo, file_path, ref)
+        except Exception:
+            return True
+        return line_text in content
 
     async def get_pr_reviews_by_bot(
         self,
@@ -103,3 +252,11 @@ class GitHubClient:
             r = await client.post(f"{BASE}{path}", headers=self._headers, json=payload)
             r.raise_for_status()
             return r.json()
+
+
+def _extract_co_author(message: str) -> str | None:
+    for line in message.splitlines():
+        normalized = line.strip().lower()
+        if normalized.startswith("co-authored-by:"):
+            return normalized.replace("co-authored-by:", "").strip()
+    return None

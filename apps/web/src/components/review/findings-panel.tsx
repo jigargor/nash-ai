@@ -1,11 +1,12 @@
 "use client";
 
-import type { Finding } from "@ai-code-review/shared-types";
+import type { Finding, FindingOutcome } from "@ai-code-review/shared-types";
 
 import { useReviewUiStore } from "@/stores/review-ui-store";
 
 interface FindingsPanelProps {
   findings: Finding[];
+  findingOutcomes: FindingOutcome[];
   selectedFindingIndex: number | null;
   onSelectFinding: (index: number) => void;
   onDismiss: (index: number) => void;
@@ -14,6 +15,7 @@ interface FindingsPanelProps {
 
 export function FindingsPanel({
   findings,
+  findingOutcomes,
   selectedFindingIndex,
   onSelectFinding,
   onDismiss,
@@ -27,11 +29,13 @@ export function FindingsPanel({
   const hasSeverityFilters = Object.values(severityFilters).some(Boolean);
   const hasCategoryFilters = Object.values(categoryFilters).some(Boolean);
 
-  const visibleFindings = findings.filter((finding) => {
-    const severityAllowed = !hasSeverityFilters || Boolean(severityFilters[finding.severity]);
-    const categoryAllowed = !hasCategoryFilters || Boolean(categoryFilters[finding.category]);
-    return severityAllowed && categoryAllowed;
-  });
+  const visibleFindings = findings
+    .map((finding, index) => ({ finding, index }))
+    .filter(({ finding }) => {
+      const severityAllowed = !hasSeverityFilters || Boolean(severityFilters[finding.severity]);
+      const categoryAllowed = !hasCategoryFilters || Boolean(categoryFilters[finding.category]);
+      return severityAllowed && categoryAllowed;
+    });
 
   const severities = [...new Set(findings.map((finding) => finding.severity))];
   const categories = [...new Set(findings.map((finding) => finding.category))];
@@ -77,7 +81,7 @@ export function FindingsPanel({
         ))}
       </div>
 
-      {visibleFindings.map((finding, index) => (
+      {visibleFindings.map(({ finding, index }) => (
         <article
           key={`${finding.file_path}-${finding.line_start}-${index}`}
           data-selected={selectedFindingIndex === index}
@@ -100,6 +104,9 @@ export function FindingsPanel({
             <div style={{ marginTop: "0.25rem" }}>{finding.message}</div>
             <div style={{ marginTop: "0.25rem", color: "var(--text-muted)" }}>
               {finding.file_path}:{finding.line_start}
+            </div>
+            <div style={{ marginTop: "0.25rem", color: "var(--text-muted)" }}>
+              Outcome: {findingOutcomes.find((item) => item.finding_index === index)?.outcome ?? "pending"}
             </div>
           </button>
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>

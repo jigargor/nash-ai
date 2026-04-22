@@ -34,6 +34,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId }: PrReview
 
   const findings = reviewQuery.data?.findings?.findings?.filter(isFindingVisible) ?? [];
   const summary = reviewQuery.data?.findings?.summary ?? "";
+  const findingOutcomes = reviewQuery.data?.finding_outcomes ?? [];
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -138,6 +139,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId }: PrReview
         <DiffViewer findings={findings} selectedFindingIndex={selectedFindingIndex} onSelectFinding={setSelectedFindingIndex} />
         <FindingsPanel
           findings={findings}
+          findingOutcomes={findingOutcomes}
           selectedFindingIndex={selectedFindingIndex}
           onSelectFinding={setSelectedFindingIndex}
           onDismiss={handleDismiss}

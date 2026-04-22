@@ -40,7 +40,7 @@ async def post_review(
     pr_number: int,
     head_sha: str,
     result: ReviewResult,
-) -> None:
+) -> dict[str, object]:
     comments = [build_review_comment_payload(finding) for finding in result.findings]
 
     event = "REQUEST_CHANGES" if any(finding.severity == "critical" for finding in result.findings) else "COMMENT"
@@ -51,4 +51,4 @@ async def post_review(
         "event": event,
         "comments": comments,
     }
-    await gh.post_json(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", payload)
+    return await gh.post_json(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", payload)

@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, set_installation_context
+from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 
 router = APIRouter(prefix="/api/v1")
 
@@ -78,7 +79,46 @@ async def get_review(review_id: int, installation_id: int | None = Query(default
             "cost_usd": str(review.cost_usd) if review.cost_usd is not None else None,
             "created_at": review.created_at.isoformat(),
             "completed_at": review.completed_at.isoformat() if review.completed_at is not None else None,
+            "finding_outcomes": await list_review_finding_outcomes(int(review.id), int(review.installation_id)),
         }
+
+
+@router.get("/reviews/{review_id}/outcomes")
+async def get_review_outcomes(
+    review_id: int,
+    installation_id: int | None = Query(default=None, ge=1),
+) -> dict[str, object]:
+    async with AsyncSessionLocal() as session:
+        if installation_id is not None:
+            await set_installation_context(session, installation_id)
+        review = await session.get(Review, review_id)
+        if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if installation_id is None:
+            await set_installation_context(session, int(review.installation_id))
+        elif int(review.installation_id) != installation_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+
+        return {
+            "review_id": int(review.id),
+            "finding_outcomes": await list_review_finding_outcomes(int(review.id), int(review.installation_id)),
+        }
+
+
+@router.get("/telemetry/outcomes/summary")
+async def get_outcome_summary(
+    installation_id: int | None = Query(default=None, ge=1),
+    repo_full_name: str | None = Query(default=None),
+) -> dict[str, object]:
+    summary = await summarize_finding_outcomes(
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
+    )
+    return {
+        "installation_id": installation_id,
+        "repo_full_name": repo_full_name,
+        **summary,
+    }
 
 
 @router.post("/reviews/{review_id}/rerun")

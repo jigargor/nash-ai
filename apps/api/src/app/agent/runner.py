@@ -11,9 +11,11 @@ from app.agent.finalize import finalize_review
 from app.agent.loop import run_agent
 from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
-from app.agent.prompts import build_initial_user_prompt, build_system_prompt
+from app.agent.prompts import build_initial_user_prompt, build_system_prompt, load_verified_fact_ids
 from app.agent.review_config import ReviewConfig, load_review_config
 from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
+from app.telemetry.finding_outcomes import seed_pending_finding_outcomes
+from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.agent.validator import FindingValidator
 from app.db.models import Review
 from app.db.session import AsyncSessionLocal, set_installation_context
@@ -99,6 +101,7 @@ async def run_review(
             model_name=review_config.model.name,
         )
         tools_called_per_file = extract_tool_usage_by_file(messages)
+        tool_call_history = extract_tool_call_history(messages)
         for finding in result.findings:
             finding.verified_via_tool = finding.file_path in tools_called_per_file
 
@@ -202,6 +205,12 @@ async def run_review(
 
         threshold = review_config.confidence_threshold or 85
         result, confidence_dropped = _apply_confidence_threshold(result, threshold)
+        result.findings, auto_tag_vendor_rejected = auto_tag_vendor_claims(result.findings)
+        known_fact_ids = load_verified_fact_ids()
+        result.findings, evidence_tool_rejected = cross_check_tool_evidence(result.findings, tool_call_history)
+        result.findings, evidence_fact_rejected = cross_check_fact_ids(result.findings, known_fact_ids)
+        evidence_rejections = [*auto_tag_vendor_rejected, *evidence_tool_rejected, *evidence_fact_rejected]
+        evidence_rejection_reasons = Counter(reason for _, reason in evidence_rejections)
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
         code_acknowledgments = extract_todo_fixme_markers(context["fetched_files"])
         prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
@@ -232,6 +241,9 @@ async def run_review(
             severity_final=Counter(finding.severity for finding in final_result.findings),
             confidence_draft=Counter(_confidence_bucket(finding.confidence) for finding in draft_result.findings),
             confidence_final=Counter(_confidence_bucket(finding.confidence) for finding in final_result.findings),
+            evidence_distribution=Counter(finding.evidence for finding in final_result.findings),
+            evidence_rejections_total=len(evidence_rejections),
+            evidence_rejection_reasons=evidence_rejection_reasons,
             retry_triggered=retry_triggered,
             retry_mode=retry_mode,
             retry_attempted=retry_attempted,
@@ -250,10 +262,20 @@ async def run_review(
             draft_posted=len(draft_result.findings),
             final_posted=len(final_result.findings),
             editor_result=edited_result,
+            evidence_distribution=Counter(finding.evidence for finding in final_result.findings),
+            evidence_rejections_total=len(evidence_rejections),
+            evidence_rejection_reasons=evidence_rejection_reasons,
             context_telemetry=context_bundle.telemetry,
         )
 
-        await post_review(gh, owner, repo, pr_number, head_sha, final_result)
+        review_post_response = await post_review(gh, owner, repo, pr_number, head_sha, final_result)
+        comment_ids = extract_review_comment_ids(review_post_response)
+        await seed_pending_finding_outcomes(
+            review_id=int(context["review_id"]),
+            installation_id=int(context["installation_id"]),
+            finding_count=len(final_result.findings),
+            github_comment_ids=comment_ids,
+        )
         await _mark_review_done(session_data=final_result, context=context, status="done", review_config=review_config)
     except Exception as exc:
         logger.exception("Review job failed review_id=%s", review_id)
@@ -369,6 +391,9 @@ def _log_quality_metrics(
     draft_posted: int,
     final_posted: int,
     editor_result: EditedReview,
+    evidence_distribution: Counter[str],
+    evidence_rejections_total: int,
+    evidence_rejection_reasons: Counter[str],
     context_telemetry: dict[str, object],
 ) -> None:
     dropped_by_reason: dict[str, int] = {}
@@ -384,6 +409,7 @@ def _log_quality_metrics(
     logger.info(
         "Review quality metrics review_id=%s generated=%s validator_dropped=%s confidence_dropped=%s draft_posted=%s "
         "final_posted=%s threshold=%s frameworks=%s dropped_reasons=%s editor_actions=%s editor_drop_reasons=%s "
+        "evidence_distribution=%s evidence_rejections_total=%s evidence_rejection_reasons=%s "
         "context_telemetry=%s agent_metrics=%s prompt_version=%s",
         context.get("review_id"),
         generated,
@@ -396,6 +422,9 @@ def _log_quality_metrics(
         dropped_by_reason,
         dict(editor_actions),
         dict(editor_drop_reasons),
+        dict(evidence_distribution),
+        evidence_rejections_total,
+        dict(evidence_rejection_reasons),
         context_telemetry,
         agent_metrics,
         PROMPT_VERSION,
@@ -415,6 +444,9 @@ def _attach_debug_artifacts(
     severity_final: Counter[str],
     confidence_draft: Counter[str],
     confidence_final: Counter[str],
+    evidence_distribution: Counter[str],
+    evidence_rejections_total: int,
+    evidence_rejection_reasons: Counter[str],
     retry_triggered: bool,
     retry_mode: str | None,
     retry_attempted: int,
@@ -446,6 +478,9 @@ def _attach_debug_artifacts(
         "severity_final": dict(severity_final),
         "confidence_draft": dict(confidence_draft),
         "confidence_final": dict(confidence_final),
+        "evidence_distribution": dict(evidence_distribution),
+        "evidence_rejections_total": evidence_rejections_total,
+        "evidence_rejection_reasons": dict(evidence_rejection_reasons),
         "retry_triggered": retry_triggered,
         "retry_mode": retry_mode,
         "retry_attempted": retry_attempted,
@@ -488,6 +523,93 @@ def extract_tool_usage_by_file(messages: list[dict[str, object]]) -> set[str]:
             if isinstance(candidate, str) and candidate.strip():
                 touched_paths.add(candidate.strip())
     return touched_paths
+
+
+def extract_tool_call_history(messages: list[dict[str, object]]) -> list[dict[str, object]]:
+    history: list[dict[str, object]] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            block_type: str | None = None
+            block_name: str | None = None
+            tool_input: dict[str, object] | None = None
+            if isinstance(block, dict):
+                block_type = str(block.get("type", ""))
+                block_name = str(block.get("name", "")) if block.get("name") is not None else None
+                maybe_input = block.get("input")
+                if isinstance(maybe_input, dict):
+                    tool_input = maybe_input
+            else:
+                block_type = str(getattr(block, "type", ""))
+                name_value = getattr(block, "name", None)
+                block_name = str(name_value) if isinstance(name_value, str) else None
+                maybe_input = getattr(block, "input", None)
+                if isinstance(maybe_input, dict):
+                    tool_input = maybe_input
+            if block_type != "tool_use" or not block_name or tool_input is None:
+                continue
+            history.append({"name": block_name, "input": tool_input})
+    return history
+
+
+def cross_check_tool_evidence(
+    findings: list[Finding],
+    tool_call_history: list[dict[str, object]],
+) -> tuple[list[Finding], list[tuple[Finding, str]]]:
+    actual_tool_names = {
+        str(call.get("name"))
+        for call in tool_call_history
+        if isinstance(call.get("name"), str)
+    }
+    actual_tool_signatures = {
+        f"{call.get('name')}:{_stable_tool_input_repr(call.get('input'))}"
+        for call in tool_call_history
+        if isinstance(call.get("name"), str)
+    }
+
+    accepted: list[Finding] = []
+    rejected: list[tuple[Finding, str]] = []
+    for finding in findings:
+        if finding.evidence != "tool_verified":
+            accepted.append(finding)
+            continue
+        claimed_calls = set(finding.evidence_tool_calls or [])
+        if not claimed_calls:
+            rejected.append((finding, "missing claimed tool calls"))
+            continue
+        missing = {
+            claim
+            for claim in claimed_calls
+            if claim not in actual_tool_names and claim not in actual_tool_signatures
+        }
+        if missing:
+            rejected.append((finding, f"claimed tool calls not in history: {sorted(missing)}"))
+            continue
+        accepted.append(finding)
+    return accepted, rejected
+
+
+def cross_check_fact_ids(
+    findings: list[Finding],
+    known_fact_ids: set[str],
+) -> tuple[list[Finding], list[tuple[Finding, str]]]:
+    accepted: list[Finding] = []
+    rejected: list[tuple[Finding, str]] = []
+    for finding in findings:
+        if finding.evidence == "verified_fact" and finding.evidence_fact_id not in known_fact_ids:
+            rejected.append((finding, f"unknown fact id: {finding.evidence_fact_id}"))
+            continue
+        accepted.append(finding)
+    return accepted, rejected
+
+
+def _stable_tool_input_repr(raw_input: object) -> str:
+    if not isinstance(raw_input, dict):
+        return "{}"
+    parts = [f"{key}={raw_input[key]}" for key in sorted(raw_input.keys())]
+    return ",".join(parts)
 
 
 def _confidence_bucket(value: int) -> str:
@@ -710,3 +832,17 @@ def _build_repo_segments(frameworks: list[str], prompt_additions: str | None) ->
     if prompt_additions:
         segments.append(f"Repository additions: {prompt_additions.strip()}")
     return segments
+
+
+def extract_review_comment_ids(review_response: dict[str, object]) -> list[int | None]:
+    comments = review_response.get("comments")
+    if not isinstance(comments, list):
+        return []
+    comment_ids: list[int | None] = []
+    for comment in comments:
+        if not isinstance(comment, dict):
+            comment_ids.append(None)
+            continue
+        raw_id = comment.get("id")
+        comment_ids.append(int(raw_id) if isinstance(raw_id, int) else None)
+    return comment_ids

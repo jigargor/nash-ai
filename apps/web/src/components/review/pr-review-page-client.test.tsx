@@ -25,7 +25,8 @@ vi.mock("@/hooks/use-review", () => ({
             line_start: 1,
             line_end: 1,
             suggestion: "a = 1",
-            confidence: 0.9,
+            confidence: 90,
+            evidence: "diff_visible",
           },
           {
             severity: "medium",
@@ -35,10 +36,12 @@ vi.mock("@/hooks/use-review", () => ({
             line_start: 2,
             line_end: 2,
             suggestion: "b = 2",
-            confidence: 0.8,
+            confidence: 80,
+            evidence: "diff_visible",
           },
         ],
       },
+      finding_outcomes: [],
     },
   }),
 }));

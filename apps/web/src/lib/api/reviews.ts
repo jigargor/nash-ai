@@ -1,5 +1,5 @@
 import { apiFetch } from "@/lib/api/client";
-import type { Finding } from "@ai-code-review/shared-types";
+import type { Finding, FindingOutcome } from "@ai-code-review/shared-types";
 
 export interface ReviewListItem {
   id: number;
@@ -26,6 +26,7 @@ export interface ReviewDetail {
   cost_usd: string | null;
   created_at: string;
   completed_at: string | null;
+  finding_outcomes: FindingOutcome[];
 }
 
 export function fetchReviews(installationId?: number) {
@@ -36,6 +37,27 @@ export function fetchReviews(installationId?: number) {
 export function fetchReview(reviewId: number, installationId?: number) {
   const suffix = installationId ? `?installation_id=${installationId}` : "";
   return apiFetch<ReviewDetail>(`/api/v1/reviews/${reviewId}${suffix}`);
+}
+
+export interface OutcomeSummary {
+  total_classified: number;
+  outcomes: Record<string, number>;
+  global_metrics: {
+    applied_rate: number;
+    dismiss_rate: number;
+    ignore_rate: number;
+    positive_rate: number;
+    useful_rate: number;
+  };
+  breakdowns: Record<string, Record<string, Record<string, number>>>;
+}
+
+export function fetchOutcomeSummary(installationId?: number, repoFullName?: string) {
+  const params = new URLSearchParams();
+  if (installationId) params.set("installation_id", String(installationId));
+  if (repoFullName) params.set("repo_full_name", repoFullName);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<OutcomeSummary>(`/api/v1/telemetry/outcomes/summary${suffix}`);
 }
 
 export function rerunReview(reviewId: number) {

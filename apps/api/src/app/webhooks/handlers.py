@@ -90,3 +90,27 @@ async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestW
         repo_full_name,
         pr_number,
     )
+
+
+async def queue_pull_request_outcome_classification(
+    redis: ArqRedis,
+    payload: GitHubPullRequestWebhookPayload,
+) -> None:
+    installation_id = payload.installation.id
+    repo_full_name = payload.repository.full_name
+    owner, repo_name = repo_full_name.split("/")
+    pr_number = payload.pull_request.number
+    job = await redis.enqueue_job(
+        "classify_pr_outcomes",
+        installation_id,
+        owner,
+        repo_name,
+        pr_number,
+    )
+    logger.warning(
+        "Queued outcome classification installation_id=%s repo=%s pr_number=%s job_id=%s",
+        installation_id,
+        repo_full_name,
+        pr_number,
+        job.job_id if job else "unknown",
+    )

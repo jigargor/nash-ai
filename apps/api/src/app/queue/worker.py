@@ -1,6 +1,7 @@
 import logging
 from urllib.parse import urlparse
 
+from arq.cron import cron
 from arq.connections import RedisSettings
 from arq.constants import default_queue_name
 
@@ -32,6 +33,7 @@ _logger.warning(
 )
 
 from app.agent.runner import run_review  # noqa: E402
+from app.telemetry.finding_outcomes import classify_pending_outcomes_nightly, classify_pr_outcomes_for_closed_pr  # noqa: E402
 
 
 async def review_pr(
@@ -46,16 +48,31 @@ async def review_pr(
     await run_review(review_id, installation_id, owner, repo, pr_number, head_sha)
 
 
+async def classify_pr_outcomes(
+    ctx: dict,
+    installation_id: int,
+    owner: str,
+    repo: str,
+    pr_number: int,
+) -> None:
+    await classify_pr_outcomes_for_closed_pr(installation_id, owner, repo, pr_number)
+
+
+async def classify_pending_outcomes(ctx: dict) -> None:
+    await classify_pending_outcomes_nightly()
+
+
 async def worker_startup(ctx: dict) -> None:
     recovered = await recover_stale_running_reviews()
     ctx["recovered_stale_reviews"] = recovered
 
 
 class WorkerSettings:
-    functions = [review_pr]
+    functions = [review_pr, classify_pr_outcomes, classify_pending_outcomes]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = default_queue_name
     max_jobs = 5
     job_timeout = 300
     keep_result = 3600
     on_startup = worker_startup
+    cron_jobs = [cron(classify_pending_outcomes, hour=3, minute=0)]

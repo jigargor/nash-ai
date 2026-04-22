@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request, HTTPException
 from pydantic import ValidationError
 
 from app.config import settings
-from app.webhooks.handlers import queue_pull_request_review
+from app.webhooks.handlers import queue_pull_request_outcome_classification, queue_pull_request_review
 from app.webhooks.schemas import GitHubPullRequestWebhookPayload
 
 router = APIRouter()
@@ -57,9 +57,11 @@ async def github_webhook(request: Request):
 
     if payload.action in {"opened", "synchronize"}:
         await queue_pull_request_review(request.app.state.redis, payload)
+    elif payload.action == "closed":
+        await queue_pull_request_outcome_classification(request.app.state.redis, payload)
     else:
         logger.warning(
-            "GitHub pull_request webhook ignored action=%s delivery_id=%s (only opened/synchronize queue reviews)",
+            "GitHub pull_request webhook ignored action=%s delivery_id=%s (only opened/synchronize/closed are handled)",
             payload.action,
             delivery_id,
         )

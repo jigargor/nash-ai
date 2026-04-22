@@ -14,7 +14,8 @@ const findings = [
     line_start: 10,
     line_end: 10,
     suggestion: "print('fixed')",
-    confidence: 0.9,
+    confidence: 90,
+    evidence: "diff_visible",
   },
   {
     severity: "low",
@@ -24,7 +25,8 @@ const findings = [
     line_start: 2,
     line_end: 2,
     suggestion: undefined,
-    confidence: 0.8,
+    confidence: 80,
+    evidence: "diff_visible",
   },
 ] as const;
 
@@ -42,6 +44,7 @@ describe("FindingsPanel", () => {
     render(
       <FindingsPanel
         findings={[...findings]}
+        findingOutcomes={[]}
         selectedFindingIndex={null}
         onSelectFinding={() => undefined}
         onDismiss={() => undefined}

@@ -1,9 +1,11 @@
 "use client";
 
 import { useReviews } from "@/hooks/use-reviews";
+import { useOutcomeSummary } from "@/hooks/use-outcome-summary";
 
 export default function DashboardHomePage() {
   const reviews = useReviews();
+  const outcomeSummary = useOutcomeSummary();
   const totalTokens = (reviews.data ?? []).reduce((sum, review) => sum + (review.tokens_used ?? 0), 0);
   const totalCost = (reviews.data ?? []).reduce((sum, review) => sum + Number(review.cost_usd ?? 0), 0);
 
@@ -42,6 +44,20 @@ export default function DashboardHomePage() {
       ))}
       <div style={{ color: "var(--text-muted)", marginBottom: "0.5rem" }}>
         Reviews this month: {reviews.data?.length ?? 0} · tokens: {totalTokens} · cost: ${totalCost.toFixed(6)}
+      </div>
+      <div style={{ color: "var(--text-muted)", marginBottom: "0.5rem" }}>
+        Useful rate:{" "}
+        {outcomeSummary.data
+          ? `${(outcomeSummary.data.global_metrics.useful_rate * 100).toFixed(1)}%`
+          : "N/A"}{" "}
+        · applied:{" "}
+        {outcomeSummary.data
+          ? `${(outcomeSummary.data.global_metrics.applied_rate * 100).toFixed(1)}%`
+          : "N/A"}{" "}
+        · dismissed:{" "}
+        {outcomeSummary.data
+          ? `${(outcomeSummary.data.global_metrics.dismiss_rate * 100).toFixed(1)}%`
+          : "N/A"}
       </div>
       <a href="https://github.com/settings/apps" target="_blank" rel="noreferrer">
         Install GitHub App

@@ -11,6 +11,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -75,3 +76,21 @@ class Review(Base):
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class FindingOutcome(Base):
+    __tablename__ = "finding_outcomes"
+    __table_args__ = (
+        UniqueConstraint("review_id", "finding_index"),
+        Index("finding_outcomes_review", "review_id"),
+        Index("finding_outcomes_outcome", "outcome"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    review_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("reviews.id"), nullable=False)
+    finding_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    github_comment_id: Mapped[int | None] = mapped_column(BigInteger)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome_confidence: Mapped[str] = mapped_column(Text, nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    signals: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
