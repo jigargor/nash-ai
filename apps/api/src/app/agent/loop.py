@@ -1,3 +1,5 @@
+from typing import Any
+
 from anthropic import AsyncAnthropic
 
 from app.agent.review_config import DEFAULT_MODEL_NAME
@@ -11,11 +13,11 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 async def run_agent(
     system_prompt: str,
     initial_user_message: str,
-    context: dict,
+    context: dict[str, Any],
     *,
     model_name: str = DEFAULT_MODEL_NAME,
-) -> list[dict]:
-    messages: list[dict] = [{"role": "user", "content": initial_user_message}]
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = [{"role": "user", "content": initial_user_message}]
     turns = 0
     fetch_file_content_calls = 0
 
@@ -32,8 +34,8 @@ async def run_agent(
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            tools=TOOLS,
-            messages=messages,
+            tools=TOOLS,  # type: ignore[arg-type]
+            messages=messages,  # type: ignore[arg-type]
         )
         turns += 1
 
@@ -82,7 +84,7 @@ async def run_agent(
     return messages
 
 
-def _contains_empty_user_message(messages: list[dict]) -> bool:
+def _contains_empty_user_message(messages: list[dict[str, Any]]) -> bool:
     for message in messages:
         if message.get("role") != "user":
             continue

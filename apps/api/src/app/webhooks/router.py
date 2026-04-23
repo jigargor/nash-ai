@@ -22,7 +22,7 @@ def verify_signature(payload: bytes, signature: str) -> bool:
 
 
 @router.post("/github")
-async def github_webhook(request: Request):
+async def github_webhook(request: Request) -> dict[str, bool]:
     payload_bytes = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
     event = request.headers.get("X-GitHub-Event", "")

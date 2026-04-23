@@ -1,5 +1,7 @@
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI
@@ -16,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Database schema is managed by Alembic migrations.
     db = urlparse(settings.database_url)
     logger.warning(
@@ -47,12 +49,12 @@ app.include_router(api_router)
 
 
 @app.get("/health")
-async def health():
+async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/health/queue")
-async def health_queue(request: Request):
+async def health_queue(request: Request) -> dict[str, Any]:
     """Debug: ARQ queue depth. If this grows but the worker stays idle, Redis URL or worker process is wrong."""
     redis = request.app.state.redis
     queued_jobs = await redis.zcard(redis.default_queue_name)

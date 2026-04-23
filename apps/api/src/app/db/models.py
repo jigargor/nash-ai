@@ -1,4 +1,6 @@
 from datetime import datetime
+from typing import Any
+
 from sqlalchemy import (
     BigInteger,
     ForeignKey,
@@ -50,7 +52,7 @@ class RepoConfig(Base):
         nullable=False,
     )
     repo_full_name: Mapped[str] = mapped_column(Text, nullable=False)
-    config_yaml: Mapped[dict | None] = mapped_column(JSONB)
+    config_yaml: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
@@ -69,8 +71,8 @@ class Review(Base):
     pr_head_sha: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, server_default="queued")
     model: Mapped[str] = mapped_column(Text, nullable=False)
-    findings: Mapped[dict | None] = mapped_column(JSONB)
-    debug_artifacts: Mapped[dict | None] = mapped_column(JSONB)
+    findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    debug_artifacts: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     tokens_used: Mapped[int | None] = mapped_column(Integer)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
@@ -93,4 +95,4 @@ class FindingOutcome(Base):
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
     outcome_confidence: Mapped[str] = mapped_column(Text, nullable=False)
     detected_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
-    signals: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    signals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))

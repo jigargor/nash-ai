@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 import httpx
 
@@ -60,7 +61,7 @@ OSV_ECOSYSTEM_MAP = {
 }
 
 
-async def execute_tool(name: str, tool_input: dict, context: dict) -> str:
+async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str, Any]) -> str:
     try:
         gh: GitHubClient = context["github_client"]
         owner: str = context["owner"]

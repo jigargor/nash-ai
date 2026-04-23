@@ -32,6 +32,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.0",
+  "mypy>=1.10.0",
+  "types-PyYAML>=6.0.12.20240808",
+  "types-unidiff>=0.1.0",
 ]
 
 [tool.pytest.ini_options]
@@ -39,3 +42,10 @@ pythonpath = ["src"]
 markers = [
   "live_github: integration test that hits the real GitHub API",
 ]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+strict = true
+warn_return_any = false
+disallow_any_generics = false

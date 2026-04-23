@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 from anthropic import AsyncAnthropic
 
@@ -14,8 +15,8 @@ client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 async def run_editor(
     *,
     draft: ReviewResult,
-    pr_context: dict[str, object],
-    prior_reviews: list[dict],
+    pr_context: dict[str, Any],
+    prior_reviews: list[dict[str, Any]],
     code_acknowledgments: list[CodeAcknowledgment],
     model_name: str = "claude-sonnet-4-5",
 ) -> EditedReview:

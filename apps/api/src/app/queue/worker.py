@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 from urllib.parse import urlparse
 
 from arq.cron import cron
@@ -37,7 +38,7 @@ from app.telemetry.finding_outcomes import classify_pending_outcomes_nightly, cl
 
 
 async def review_pr(
-    ctx: dict,
+    ctx: dict[str, Any],
     review_id: int,
     installation_id: int,
     owner: str,
@@ -49,7 +50,7 @@ async def review_pr(
 
 
 async def classify_pr_outcomes(
-    ctx: dict,
+    ctx: dict[str, Any],
     installation_id: int,
     owner: str,
     repo: str,
@@ -58,11 +59,11 @@ async def classify_pr_outcomes(
     await classify_pr_outcomes_for_closed_pr(installation_id, owner, repo, pr_number)
 
 
-async def classify_pending_outcomes(ctx: dict) -> None:
+async def classify_pending_outcomes(ctx: dict[str, Any]) -> None:
     await classify_pending_outcomes_nightly()
 
 
-async def worker_startup(ctx: dict) -> None:
+async def worker_startup(ctx: dict[str, Any]) -> None:
     recovered = await recover_stale_running_reviews()
     ctx["recovered_stale_reviews"] = recovered
 

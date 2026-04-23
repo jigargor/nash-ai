@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -185,7 +186,7 @@ async def stream_review_events(
     review_id: int,
     installation_id: int | None = Query(default=None, ge=1),
 ) -> StreamingResponse:
-    async def event_generator():
+    async def event_generator() -> AsyncIterator[str]:
         previous_status: str | None = None
         for _ in range(120):
             async with AsyncSessionLocal() as session:

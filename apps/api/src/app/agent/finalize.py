@@ -1,6 +1,7 @@
-from anthropic import AsyncAnthropic
 import logging
+from typing import Any
 
+from anthropic import AsyncAnthropic
 from pydantic import ValidationError
 
 from app.agent.review_config import DEFAULT_MODEL_NAME
@@ -20,8 +21,8 @@ FINAL_TOOL = {
 
 async def finalize_review(
     system_prompt: str,
-    messages: list[dict],
-    context: dict,
+    messages: list[dict[str, Any]],
+    context: dict[str, Any],
     *,
     model_name: str = DEFAULT_MODEL_NAME,
     validation_feedback: str | None = None,
@@ -34,7 +35,7 @@ async def finalize_review(
             f"{validation_feedback}\n\n"
             "Now submit your corrected review using the submit_review tool."
         )
-    response = await client.messages.create(
+    response = await client.messages.create(  # type: ignore[call-overload]
         model=model_name,
         max_tokens=8192,
         system=[

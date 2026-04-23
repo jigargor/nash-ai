@@ -116,7 +116,8 @@ async def test_github_webhook_with_ignored_action_returns_ok_without_enqueue(
     test_app.state.redis = object()
     monkeypatch.setattr(webhook_router, "queue_pull_request_review", fake_queue)
 
-    payload = _payload_bytes(action="closed")
+    # "closed" enqueues outcome classification; use an unhandled action for the no-op path.
+    payload = _payload_bytes(action="edited")
     response = await client.post(
         "/webhooks/github",
         content=payload,

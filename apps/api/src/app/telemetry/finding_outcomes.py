@@ -17,6 +17,21 @@ NEGATIVE_REACTIONS = {"-1", "confused"}
 NEGATIVE_REPLY_MARKERS = {"won't fix", "not a bug", "by design"}
 
 
+def _coerce_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value.strip(), 10)
+        except ValueError:
+            return default
+    return default
+
+
 class Outcome(str, Enum):
     APPLIED_DIRECTLY = "applied_directly"
     APPLIED_MODIFIED = "applied_modified"
@@ -134,8 +149,8 @@ async def classify_finding_outcome(
 ) -> OutcomeDecision:
     signals: dict[str, object] = {}
     file_path = str(finding.get("file_path", ""))
-    line_start = int(finding.get("line_start", 0) or 0)
-    line_end = int(finding.get("line_end", line_start) or line_start)
+    line_start = _coerce_int(finding.get("line_start"), 0)
+    line_end = _coerce_int(finding.get("line_end", line_start) or line_start, line_start)
     suggestion = finding.get("suggestion")
 
     signals["reactions"] = await gh.get_pull_review_comment_reactions(owner, repo, comment_id) if comment_id else []
@@ -439,7 +454,7 @@ async def summarize_finding_outcomes(
         severity = str(finding.get("severity", "unknown"))
         category = str(finding.get("category", "unknown"))
         evidence = str(finding.get("evidence", "unknown"))
-        confidence = int(finding.get("confidence", 0) or 0)
+        confidence = _coerce_int(finding.get("confidence"), 0)
         is_vendor_claim = bool(finding.get("is_vendor_claim", False))
         prompt_version = str((review.debug_artifacts or {}).get("prompt_version", "unknown"))
 

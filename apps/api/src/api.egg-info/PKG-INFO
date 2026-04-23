@@ -21,3 +21,6 @@ Requires-Dist: pyyaml>=6.0.3
 Requires-Dist: tree-sitter-language-pack>=1.6.2
 Provides-Extra: dev
 Requires-Dist: pytest>=9.0.0; extra == "dev"
+Requires-Dist: mypy>=1.10.0; extra == "dev"
+Requires-Dist: types-PyYAML>=6.0.12.20240808; extra == "dev"
+Requires-Dist: types-unidiff>=0.1.0; extra == "dev"

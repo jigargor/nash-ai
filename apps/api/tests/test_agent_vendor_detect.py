@@ -30,11 +30,11 @@ def test_auto_tag_vendor_claims_marks_detected_vendor_message() -> None:
 
 
 def test_auto_tag_vendor_claims_rejects_now_invalid_finding() -> None:
+    # Valid before auto-tag; high vendor claims must use tool_verified or verified_fact.
     finding = _finding(
         "x-vercel-forwarded-for parsing is definitely vulnerable.",
-        severity="critical",
-        evidence="verified_fact",
-        evidence_fact_id="vercel_forwarded_for",
+        severity="high",
+        evidence="diff_visible",
     )
     accepted, rejected = auto_tag_vendor_claims([finding])
     assert not accepted

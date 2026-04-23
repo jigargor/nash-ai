@@ -58,4 +58,4 @@ async def get_installation_token(installation_id: int) -> str:
             raise RuntimeError(
                 f"GitHub installation token request failed ({e.response.status_code}): {body}{hint}"
             ) from e
-        return r.json()["token"]
+        return str(r.json()["token"])

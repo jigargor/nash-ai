@@ -1,10 +1,15 @@
-from app.agent.schema import DropReason, Finding
-from app.agent.normalization import normalize_file_content
+from typing import Any
 
+from app.agent.normalization import normalize_file_content
+from app.agent.schema import DropReason, Finding
+
+get_parser: Any = None
 try:
-    from tree_sitter_language_pack import get_parser
+    from tree_sitter_language_pack import get_parser as _tree_sitter_get_parser
+
+    get_parser = _tree_sitter_get_parser
 except Exception:  # pragma: no cover - import fallback for constrained environments
-    get_parser = None
+    pass
 
 
 class FindingValidator:
@@ -21,7 +26,7 @@ class FindingValidator:
         """
         self._files = file_contents
         self._commentable_lines = commentable_lines
-        self._parsers: dict[str, object] = {}
+        self._parsers: dict[str, Any] = {}
 
     def validate(self, finding: Finding) -> tuple[bool, DropReason | None, str | None]:
         """Return (is_valid, drop_reason, detail_if_invalid)."""
@@ -107,7 +112,7 @@ class FindingValidator:
         }.get(ext)
 
     @classmethod
-    def _has_error(cls, node) -> bool:
+    def _has_error(cls, node: Any) -> bool:
         if node.type == "ERROR" or node.is_missing:
             return True
         return any(cls._has_error(child) for child in node.children)

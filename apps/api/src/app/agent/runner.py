@@ -2,6 +2,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging
+from typing import Any, cast
 
 from app.agent.acknowledgments import extract_todo_fixme_markers
 from app.agent.context_builder import build_context_bundle, is_diff_too_large
@@ -47,7 +48,7 @@ async def run_review(
         review.started_at = datetime.now(timezone.utc)
         await session.commit()
 
-    context = {
+    context: dict[str, Any] = {
         "review_id": review_id,
         "installation_id": installation_id,
         "owner": owner,
@@ -89,8 +90,9 @@ async def run_review(
             packaging=review_config.packaging,
             repo_segments=repo_segments,
         )
-        context["fetched_files"] = dict(context_bundle.fetched_files)
-        _warn_if_carriage_returns(context["fetched_files"])
+        fetched_map: dict[str, str] = dict(context_bundle.fetched_files)
+        context["fetched_files"] = fetched_map
+        _warn_if_carriage_returns(fetched_map)
         system_prompt = build_system_prompt(repo_profile.frameworks, diff_text, review_config.prompt_additions)
         user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
         messages = await run_agent(system_prompt, user_prompt, context, model_name=review_config.model.name)
@@ -107,12 +109,12 @@ async def run_review(
 
         commentable_lines = right_side_diff_line_set(files_in_diff)
         validator = FindingValidator(
-            context["fetched_files"],
+            fetched_map,
             commentable_lines=commentable_lines,
         )
         result.findings = _repair_findings_from_files(
             result.findings,
-            context["fetched_files"],
+            fetched_map,
             commentable_lines=commentable_lines,
             window=REPAIR_SEARCH_WINDOW,
         )
@@ -123,7 +125,7 @@ async def run_review(
         retry_attempted: int = 0
         mismatch_subtypes = _summarize_target_line_mismatch_subtypes(
             validator_dropped,
-            context["fetched_files"],
+            fetched_map,
             commentable_lines=commentable_lines,
             window=REPAIR_SEARCH_WINDOW,
         )
@@ -138,7 +140,7 @@ async def run_review(
                 retry_attempted = len(mismatch_dropped)
                 repair_prompt = _repair_retry_feedback(
                     mismatch_dropped,
-                    context["fetched_files"],
+                    fetched_map,
                     window=REPAIR_SEARCH_WINDOW,
                 )
                 logger.warning(
@@ -156,7 +158,7 @@ async def run_review(
                 )
                 repaired.findings = _repair_findings_from_files(
                     repaired.findings,
-                    context["fetched_files"],
+                    fetched_map,
                     commentable_lines=commentable_lines,
                     window=REPAIR_SEARCH_WINDOW,
                 )
@@ -168,7 +170,7 @@ async def run_review(
                 validator_dropped.extend(repaired_dropped)
                 mismatch_subtypes = _summarize_target_line_mismatch_subtypes(
                     validator_dropped,
-                    context["fetched_files"],
+                    fetched_map,
                     commentable_lines=commentable_lines,
                     window=REPAIR_SEARCH_WINDOW,
                 )
@@ -190,7 +192,7 @@ async def run_review(
                 )
                 retried.findings = _repair_findings_from_files(
                     retried.findings,
-                    context["fetched_files"],
+                    fetched_map,
                     commentable_lines=commentable_lines,
                     window=REPAIR_SEARCH_WINDOW,
                 )
@@ -198,7 +200,7 @@ async def run_review(
                 retry_recovered = len(result.findings)
                 mismatch_subtypes = _summarize_target_line_mismatch_subtypes(
                     validator_dropped,
-                    context["fetched_files"],
+                    fetched_map,
                     commentable_lines=commentable_lines,
                     window=REPAIR_SEARCH_WINDOW,
                 )
@@ -212,7 +214,7 @@ async def run_review(
         evidence_rejections = [*auto_tag_vendor_rejected, *evidence_tool_rejected, *evidence_fact_rejected]
         evidence_rejection_reasons = Counter(reason for _, reason in evidence_rejections)
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
-        code_acknowledgments = extract_todo_fixme_markers(context["fetched_files"])
+        code_acknowledgments = extract_todo_fixme_markers(fetched_map)
         prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
         edited_result = await run_editor(
             draft=draft_result,
@@ -271,8 +273,8 @@ async def run_review(
         review_post_response = await post_review(gh, owner, repo, pr_number, head_sha, final_result)
         comment_ids = extract_review_comment_ids(review_post_response)
         await seed_pending_finding_outcomes(
-            review_id=int(context["review_id"]),
-            installation_id=int(context["installation_id"]),
+            review_id=cast(int, context["review_id"]),
+            installation_id=cast(int, context["installation_id"]),
             finding_count=len(final_result.findings),
             github_comment_ids=comment_ids,
         )
@@ -290,7 +292,7 @@ async def run_review(
 
 async def _mark_review_done(
     session_data: ReviewResult,
-    context: dict,
+    context: dict[str, Any],
     status: str,
     review_config: ReviewConfig | None = None,
 ) -> None:
@@ -303,8 +305,8 @@ async def _mark_review_done(
         output_per_1m_usd=output_price,
     )
     async with AsyncSessionLocal() as session:
-        await set_installation_context(session, int(context["installation_id"]))
-        review = await session.get(Review, context["review_id"])
+        await set_installation_context(session, cast(int, context["installation_id"]))
+        review = await session.get(Review, cast(int, context["review_id"]))
         if review is None:
             return
         review.status = status
@@ -313,7 +315,7 @@ async def _mark_review_done(
         review.findings = session_data.model_dump(mode="json")
         review.debug_artifacts = context.get("debug_artifacts")
         review.tokens_used = int(context.get("tokens_used", 0))
-        review.cost_usd = cost
+        review.cost_usd = float(cost)
         review.completed_at = datetime.now(timezone.utc)
         await session.commit()
 
@@ -382,7 +384,7 @@ def _validation_feedback(dropped: list[tuple[Finding, DropReason, str]]) -> str:
 
 
 def _log_quality_metrics(
-    context: dict,
+    context: dict[str, Any],
     frameworks: list[str],
     review_config: ReviewConfig,
     generated: int,
@@ -432,7 +434,7 @@ def _log_quality_metrics(
 
 
 def _attach_debug_artifacts(
-    context: dict,
+    context: dict[str, Any],
     generated: int,
     validator_dropped: list[tuple[Finding, DropReason, str]],
     confidence_dropped: list[dict[str, object]],

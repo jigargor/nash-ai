@@ -1,5 +1,6 @@
-from datetime import datetime, timedelta, timezone
 import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 from sqlalchemy import select, update
 
@@ -39,7 +40,7 @@ async def recover_stale_running_reviews(max_age_minutes: int = STALE_RUNNING_REV
                     },
                 )
             )
-            recovered += int(result.rowcount or 0)
+            recovered += int(cast(Any, result).rowcount or 0)
         await session.commit()
 
     if recovered:

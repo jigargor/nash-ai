@@ -1,13 +1,14 @@
 from dataclasses import dataclass
 from fnmatch import fnmatch
 import hashlib
+from typing import Any, Literal
 
 import tiktoken
 
 from app.agent.diff_parser import FileInDiff, NumberedLine, right_side_diff_line_set
 from app.agent.normalization import normalize_file_content
 from app.agent.review_config import ContextPackagingConfig
-from app.agent.schema import ContextAnchor, ContextBudgets, ContextSegment, LayeredContextPackage
+from app.agent.schema import ContextAnchor, ContextBudgets, ContextFidelity, ContextSegment, LayeredContextPackage
 from app.github.client import GitHubClient
 
 ENCODER = tiktoken.get_encoding("cl100k_base")
@@ -30,7 +31,7 @@ def count_tokens(text: str) -> int:
     return len(ENCODER.encode(text))
 
 
-def fits_in_budget(messages: list[dict], remaining: int) -> bool:
+def fits_in_budget(messages: list[dict[str, Any]], remaining: int) -> bool:
     total = sum(count_tokens(str(message)) for message in messages)
     return total < remaining
 
@@ -464,9 +465,9 @@ def _is_vendored(path: str, configured_vendor_paths: list[str]) -> bool:
 
 def _make_segment(
     *,
-    layer: str,
+    layer: Literal["project", "repo", "review"],
     source_id: str,
-    fidelity: str,
+    fidelity: ContextFidelity,
     text: str,
     file_path: str | None = None,
     line_start: int | None = None,

@@ -1,10 +1,15 @@
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Any, Mapping, Protocol, cast
 
 import httpx
 import yaml
 
 from app.agent.schema import ContextBudgets
+
+
+class _GitHubFileReader(Protocol):
+    async def get_file_content(self, owner: str, repo: str, path: str, ref: str) -> str: ...
 
 DEFAULT_CONFIDENCE_THRESHOLD = 85
 DEFAULT_MODEL_NAME = "claude-sonnet-4-5"
@@ -42,7 +47,7 @@ class ReviewConfig:
     packaging: ContextPackagingConfig = field(default_factory=ContextPackagingConfig)
 
 
-async def load_review_config(gh, owner: str, repo: str, ref: str) -> ReviewConfig:
+async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: str) -> ReviewConfig:
     try:
         raw_config = await gh.get_file_content(owner, repo, ".codereview.yml", ref)
     except httpx.HTTPStatusError as exc:
@@ -53,9 +58,13 @@ async def load_review_config(gh, owner: str, repo: str, ref: str) -> ReviewConfi
         return ReviewConfig()
 
     try:
-        parsed = yaml.safe_load(raw_config) or {}
+        parsed_raw = yaml.safe_load(raw_config) or {}
     except yaml.YAMLError:
         return ReviewConfig()
+
+    if not isinstance(parsed_raw, dict):
+        return ReviewConfig()
+    parsed = cast(dict[str, Any], parsed_raw)
 
     threshold = _normalize_threshold(parsed.get("confidence_threshold"))
     prompt_additions = parsed.get("prompt_additions")
@@ -77,7 +86,14 @@ def _normalize_threshold(raw_value: object) -> int:
     if raw_value is None:
         return DEFAULT_CONFIDENCE_THRESHOLD
     try:
-        value = float(raw_value)
+        if isinstance(raw_value, bool):
+            return DEFAULT_CONFIDENCE_THRESHOLD
+        if isinstance(raw_value, (int, float)):
+            value = float(raw_value)
+        elif isinstance(raw_value, str):
+            value = float(raw_value.strip())
+        else:
+            return DEFAULT_CONFIDENCE_THRESHOLD
     except (TypeError, ValueError):
         return DEFAULT_CONFIDENCE_THRESHOLD
     if 0.0 <= value <= 1.0:
@@ -122,7 +138,7 @@ def _parse_budgets(raw_value: object) -> ContextBudgets:
         return ContextBudgets()
 
 
-def _parse_packaging(parsed: dict) -> ContextPackagingConfig:
+def _parse_packaging(parsed: Mapping[str, Any]) -> ContextPackagingConfig:
     return ContextPackagingConfig(
         layered_context_enabled=bool(parsed.get("layered_context_enabled", True)),
         partial_review_mode_enabled=bool(parsed.get("partial_review_mode_enabled", True)),
@@ -138,9 +154,18 @@ def _parse_packaging(parsed: dict) -> ContextPackagingConfig:
 
 
 def _normalize_positive_int(raw_value: object, default: int) -> int:
-    try:
+    if isinstance(raw_value, bool):
+        return default
+    if isinstance(raw_value, int):
+        value = raw_value
+    elif isinstance(raw_value, float):
         value = int(raw_value)
-    except (TypeError, ValueError):
+    elif isinstance(raw_value, str):
+        try:
+            value = int(raw_value.strip())
+        except ValueError:
+            return default
+    else:
         return default
     if value <= 0:
         return default
