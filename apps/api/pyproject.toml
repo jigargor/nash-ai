@@ -1,3 +1,10 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [project]
 name = "api"
 version = "0.1.0"
@@ -28,6 +35,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 markers = [
   "live_github: integration test that hits the real GitHub API",
 ]

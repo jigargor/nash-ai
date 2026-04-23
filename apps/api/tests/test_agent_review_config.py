@@ -1,4 +1,13 @@
-from app.agent.review_config import _parse_budgets, _parse_model_config, _parse_packaging
+import asyncio
+import httpx
+
+from app.agent.review_config import (
+    DEFAULT_CONFIDENCE_THRESHOLD,
+    _parse_budgets,
+    _parse_model_config,
+    _parse_packaging,
+    load_review_config,
+)
 
 
 def test_parse_model_config_accepts_custom_pricing_override() -> None:
@@ -35,10 +44,6 @@ def test_parse_packaging_applies_threshold_paths_and_summary_cap() -> None:
     assert packaging.max_summary_calls_per_review == 2
     assert packaging.generated_paths == ["src/generated/types.ts"]
     assert packaging.vendor_paths == ["vendor/lib"]
-import asyncio
-import httpx
-
-from app.agent.review_config import DEFAULT_CONFIDENCE_THRESHOLD, load_review_config
 
 
 class FakeGitHubClient:

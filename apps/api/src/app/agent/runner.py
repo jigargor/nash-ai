@@ -788,7 +788,7 @@ def _repair_retry_feedback(
         )
         lines.extend(
             [
-                f"",
+                "",
                 f"Finding {index}",
                 f"file: {finding.file_path}",
                 f"your_line_start: {finding.line_start}",
