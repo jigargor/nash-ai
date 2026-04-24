@@ -6,6 +6,7 @@ import logging
 from time import monotonic
 from typing import Any, cast
 
+import redis.exceptions as redis_exc
 from redis.asyncio import Redis
 from app.agent.acknowledgments import extract_todo_fixme_markers
 from app.agent.config_cache import get_cached_review_config, set_cached_review_config
@@ -401,6 +402,13 @@ async def _record_token_budget_usage(installation_id: int, tokens_used: int) -> 
                 current,
                 settings.daily_token_budget_per_installation,
             )
+    except (redis_exc.ConnectionError, redis_exc.TimeoutError, OSError) as exc:
+        logger.warning(
+            "Skipping token budget recording (Redis unavailable) installation_id=%s tokens=%s err=%s",
+            installation_id,
+            tokens_used,
+            exc,
+        )
     finally:
         await redis.aclose()
 
