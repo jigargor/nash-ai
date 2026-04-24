@@ -9,7 +9,7 @@ try:
 
     get_parser = _tree_sitter_get_parser
 except Exception:  # pragma: no cover - import fallback for constrained environments
-    pass
+    get_parser = None
 
 
 class FindingValidator:

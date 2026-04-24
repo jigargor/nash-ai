@@ -77,6 +77,14 @@ async def _profile_pyproject(
         profile.frameworks.append("django")
 
 
+async def _repo_has_file(gh: GitHubClient, owner: str, repo: str, path: str, ref: str) -> bool:
+    try:
+        await gh.get_file_content(owner, repo, path, ref)
+        return True
+    except Exception:
+        return False
+
+
 async def _profile_by_file_presence(
     gh: GitHubClient,
     owner: str,
@@ -92,9 +100,7 @@ async def _profile_by_file_presence(
     }
     for path, metadata in checks.items():
         framework, convention_key, convention_value = metadata
-        try:
-            await gh.get_file_content(owner, repo, path, ref)
-        except Exception:
+        if not await _repo_has_file(gh, owner, repo, path, ref):
             continue
         profile.frameworks.append(framework)
         if convention_key and convention_value:
