@@ -2,12 +2,42 @@
 
 Automated pull request reviews powered by Claude and the GitHub App API.
 
+## What it does
+
+- **Inline reviews** on pull requests using the GitHub Review Comments API (severity-ranked findings, optional `suggestion` blocks).
+- **Tool-augmented agent** (fetch files, search repo, etc.) with layered diff context, validation, and an editor pass before posting.
+- **Per-repository config** via `.codereview.yml` (model, budgets, confidence/severity filters, category allowlists, ignore globs, draft PR handling, finding caps)—cached in **Redis** by branch SHA.
+- **Operational guardrails**: per-installation review rate limits, daily token budget accounting, and an **`ENABLE_REVIEWS`** kill switch for incidents.
+- **Optional observability**: Sentry for errors, Langfuse-compatible Anthropic client wiring and review trace metadata.
+- **Quality gates**: Ruff, Mypy, pytest with agent coverage floor, Bandit, and an optional **prompt-change** PR workflow that runs a small golden eval harness under `evals/`.
+
 ## Stack
 
 - **Backend**: Python 3.12 + FastAPI + SQLAlchemy 2.0 (async) + ARQ (Redis queue)
 - **Frontend**: Next.js 15 + TypeScript + Zustand + TanStack Query
 - **AI**: Anthropic Claude; default model `claude-sonnet-4-5`, overridable per repo via `.codereview.yml` (see below)
 - **Infra**: Postgres + Redis (docker-compose locally, Railway in prod)
+
+## Observability (optional)
+
+Set these in `apps/api` (or repo-root) environment when you want telemetry; the API and worker both call `init_observability` on startup.
+
+| Variable | Purpose |
+|----------|---------|
+| `SENTRY_DSN` | Error reporting (FastAPI + worker). |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Langfuse project keys when tracing model calls. |
+| `LANGFUSE_HOST` | Langfuse API host (e.g. `https://cloud.langfuse.com`). |
+
+## Evaluations
+
+Golden-style cases live under `evals/datasets/` (expected findings + optional diff/context fixtures). Run:
+
+```bash
+python evals/run_eval.py --prompt-version <label> --predictions-dir evals/predictions/<label>
+python evals/compare.py evals/results/baseline.json evals/results/<label>.json
+```
+
+CI runs the harness on pull requests labeled **`prompt-change`** (see `.github/workflows/quality-gates.yml`).
 
 ## Quick Start
 
@@ -235,9 +265,16 @@ apps/
     webhooks/       HMAC verification + event routing
     agent/          ReAct loop, context packing, prompts, review config
     db/             Models, session, migrations
+    observability.py Optional Sentry + Langfuse bootstrap
+    ratelimit.py    Redis sliding-window and token budget helpers
   web/src/
     app/            Next.js App Router pages
     lib/            API client utilities
+evals/
+  datasets/         Golden eval cases
+  predictions/      Model output fixtures for eval runs
+  run_eval.py       Precision / recall / FP-rate metrics
+  compare.py        Compare two eval result JSON files
 packages/
   shared-types/     TypeScript types shared across apps
 ```
