@@ -74,7 +74,9 @@ jobs:
       - name: Migrations
         run: uv run alembic upgrade head
       - name: Pytest
-        run: uv run pytest
+        run: uv run pytest --cov=src/app/agent --cov-report=term-missing --cov-fail-under=70
+      - name: Bandit
+        run: uv run bandit -r src
 
   frontend-checks:
     runs-on: ubuntu-latest
@@ -93,3 +95,36 @@ jobs:
         run: pnpm --filter web lint
       - name: Web typecheck
         run: pnpm --filter web typecheck
+
+  evals:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'prompt-change')
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install backend dependencies
+        run: uv sync --extra dev
+        working-directory: apps/api
+      - name: Run eval harness
+        run: python evals/run_eval.py --prompt-version candidate --predictions-dir evals/predictions/candidate
+      - name: Enforce eval thresholds
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("evals/results/candidate.json").read_text(encoding="utf-8"))
+          metrics = result.get("metrics", {})
+          precision = float(metrics.get("precision", 0.0))
+          recall = float(metrics.get("recall", 0.0))
+          fp_rate = float(metrics.get("fp_rate", 1.0))
+          if precision < 0.8 or recall < 0.7 or fp_rate > 0.15:
+              raise SystemExit(f"Eval thresholds failed: precision={precision} recall={recall} fp_rate={fp_rate}")
+          print(f"Eval thresholds passed: precision={precision} recall={recall} fp_rate={fp_rate}")
+          PY

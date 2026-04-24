@@ -19,7 +19,9 @@ This directory stores deterministic review fixtures used to compare review quali
 ## How to use
 
 1. Add/update representative fixture payloads in `records/`.
-2. Run the eval harness against these cases (implemented in follow-up work).
+2. Run the eval harness against these cases:
+   - `python evals/run_eval.py --prompt-version candidate --predictions-dir evals/predictions/candidate`
+   - `python evals/compare.py evals/results/prod.json evals/results/candidate.json`
 3. Compare current run metrics with `manifest.json` expectations.
 4. Flag any case that breaches tolerance as a regression.
 

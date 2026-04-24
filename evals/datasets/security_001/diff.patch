@@ -1,0 +1,10 @@
+diff --git a/src/auth/token.py b/src/auth/token.py
+index 77c11af..d9a3f12 100644
+--- a/src/auth/token.py
++++ b/src/auth/token.py
+@@ -20,6 +20,7 @@ def verify(token: str) -> dict:
+     payload = jwt.decode(token, options={"verify_signature": False})
+     user_id = payload.get("sub")
++    if not user_id:
++        return {}
+     return {"user_id": user_id}

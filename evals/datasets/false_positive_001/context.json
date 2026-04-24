@@ -1,0 +1,7 @@
+{
+  "repo": "acme/clean-demo",
+  "head_sha": "2222222222222222222222222222222222222222",
+  "files": {
+    "src/utils/math.ts": "export function sum(a: number, b: number): number { return a + b; }\n"
+  }
+}

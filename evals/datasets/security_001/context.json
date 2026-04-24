@@ -1,0 +1,7 @@
+{
+  "repo": "acme/security-demo",
+  "head_sha": "1111111111111111111111111111111111111111",
+  "files": {
+    "src/auth/token.py": "import jwt\n\ndef verify(token: str) -> dict:\n    payload = jwt.decode(token, options={\"verify_signature\": False})\n    user_id = payload.get(\"sub\")\n    if not user_id:\n        return {}\n    return {\"user_id\": user_id}\n"
+  }
+}

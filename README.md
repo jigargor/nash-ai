@@ -123,6 +123,11 @@ Typical keys:
 | Key | Purpose |
 |-----|---------|
 | `confidence_threshold` | Minimum finding confidence (0–1); default `0.85`. |
+| `severity_threshold` | Minimum severity that can be posted (`low`/`medium`/`high`/`critical`). |
+| `categories` | Optional allowlist of finding categories to keep (`security`, `performance`, `correctness`, `style`, `maintainability`). |
+| `ignore_paths` | Glob patterns that are ignored for context packing and finding posting. |
+| `review_drafts` | If `true`, review draft pull requests; default `false`. |
+| `max_findings_per_pr` | Hard cap on posted findings after filtering. |
 | `prompt_additions` | Extra repo-specific instructions appended to the system prompt. |
 | `model.name` | Anthropic model id (e.g. `claude-sonnet-4-5`). |
 | `model.pricing` | Optional `input_per_1m` / `output_per_1m` (USD per 1M tokens) for cost estimation when defaults don’t match your billing. |
@@ -134,9 +139,37 @@ Typical keys:
 | `max_summary_calls_per_review` | Cap on summarization steps per review. |
 | `generated_paths` / `vendor_paths` | Glob-style path patterns to treat generated or vendored files differently when packing context. |
 
-Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. `tokens_used` / `cost_usd` on each `reviews` row reflect the selected model’s pricing when configured.
+Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. `.codereview.yml` is cached per `(owner, repo, sha)` in Redis for one hour. `tokens_used` / `cost_usd` on each `reviews` row reflect the selected model’s pricing when configured.
 
-### 11. Inspect dropped findings safely (tenant-scoped SQL)
+### 11. Production deployment
+
+Backend deployment target: Railway.
+
+- `apps/api/railway.toml` defines API and worker start commands.
+- API start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Worker start command: `arq app.queue.worker.WorkerSettings`
+
+Frontend deployment target: Vercel.
+
+- Project root: `apps/web`
+- Required backend URL wiring should use your deployed API domain.
+- Set `WEB_APP_URL` in API env to the exact frontend origin for strict CORS.
+
+### 12. Production security checklist
+
+- Webhook signatures verified with `hmac.compare_digest`.
+- Installation tokens are short-lived and never persisted.
+- OAuth tokens are stored encrypted via Fernet.
+- `ENABLE_REVIEWS` kill switch is available for incident mitigation.
+- `REVIEWS_PER_HOUR_LIMIT` and `DAILY_TOKEN_BUDGET_PER_INSTALLATION` are enforced.
+- Sentry and Langfuse env vars should be configured in production.
+- Run `uv run bandit -r src` and CI quality gates before deploy.
+
+### 13. Incident response and runbook
+
+See [`INCIDENTS.md`](INCIDENTS.md) for incident playbooks and the postmortem template.
+
+### 14. Inspect dropped findings safely (tenant-scoped SQL)
 
 The agent stores development diagnostics in `reviews.debug_artifacts`, including:
 - validator drops (`reason`, `detail`, `file_path`, line range, message excerpt)
@@ -176,7 +209,7 @@ curl -s "http://localhost:8000/admin/reviews/<review_id>/debug?installation_id=<
 
 This returns `debug_artifacts` plus review summary/status and kept finding count.
 
-### 12. Local Postgres SSL setup notes
+### 15. Local Postgres SSL setup notes
 
 - `docker-compose.yml` expects certs at `apps/api/certs/postgres/server.crt` and `apps/api/certs/postgres/server.key`.
 - Regenerate certs any time with:

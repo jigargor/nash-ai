@@ -1,0 +1,10 @@
+{
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file_path": "src/auth/token.py",
+      "line_start": 24
+    }
+  ]
+}
