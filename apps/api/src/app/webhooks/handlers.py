@@ -2,14 +2,21 @@ import logging
 from arq.connections import ArqRedis
 from sqlalchemy import select
 
+from app.config import settings
+from app.agent.review_config import DEFAULT_MODEL_NAME
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.db.models import Installation, Review
+from app.ratelimit import check_installation_review_rate_limit, current_daily_token_usage
 from app.webhooks.schemas import GitHubPullRequestWebhookPayload
 
 logger = logging.getLogger(__name__)
 
 
 async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestWebhookPayload) -> None:
+    if not settings.enable_reviews:
+        logger.warning("Skipping review enqueue because ENABLE_REVIEWS is false")
+        return
+
     installation_id = payload.installation.id
     repo_full_name = payload.repository.full_name
     owner, repo_name = repo_full_name.split("/")
@@ -23,6 +30,28 @@ async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestW
         pr_number,
         head_sha,
     )
+    is_allowed = await check_installation_review_rate_limit(
+        redis,
+        installation_id,
+        limit=settings.reviews_per_hour_limit,
+    )
+    if not is_allowed:
+        logger.warning(
+            "Skipping review enqueue due to rate limit installation_id=%s repo=%s pr_number=%s",
+            installation_id,
+            repo_full_name,
+            pr_number,
+        )
+        return
+    daily_usage = await current_daily_token_usage(redis, installation_id)
+    if daily_usage >= settings.daily_token_budget_per_installation:
+        logger.warning(
+            "Skipping review enqueue due to daily token budget installation_id=%s used=%s limit=%s",
+            installation_id,
+            daily_usage,
+            settings.daily_token_budget_per_installation,
+        )
+        return
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
         installation = await session.scalar(
@@ -66,7 +95,7 @@ async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestW
             repo_full_name=repo_full_name,
             pr_number=pr_number,
             pr_head_sha=head_sha,
-            model="claude-sonnet-4-5",
+            model=DEFAULT_MODEL_NAME,
             status="queued",
         )
         session.add(review)

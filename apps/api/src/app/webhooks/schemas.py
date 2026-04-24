@@ -29,6 +29,7 @@ class GitHubPullRequestHead(BaseModel):
 class GitHubPullRequest(BaseModel):
     number: int = Field(ge=1)
     head: GitHubPullRequestHead
+    draft: bool = False
 
 
 class GitHubPullRequestWebhookPayload(BaseModel):

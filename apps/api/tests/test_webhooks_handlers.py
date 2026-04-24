@@ -35,9 +35,17 @@ def _payload(action: str = "opened") -> GitHubPullRequestWebhookPayload:
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_skips_duplicate_active_review() -> None:
+async def test_queue_pull_request_review_skips_duplicate_active_review(monkeypatch: pytest.MonkeyPatch) -> None:
     redis = _FakeRedis()
     payload = _payload()
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _daily_usage(*_args, **_kwargs) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
 
     await queue_pull_request_review(redis, payload)
     await queue_pull_request_review(redis, payload)
@@ -54,3 +62,21 @@ async def test_queue_pull_request_review_skips_duplicate_active_review() -> None
     assert total_reviews == 1
     assert len(redis.calls) == 1
     assert redis.calls[0][0] == "review_pr"
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_when_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _FakeRedis()
+    payload = _payload()
+
+    async def _deny(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _daily_usage(*_args, **_kwargs) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _deny)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, payload)
+    assert not redis.calls

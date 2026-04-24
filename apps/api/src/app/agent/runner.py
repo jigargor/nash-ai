@@ -1,12 +1,16 @@
 from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
+from fnmatch import fnmatch
 import logging
+from time import monotonic
 from typing import Any, cast
 
+from redis.asyncio import Redis
 from app.agent.acknowledgments import extract_todo_fixme_markers
+from app.agent.config_cache import get_cached_review_config, set_cached_review_config
 from app.agent.context_builder import build_context_bundle, is_diff_too_large
-from app.agent.diff_parser import parse_diff, right_side_diff_line_set
+from app.agent.diff_parser import FileInDiff, parse_diff, right_side_diff_line_set
 from app.agent.editor import run_editor
 from app.agent.finalize import finalize_review
 from app.agent.loop import run_agent
@@ -20,8 +24,11 @@ from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.agent.validator import FindingValidator
 from app.db.models import Review
 from app.db.session import AsyncSessionLocal, set_installation_context
+from app.config import settings
 from app.github.client import GitHubClient
 from app.github.comments import post_review
+from app.observability import record_review_trace
+from app.ratelimit import check_and_consume_daily_token_budget, current_daily_token_usage
 
 logger = logging.getLogger(__name__)
 PROMPT_VERSION = "v4-reviewer-editor"
@@ -29,6 +36,7 @@ REPAIR_SEARCH_WINDOW = 3
 REPAIR_RETRY_DROP_RATE = 0.20
 FULL_REGENERATE_RETRY_DROP_RATE = 0.50
 MIN_RECOVERY_RATIO_FOR_SUCCESS = 0.50
+SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
 async def run_review(
@@ -59,26 +67,51 @@ async def run_review(
         "output_tokens": 0,
         "tokens_used": 0,
     }
+    started_at = monotonic()
 
     try:
         gh = await GitHubClient.for_installation(installation_id)
         context["github_client"] = gh
+        record_review_trace(
+            {
+                "review_id": review_id,
+                "installation_id": installation_id,
+                "repo": f"{owner}/{repo}",
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+            }
+        )
 
         diff_text = await gh.get_pull_request_diff(owner, repo, pr_number)
         pr = await gh.get_pull_request(owner, repo, pr_number)
         commits = await gh.get_pull_request_commits(owner, repo, pr_number)
+        review_config = await _load_review_config_cached(gh, owner, repo, head_sha)
+        record_review_trace(
+            {
+                "review_id": review_id,
+                "installation_id": installation_id,
+                "repo": f"{owner}/{repo}",
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "model": review_config.model.name,
+                "prompt_version": PROMPT_VERSION,
+            }
+        )
+        if pr.get("draft", False) and not review_config.review_drafts:
+            result = ReviewResult(findings=[], summary="Skipped automated review because this pull request is a draft.")
+            await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
+            return
         if is_diff_too_large(diff_text):
             result = ReviewResult(
                 findings=[],
                 summary="PR is too large for automated review. Please split it into smaller changes and re-run.",
             )
             await post_review(gh, owner, repo, pr_number, head_sha, result)
-            await _mark_review_done(session_data=result, context=context, status="done")
+            await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
             return
 
-        files_in_diff = parse_diff(diff_text)
+        files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
         repo_profile = await profile_repo(gh, owner, repo, head_sha)
-        review_config = await load_review_config(gh, owner, repo, head_sha)
         repo_segments = _build_repo_segments(repo_profile.frameworks, review_config.prompt_additions)
         context_bundle = await build_context_bundle(
             gh,
@@ -228,6 +261,7 @@ async def run_review(
             model_name=review_config.model.name,
         )
         final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
+        final_result = _apply_review_config_filters(final_result, review_config)
         _attach_debug_artifacts(
             context=context,
             generated=generated,
@@ -279,6 +313,12 @@ async def run_review(
             github_comment_ids=comment_ids,
         )
         await _mark_review_done(session_data=final_result, context=context, status="done", review_config=review_config)
+        logger.info(
+            "Review completed review_id=%s duration_ms=%s first_model_call_latency_ms=%s",
+            review_id,
+            int((monotonic() - started_at) * 1000),
+            context.get("first_model_call_latency_ms", 0),
+        )
     except Exception as exc:
         logger.exception("Review job failed review_id=%s", review_id)
         await _mark_review_done(
@@ -287,6 +327,7 @@ async def run_review(
             status="failed",
             review_config=review_config if "review_config" in locals() else None,
         )
+        logger.info("Review failed review_id=%s duration_ms=%s", review_id, int((monotonic() - started_at) * 1000))
         raise
 
 
@@ -304,8 +345,10 @@ async def _mark_review_done(
         input_per_1m_usd=input_price,
         output_per_1m_usd=output_price,
     )
+    installation_id = cast(int, context["installation_id"])
+    await _record_token_budget_usage(installation_id, int(context.get("tokens_used", 0)))
     async with AsyncSessionLocal() as session:
-        await set_installation_context(session, cast(int, context["installation_id"]))
+        await set_installation_context(session, installation_id)
         review = await session.get(Review, cast(int, context["review_id"]))
         if review is None:
             return
@@ -330,6 +373,80 @@ def _estimate_cost_usd(
     input_cost = Decimal(input_tokens) / Decimal(1_000_000) * input_per_1m_usd
     output_cost = Decimal(output_tokens) / Decimal(1_000_000) * output_per_1m_usd
     return (input_cost + output_cost).quantize(Decimal("0.000001"))
+
+
+async def _record_token_budget_usage(installation_id: int, tokens_used: int) -> None:
+    if tokens_used <= 0:
+        return
+    redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+    try:
+        allowed = await check_and_consume_daily_token_budget(
+            redis,
+            installation_id,
+            tokens=tokens_used,
+            daily_limit=settings.daily_token_budget_per_installation,
+        )
+        current = await current_daily_token_usage(redis, installation_id)
+        if current >= int(settings.daily_token_budget_per_installation * 0.8):
+            logger.warning(
+                "Installation nearing daily token budget installation_id=%s used=%s limit=%s",
+                installation_id,
+                current,
+                settings.daily_token_budget_per_installation,
+            )
+        if not allowed:
+            logger.warning(
+                "Installation exceeded daily token budget installation_id=%s used=%s limit=%s",
+                installation_id,
+                current,
+                settings.daily_token_budget_per_installation,
+            )
+    finally:
+        await redis.aclose()
+
+
+async def _load_review_config_cached(gh: GitHubClient, owner: str, repo: str, head_sha: str) -> ReviewConfig:
+    cached = await get_cached_review_config(owner, repo, head_sha)
+    if cached is not None:
+        return cached
+    loaded = await load_review_config(gh, owner, repo, head_sha)
+    await set_cached_review_config(owner, repo, head_sha, loaded)
+    return loaded
+
+
+def _filter_diff_files(files_in_diff: list[FileInDiff], ignore_paths: list[str]) -> list[FileInDiff]:
+    if not ignore_paths:
+        return files_in_diff
+    filtered: list[FileInDiff] = []
+    ignored_count = 0
+    for file_in_diff in files_in_diff:
+        path = str(getattr(file_in_diff, "path", ""))
+        if any(fnmatch(path, pattern) for pattern in ignore_paths):
+            ignored_count += 1
+            continue
+        filtered.append(file_in_diff)
+    if ignored_count:
+        logger.info("Ignored %s diff files based on repo config ignore_paths", ignored_count)
+    return filtered
+
+
+def _apply_review_config_filters(result: ReviewResult, review_config: ReviewConfig) -> ReviewResult:
+    allowed_categories = set(review_config.categories)
+    filtered: list[Finding] = []
+    for finding in result.findings:
+        if review_config.ignore_paths and any(fnmatch(finding.file_path, pattern) for pattern in review_config.ignore_paths):
+            continue
+        if allowed_categories and finding.category not in allowed_categories:
+            continue
+        if SEVERITY_RANK[finding.severity] < SEVERITY_RANK.get(review_config.severity_threshold, 0):
+            continue
+        filtered.append(finding)
+    if len(filtered) > review_config.max_findings_per_pr:
+        filtered = sorted(filtered, key=lambda finding: (SEVERITY_RANK[finding.severity], finding.confidence), reverse=True)[
+            : review_config.max_findings_per_pr
+        ]
+    result.findings = filtered
+    return result
 
 
 def _validate_result(

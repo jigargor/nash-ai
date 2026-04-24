@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_webhook_payloads: bool = False
     admin_retry_api_key: str | None = None
+    enable_reviews: bool = True
+    reviews_per_hour_limit: int = 30
+    daily_token_budget_per_installation: int = 10_000_000
+    sentry_dsn: str | None = None
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str | None = None
+    web_app_url: str | None = None
 
     @field_validator("github_app_id", mode="before")
     @classmethod

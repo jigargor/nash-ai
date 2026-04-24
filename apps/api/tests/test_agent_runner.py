@@ -6,6 +6,7 @@ import pytest
 
 from app.agent.review_config import ReviewConfig, ReviewModelConfig
 from app.agent.runner import (
+    _apply_review_config_filters,
     _apply_confidence_threshold,
     _attach_debug_artifacts,
     _mark_review_done,
@@ -246,3 +247,28 @@ def test_cross_check_fact_ids_rejects_unknown_fact() -> None:
     assert not accepted
     assert len(rejected) == 1
     assert "unknown fact id" in rejected[0][1]
+
+
+def test_apply_review_config_filters_enforces_category_severity_ignore_and_cap() -> None:
+    high_security = _finding("src/auth.py", confidence=95)
+    high_security.severity = "high"
+    high_security.category = "security"
+
+    medium_correctness = _finding("src/core.py", confidence=90)
+    medium_correctness.severity = "medium"
+    medium_correctness.category = "correctness"
+
+    ignored_file = _finding("docs/guide.md", confidence=99)
+    ignored_file.severity = "high"
+    ignored_file.category = "security"
+
+    result = ReviewResult(findings=[high_security, medium_correctness, ignored_file], summary="Summary")
+    config = ReviewConfig(
+        severity_threshold="medium",
+        categories=["security", "correctness"],
+        ignore_paths=["docs/**"],
+        max_findings_per_pr=1,
+    )
+    filtered = _apply_review_config_filters(result, config)
+    assert len(filtered.findings) == 1
+    assert filtered.findings[0].file_path == "src/auth.py"

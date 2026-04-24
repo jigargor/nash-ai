@@ -3,9 +3,12 @@ import httpx
 
 from app.agent.review_config import (
     DEFAULT_CONFIDENCE_THRESHOLD,
+    DEFAULT_SEVERITY_THRESHOLD,
     _parse_budgets,
+    _parse_categories,
     _parse_model_config,
     _parse_packaging,
+    _parse_severity_threshold,
     load_review_config,
 )
 
@@ -46,6 +49,15 @@ def test_parse_packaging_applies_threshold_paths_and_summary_cap() -> None:
     assert packaging.vendor_paths == ["vendor/lib"]
 
 
+def test_parse_severity_threshold_defaults_on_unknown_value() -> None:
+    assert _parse_severity_threshold("high") == "high"
+    assert _parse_severity_threshold("unknown") == DEFAULT_SEVERITY_THRESHOLD
+
+
+def test_parse_categories_filters_to_supported_values() -> None:
+    assert _parse_categories(["security", "style", "bogus", 1]) == ["security", "style"]
+
+
 class FakeGitHubClient:
     def __init__(self, files: dict[str, str]):
         self.files = files
@@ -83,3 +95,32 @@ def test_load_review_config_reads_threshold_and_prompt_additions() -> None:
     )
     assert config.confidence_threshold == 90
     assert config.prompt_additions == "This repo uses generated types."
+
+
+def test_load_review_config_reads_new_phase4_fields() -> None:
+    config = asyncio.run(
+        load_review_config(
+            FakeGitHubClient(
+                {
+                    ".codereview.yml": """
+                    severity_threshold: high
+                    categories:
+                      - security
+                      - correctness
+                    ignore_paths:
+                      - "**/*.md"
+                    review_drafts: true
+                    max_findings_per_pr: 7
+                    """
+                }
+            ),
+            "acme",
+            "demo",
+            "sha",
+        )
+    )
+    assert config.severity_threshold == "high"
+    assert config.categories == ["security", "correctness"]
+    assert config.ignore_paths == ["**/*.md"]
+    assert config.review_drafts is True
+    assert config.max_findings_per_pr == 7

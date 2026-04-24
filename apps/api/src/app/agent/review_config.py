@@ -13,6 +13,10 @@ class _GitHubFileReader(Protocol):
 
 DEFAULT_CONFIDENCE_THRESHOLD = 85
 DEFAULT_MODEL_NAME = "claude-sonnet-4-5"
+DEFAULT_SEVERITY_THRESHOLD = "low"
+DEFAULT_MAX_FINDINGS_PER_PR = 50
+ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
+ALLOWED_CATEGORIES = {"security", "performance", "correctness", "style", "maintainability"}
 DEFAULT_MODEL_PRICING_USD_PER_1M: dict[str, tuple[Decimal, Decimal]] = {
     "claude-sonnet-4-5": (Decimal("3.00"), Decimal("15.00")),
     "claude-3-7-sonnet-latest": (Decimal("3.00"), Decimal("15.00")),
@@ -41,6 +45,11 @@ class ContextPackagingConfig:
 @dataclass
 class ReviewConfig:
     confidence_threshold: int = DEFAULT_CONFIDENCE_THRESHOLD
+    severity_threshold: str = DEFAULT_SEVERITY_THRESHOLD
+    categories: list[str] = field(default_factory=list)
+    ignore_paths: list[str] = field(default_factory=list)
+    review_drafts: bool = False
+    max_findings_per_pr: int = DEFAULT_MAX_FINDINGS_PER_PR
     prompt_additions: str | None = None
     model: ReviewModelConfig = field(default_factory=ReviewModelConfig)
     budgets: ContextBudgets = field(default_factory=ContextBudgets)
@@ -67,6 +76,11 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
     parsed = cast(dict[str, Any], parsed_raw)
 
     threshold = _normalize_threshold(parsed.get("confidence_threshold"))
+    severity_threshold = _parse_severity_threshold(parsed.get("severity_threshold"))
+    categories = _parse_categories(parsed.get("categories"))
+    ignore_paths = _normalize_path_patterns(parsed.get("ignore_paths"))
+    review_drafts = bool(parsed.get("review_drafts", False))
+    max_findings_per_pr = _normalize_positive_int(parsed.get("max_findings_per_pr"), DEFAULT_MAX_FINDINGS_PER_PR)
     prompt_additions = parsed.get("prompt_additions")
     if prompt_additions is not None:
         prompt_additions = str(prompt_additions).strip() or None
@@ -75,6 +89,11 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
     packaging = _parse_packaging(parsed)
     return ReviewConfig(
         confidence_threshold=threshold,
+        severity_threshold=severity_threshold,
+        categories=categories,
+        ignore_paths=ignore_paths,
+        review_drafts=review_drafts,
+        max_findings_per_pr=max_findings_per_pr,
         prompt_additions=prompt_additions,
         model=model_config,
         budgets=budgets,
@@ -151,6 +170,28 @@ def _parse_packaging(parsed: Mapping[str, Any]) -> ContextPackagingConfig:
         generated_paths=_normalize_path_patterns(parsed.get("generated_paths")),
         vendor_paths=_normalize_path_patterns(parsed.get("vendor_paths")),
     )
+
+
+def _parse_severity_threshold(raw_value: object) -> str:
+    if not isinstance(raw_value, str):
+        return DEFAULT_SEVERITY_THRESHOLD
+    value = raw_value.strip().lower()
+    if value not in ALLOWED_SEVERITIES:
+        return DEFAULT_SEVERITY_THRESHOLD
+    return value
+
+
+def _parse_categories(raw_value: object) -> list[str]:
+    if not isinstance(raw_value, list):
+        return []
+    out: list[str] = []
+    for item in raw_value:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip().lower()
+        if normalized and normalized in ALLOWED_CATEGORIES and normalized not in out:
+            out.append(normalized)
+    return out
 
 
 def _normalize_positive_int(raw_value: object, default: int) -> int:
