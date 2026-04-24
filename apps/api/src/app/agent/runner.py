@@ -402,7 +402,7 @@ async def _record_token_budget_usage(installation_id: int, tokens_used: int) -> 
                 current,
                 settings.daily_token_budget_per_installation,
             )
-    except (redis_exc.ConnectionError, redis_exc.TimeoutError, OSError) as exc:
+    except redis_exc.RedisError as exc:
         logger.warning(
             "Skipping token budget recording (Redis unavailable) installation_id=%s tokens=%s err=%s",
             installation_id,
@@ -410,7 +410,12 @@ async def _record_token_budget_usage(installation_id: int, tokens_used: int) -> 
             exc,
         )
     finally:
-        await redis.aclose()
+        try:
+            await redis.aclose()
+        except redis_exc.RedisError:
+            pass
+        except OSError:
+            pass
 
 
 async def _load_review_config_cached(gh: GitHubClient, owner: str, repo: str, head_sha: str) -> ReviewConfig:
