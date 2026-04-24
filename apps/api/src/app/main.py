@@ -5,11 +5,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
 from app.api.router import router as api_router
 from app.admin.router import router as admin_router
 from app.config import settings
+from app.observability import init_observability
 from app.db.session import engine
 from app.queue.connection import create_redis_pool, format_redis_target
 from app.webhooks.router import router as webhook_router
@@ -19,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    init_observability("api")
     # Database schema is managed by Alembic migrations.
     db = urlparse(settings.database_url)
     logger.warning(
@@ -43,6 +46,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="AI Code Review API", lifespan=lifespan)
+if settings.web_app_url:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[settings.web_app_url],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 app.include_router(webhook_router, prefix="/webhooks")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(api_router)

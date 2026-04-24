@@ -1,6 +1,7 @@
 import logging
 import hashlib
 import hmac
+from time import monotonic
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import ValidationError
 
@@ -23,6 +24,7 @@ def verify_signature(payload: bytes, signature: str) -> bool:
 
 @router.post("/github")
 async def github_webhook(request: Request) -> dict[str, bool]:
+    started_at = monotonic()
     payload_bytes = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
     event = request.headers.get("X-GitHub-Event", "")
@@ -66,4 +68,5 @@ async def github_webhook(request: Request) -> dict[str, bool]:
             delivery_id,
         )
 
+    logger.info("Webhook processed delivery_id=%s ack_latency_ms=%s", delivery_id, int((monotonic() - started_at) * 1000))
     return {"ok": True}

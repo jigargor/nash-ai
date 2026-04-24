@@ -19,8 +19,12 @@ Requires-Dist: anthropic>=0.28.0
 Requires-Dist: unidiff>=0.7.5
 Requires-Dist: pyyaml>=6.0.3
 Requires-Dist: tree-sitter-language-pack>=1.6.2
+Requires-Dist: langfuse>=2.60.0
+Requires-Dist: sentry-sdk[fastapi]>=2.20.0
 Provides-Extra: dev
 Requires-Dist: pytest>=9.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=6.0.0; extra == "dev"
 Requires-Dist: mypy>=1.10.0; extra == "dev"
+Requires-Dist: bandit>=1.7.10; extra == "dev"
 Requires-Dist: types-PyYAML>=6.0.12.20240808; extra == "dev"
 Requires-Dist: types-unidiff>=0.1.0; extra == "dev"

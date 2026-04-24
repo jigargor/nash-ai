@@ -2,14 +2,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from anthropic import AsyncAnthropic
-
 from app.agent.acknowledgments import CodeAcknowledgment
 from app.agent.schema import EditedReview, ReviewResult
 from app.config import settings
+from app.observability import create_async_anthropic_client
 
 EDITOR_SYSTEM_PATH = Path(__file__).parent / "prompts" / "editor_system.md"
-client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+client = create_async_anthropic_client(settings.anthropic_api_key)
 
 
 async def run_editor(

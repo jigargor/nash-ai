@@ -7,6 +7,7 @@ from arq.connections import RedisSettings
 from arq.constants import default_queue_name
 
 from app.config import settings
+from app.observability import init_observability
 from app.queue.connection import format_redis_target
 from app.queue.recovery import recover_stale_running_reviews
 
@@ -64,6 +65,7 @@ async def classify_pending_outcomes(ctx: dict[str, Any]) -> None:
 
 
 async def worker_startup(ctx: dict[str, Any]) -> None:
+    init_observability("worker")
     recovered = await recover_stale_running_reviews()
     ctx["recovered_stale_reviews"] = recovered
 

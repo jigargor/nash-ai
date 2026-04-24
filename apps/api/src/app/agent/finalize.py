@@ -1,15 +1,15 @@
 import logging
 from typing import Any
 
-from anthropic import AsyncAnthropic
 from pydantic import ValidationError
 
 from app.agent.review_config import DEFAULT_MODEL_NAME
 from app.agent.schema import ReviewResult
 from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
 from app.config import settings
+from app.observability import create_async_anthropic_client
 
-client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+client = create_async_anthropic_client(settings.anthropic_api_key)
 logger = logging.getLogger(__name__)
 
 FINAL_TOOL = {

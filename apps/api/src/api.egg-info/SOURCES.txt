@@ -7,9 +7,12 @@ src/api.egg-info/top_level.txt
 src/app/__init__.py
 src/app/config.py
 src/app/main.py
+src/app/observability.py
+src/app/ratelimit.py
 src/app/admin/router.py
 src/app/agent/__init__.py
 src/app/agent/acknowledgments.py
+src/app/agent/config_cache.py
 src/app/agent/context_builder.py
 src/app/agent/diff_parser.py
 src/app/agent/editor.py
@@ -63,6 +66,7 @@ tests/test_github_auth.py
 tests/test_github_comments.py
 tests/test_github_live_auth.py
 tests/test_queue_recovery.py
+tests/test_ratelimit.py
 tests/test_text_sanitizer.py
 tests/test_webhooks_handlers.py
 tests/test_webhooks_router.py

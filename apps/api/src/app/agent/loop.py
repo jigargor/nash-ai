@@ -1,13 +1,13 @@
+from time import monotonic
 from typing import Any
-
-from anthropic import AsyncAnthropic
 
 from app.agent.review_config import DEFAULT_MODEL_NAME
 from app.agent.tools import TOOLS, execute_tool
 from app.config import settings
+from app.observability import create_async_anthropic_client
 
 MAX_ITERATIONS = 10
-client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+client = create_async_anthropic_client(settings.anthropic_api_key)
 
 
 async def run_agent(
@@ -20,6 +20,7 @@ async def run_agent(
     messages: list[dict[str, Any]] = [{"role": "user", "content": initial_user_message}]
     turns = 0
     fetch_file_content_calls = 0
+    started_at = monotonic()
 
     for _ in range(MAX_ITERATIONS):
         if _contains_empty_user_message(messages):
@@ -38,6 +39,8 @@ async def run_agent(
             messages=messages,  # type: ignore[arg-type]
         )
         turns += 1
+        if turns == 1:
+            context["first_model_call_latency_ms"] = int((monotonic() - started_at) * 1000)
 
         usage = response.usage
         context["input_tokens"] = context.get("input_tokens", 0) + usage.input_tokens
@@ -80,6 +83,7 @@ async def run_agent(
     context["agent_metrics"] = {
         "turn_count": turns,
         "fetch_file_content_calls": fetch_file_content_calls,
+        "first_model_call_latency_ms": context.get("first_model_call_latency_ms", 0),
     }
     return messages
 
