@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    TIMESTAMP,
     BigInteger,
     ForeignKey,
     Identity,
@@ -9,7 +10,6 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Numeric,
-    TIMESTAMP,
     Text,
     UniqueConstraint,
     func,
@@ -17,6 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
+
 from app.db.session import Base
 
 

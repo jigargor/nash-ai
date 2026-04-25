@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.agent.context_builder import ContextTelemetry
 from app.agent.review_config import ReviewConfig, ReviewModelConfig
 from app.agent.runner import (
     _apply_review_config_filters,
@@ -95,7 +96,7 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
         retry_attempted=1,
         retry_recovered=1,
         threshold=85,
-        context_telemetry={"anchor_coverage": 1.0},
+        context_telemetry=ContextTelemetry(anchor_coverage=1.0),
         mismatch_subtypes={"target_line_mismatch_whitespace": 1},
     )
     artifacts = context["debug_artifacts"]

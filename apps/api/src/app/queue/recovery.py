@@ -2,10 +2,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from sqlalchemy import select, update
-
 from app.db.models import Review
 from app.db.session import AsyncSessionLocal, set_installation_context
+from sqlalchemy import select, update
 
 logger = logging.getLogger(__name__)
 STALE_RUNNING_REVIEW_MAX_AGE_MINUTES = 10

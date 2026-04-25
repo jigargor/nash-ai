@@ -2,14 +2,13 @@ import logging
 from typing import Any
 from urllib.parse import urlparse
 
-from arq.cron import cron
-from arq.connections import RedisSettings
-from arq.constants import default_queue_name
-
 from app.config import settings
 from app.observability import init_observability
 from app.queue.connection import format_redis_target
 from app.queue.recovery import recover_stale_running_reviews
+from arq.connections import RedisSettings
+from arq.constants import default_queue_name
+from arq.cron import cron
 
 # Import order: log which DB URL this process will use *before* session.engine is created
 # (runner → session binds engine at import). Worker is a separate process from uvicorn —
@@ -35,7 +34,10 @@ _logger.warning(
 )
 
 from app.agent.runner import run_review  # noqa: E402
-from app.telemetry.finding_outcomes import classify_pending_outcomes_nightly, classify_pr_outcomes_for_closed_pr  # noqa: E402
+from app.telemetry.finding_outcomes import (  # noqa: E402
+    classify_pending_outcomes_nightly,
+    classify_pr_outcomes_for_closed_pr,
+)
 
 
 async def review_pr(

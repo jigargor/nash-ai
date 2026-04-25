@@ -1,22 +1,55 @@
-from dataclasses import dataclass
-from fnmatch import fnmatch
 import hashlib
+from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from typing import Any, Literal
 
 import tiktoken
 
+from app.agent.constants import (
+    CONTEXT_WINDOW_LINES,
+    DOC_CONTEXT_WINDOW_LINES,
+    MAX_DIFF_TOKENS,
+)
 from app.agent.diff_parser import FileInDiff, NumberedLine, right_side_diff_line_set
 from app.agent.normalization import normalize_file_content
 from app.agent.review_config import ContextPackagingConfig
-from app.agent.schema import ContextAnchor, ContextBudgets, ContextFidelity, ContextSegment, LayeredContextPackage
+from app.agent.schema import (
+    ContextAnchor,
+    ContextBudgets,
+    ContextFidelity,
+    ContextSegment,
+    LayeredContextPackage,
+)
 from app.github.client import GitHubClient
+from app.github.utils import safe_fetch_file
 
 ENCODER = tiktoken.get_encoding("cl100k_base")
-MAX_INPUT_TOKENS = 100_000
-MAX_DIFF_TOKENS = 50_000
-CONTEXT_WINDOW_LINES = 30
-DOC_CONTEXT_WINDOW_LINES = 8
 SUMMARY_CACHE: dict[str, str] = {}
+
+
+@dataclass
+class ContextTelemetry:
+    """Tracks token usage and drop accounting for a single context-building pass.
+
+    Separating this from the packing logic makes both easier to follow.
+    """
+
+    layer_token_usage: dict[str, int] = field(default_factory=dict)
+    dropped_segments: list[str] = field(default_factory=list)
+    anchor_coverage: float = 1.0
+    summarization_used: bool = False
+    summarization_calls: int = 0
+    partial_review_mode: bool = False
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "layer_token_usage": self.layer_token_usage,
+            "dropped_segments": self.dropped_segments,
+            "anchor_coverage": self.anchor_coverage,
+            "summarization_used": self.summarization_used,
+            "summarization_calls": self.summarization_calls,
+            "partial_review_mode": self.partial_review_mode,
+        }
 
 
 @dataclass
@@ -24,7 +57,7 @@ class ContextBundle:
     rendered: str
     fetched_files: dict[str, str]
     package: LayeredContextPackage
-    telemetry: dict[str, object]
+    telemetry: ContextTelemetry
 
 
 def count_tokens(text: str) -> int:
@@ -213,14 +246,14 @@ async def build_context_bundle(
 
     package.dropped_segments = dropped_segments
     rendered = _render_package(package)
-    telemetry: dict[str, object] = {
-        "layer_token_usage": token_usage,
-        "dropped_segments": dropped_segments,
-        "anchor_coverage": package.anchor_coverage,
-        "summarization_used": package.summarization_used,
-        "summarization_calls": package.summarization_calls,
-        "partial_review_mode": package.partial_review_mode,
-    }
+    telemetry = ContextTelemetry(
+        layer_token_usage=token_usage,
+        dropped_segments=dropped_segments,
+        anchor_coverage=package.anchor_coverage,
+        summarization_used=package.summarization_used,
+        summarization_calls=package.summarization_calls,
+        partial_review_mode=package.partial_review_mode,
+    )
     return ContextBundle(rendered=rendered, fetched_files=fetched_files, package=package, telemetry=telemetry)
 
 
@@ -231,10 +264,8 @@ async def _try_fetch_file(
     path: str,
     ref: str,
 ) -> str | None:
-    try:
-        return normalize_file_content(await gh.get_file_content(owner, repo, path, ref))
-    except Exception:
-        return None
+    raw = await safe_fetch_file(gh, owner, repo, path, ref)
+    return normalize_file_content(raw) if raw is not None else None
 
 
 def _line_content_for_anchor(

@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 TODO_PATTERN = re.compile(
     r"(?://|#|/\*|\*)\s*(TODO|FIXME|XXX|HACK)[\(:]?.*",

@@ -1,12 +1,16 @@
-import logging
 import hashlib
 import hmac
+import logging
 from time import monotonic
-from fastapi import APIRouter, Request, HTTPException
+
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
 from app.config import settings
-from app.webhooks.handlers import queue_pull_request_outcome_classification, queue_pull_request_review
+from app.webhooks.handlers import (
+    queue_pull_request_outcome_classification,
+    queue_pull_request_review,
+)
 from app.webhooks.schemas import GitHubPullRequestWebhookPayload
 
 router = APIRouter()

@@ -1,5 +1,7 @@
 import re
 
+from pydantic import ValidationError
+
 from app.agent.schema import Finding
 
 VENDOR_PATTERNS = [
@@ -36,7 +38,7 @@ def auto_tag_vendor_claims(
             finding.is_vendor_claim = True
             try:
                 validated = Finding.model_validate(finding.model_dump(mode="json"))
-            except Exception as exc:
+            except ValidationError as exc:
                 rejected.append((finding, f"auto_tagged_vendor_claim_invalid: {exc}"))
                 continue
             accepted.append(validated)

@@ -1,16 +1,23 @@
+import logging
 from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 from fnmatch import fnmatch
-import logging
 from time import monotonic
 from typing import Any, cast
 
 import redis.exceptions as redis_exc
 from redis.asyncio import Redis
+
 from app.agent.acknowledgments import extract_todo_fixme_markers
 from app.agent.config_cache import get_cached_review_config, set_cached_review_config
-from app.agent.context_builder import build_context_bundle, is_diff_too_large
+from app.agent.constants import PROMPT_VERSION, REPAIR_RETRY_DROP_RATE, REPAIR_SEARCH_WINDOW
+from app.agent.context_builder import (
+    ContextBundle,
+    ContextTelemetry,
+    build_context_bundle,
+    is_diff_too_large,
+)
 from app.agent.diff_parser import FileInDiff, parse_diff, right_side_diff_line_set
 from app.agent.editor import run_editor
 from app.agent.finalize import finalize_review
@@ -20,24 +27,104 @@ from app.agent.profiler import profile_repo
 from app.agent.prompts import build_initial_user_prompt, build_system_prompt, load_verified_fact_ids
 from app.agent.review_config import ReviewConfig, load_review_config
 from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
-from app.telemetry.finding_outcomes import seed_pending_finding_outcomes
-from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.agent.validator import FindingValidator
+from app.agent.vendor_detect import auto_tag_vendor_claims
+from app.config import settings
 from app.db.models import Review
 from app.db.session import AsyncSessionLocal, set_installation_context
-from app.config import settings
 from app.github.client import GitHubClient
 from app.github.comments import post_review
 from app.observability import record_review_trace
 from app.ratelimit import check_and_consume_daily_token_budget, current_daily_token_usage
+from app.telemetry.finding_outcomes import seed_pending_finding_outcomes
 
 logger = logging.getLogger(__name__)
-PROMPT_VERSION = "v4-reviewer-editor"
-REPAIR_SEARCH_WINDOW = 3
-REPAIR_RETRY_DROP_RATE = 0.20
 FULL_REGENERATE_RETRY_DROP_RATE = 0.50
 MIN_RECOVERY_RATIO_FOR_SUCCESS = 0.50
 SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+async def _mark_review_running(review_id: int, installation_id: int) -> None:
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        review = await session.get(Review, review_id)
+        if review is None:
+            raise RuntimeError(f"Review {review_id} does not exist")
+        review.status = "running"
+        review.started_at = datetime.now(timezone.utc)
+        await session.commit()
+
+
+async def _fetch_pr_inputs(
+    context: dict[str, Any],
+) -> tuple["GitHubClient", str, dict[str, Any], list[dict[str, Any]], "ReviewConfig"]:
+    owner: str = context["owner"]
+    repo: str = context["repo"]
+    pr_number: int = context["pr_number"]
+    head_sha: str = context["head_sha"]
+    installation_id: int = context["installation_id"]
+    review_id: int = context["review_id"]
+
+    gh = await GitHubClient.for_installation(installation_id)
+    context["github_client"] = gh
+    record_review_trace(
+        {
+            "review_id": review_id,
+            "installation_id": installation_id,
+            "repo": f"{owner}/{repo}",
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+        }
+    )
+    diff_text = await gh.get_pull_request_diff(owner, repo, pr_number)
+    pr = await gh.get_pull_request(owner, repo, pr_number)
+    commits = await gh.get_pull_request_commits(owner, repo, pr_number)
+    review_config = await _load_review_config_cached(gh, owner, repo, head_sha)
+    record_review_trace(
+        {
+            "review_id": review_id,
+            "installation_id": installation_id,
+            "repo": f"{owner}/{repo}",
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "model": review_config.model.name,
+            "prompt_version": PROMPT_VERSION,
+        }
+    )
+    return gh, diff_text, pr, commits, review_config
+
+
+async def _assemble_context(
+    gh: "GitHubClient",
+    context: dict[str, Any],
+    diff_text: str,
+    review_config: "ReviewConfig",
+) -> "tuple[list[FileInDiff], dict[str, str], ContextBundle, str, str]":
+    owner: str = context["owner"]
+    repo: str = context["repo"]
+    pr_number: int = context["pr_number"]
+    head_sha: str = context["head_sha"]
+
+    files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
+    repo_profile = await profile_repo(gh, owner, repo, head_sha)
+    repo_segments = _build_repo_segments(repo_profile.frameworks, review_config.prompt_additions)
+    context_bundle = await build_context_bundle(
+        gh,
+        owner,
+        repo,
+        head_sha,
+        files_in_diff,
+        budgets=review_config.budgets,
+        packaging=review_config.packaging,
+        repo_segments=repo_segments,
+    )
+    fetched_map: dict[str, str] = dict(context_bundle.fetched_files)
+    context["fetched_files"] = fetched_map
+    context["frameworks"] = repo_profile.frameworks
+    _warn_if_carriage_returns(fetched_map)
+    system_prompt = build_system_prompt(repo_profile.frameworks, diff_text, review_config.prompt_additions)
+    user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
+    return files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt
 
 
 async def run_review(
@@ -48,14 +135,7 @@ async def run_review(
     pr_number: int,
     head_sha: str,
 ) -> None:
-    async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None:
-            raise RuntimeError(f"Review {review_id} does not exist")
-        review.status = "running"
-        review.started_at = datetime.now(timezone.utc)
-        await session.commit()
+    await _mark_review_running(review_id, installation_id)
 
     context: dict[str, Any] = {
         "review_id": review_id,
@@ -71,33 +151,8 @@ async def run_review(
     started_at = monotonic()
 
     try:
-        gh = await GitHubClient.for_installation(installation_id)
-        context["github_client"] = gh
-        record_review_trace(
-            {
-                "review_id": review_id,
-                "installation_id": installation_id,
-                "repo": f"{owner}/{repo}",
-                "pr_number": pr_number,
-                "head_sha": head_sha,
-            }
-        )
+        gh, diff_text, pr, commits, review_config = await _fetch_pr_inputs(context)
 
-        diff_text = await gh.get_pull_request_diff(owner, repo, pr_number)
-        pr = await gh.get_pull_request(owner, repo, pr_number)
-        commits = await gh.get_pull_request_commits(owner, repo, pr_number)
-        review_config = await _load_review_config_cached(gh, owner, repo, head_sha)
-        record_review_trace(
-            {
-                "review_id": review_id,
-                "installation_id": installation_id,
-                "repo": f"{owner}/{repo}",
-                "pr_number": pr_number,
-                "head_sha": head_sha,
-                "model": review_config.model.name,
-                "prompt_version": PROMPT_VERSION,
-            }
-        )
         if pr.get("draft", False) and not review_config.review_drafts:
             result = ReviewResult(findings=[], summary="Skipped automated review because this pull request is a draft.")
             await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
@@ -111,24 +166,9 @@ async def run_review(
             await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
             return
 
-        files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
-        repo_profile = await profile_repo(gh, owner, repo, head_sha)
-        repo_segments = _build_repo_segments(repo_profile.frameworks, review_config.prompt_additions)
-        context_bundle = await build_context_bundle(
-            gh,
-            owner,
-            repo,
-            head_sha,
-            files_in_diff,
-            budgets=review_config.budgets,
-            packaging=review_config.packaging,
-            repo_segments=repo_segments,
+        files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt = await _assemble_context(
+            gh, context, diff_text, review_config
         )
-        fetched_map: dict[str, str] = dict(context_bundle.fetched_files)
-        context["fetched_files"] = fetched_map
-        _warn_if_carriage_returns(fetched_map)
-        system_prompt = build_system_prompt(repo_profile.frameworks, diff_text, review_config.prompt_additions)
-        user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
         messages = await run_agent(system_prompt, user_prompt, context, model_name=review_config.model.name)
         result = await finalize_review(
             system_prompt,
@@ -291,7 +331,7 @@ async def run_review(
         )
         _log_quality_metrics(
             context=context,
-            frameworks=repo_profile.frameworks,
+            frameworks=context.get("frameworks", []),
             review_config=review_config,
             generated=generated,
             validator_dropped=validator_dropped,
@@ -526,7 +566,7 @@ def _log_quality_metrics(
     evidence_distribution: Counter[str],
     evidence_rejections_total: int,
     evidence_rejection_reasons: Counter[str],
-    context_telemetry: dict[str, object],
+    context_telemetry: ContextTelemetry,
 ) -> None:
     dropped_by_reason: dict[str, int] = {}
     for _, reason, _ in validator_dropped:
@@ -584,7 +624,7 @@ def _attach_debug_artifacts(
     retry_attempted: int,
     retry_recovered: int,
     threshold: int,
-    context_telemetry: dict[str, object],
+    context_telemetry: ContextTelemetry,
     mismatch_subtypes: dict[str, int],
 ) -> None:
     validator_entries = [
@@ -625,7 +665,7 @@ def _attach_debug_artifacts(
         },
         "confidence_threshold": threshold,
         "target_line_mismatch_subtypes": mismatch_subtypes,
-        "context_telemetry": context_telemetry,
+        "context_telemetry": context_telemetry.as_dict(),
         "agent_metrics": context.get("agent_metrics", {}),
     }
 

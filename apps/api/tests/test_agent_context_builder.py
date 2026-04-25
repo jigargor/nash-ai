@@ -49,7 +49,7 @@ index 1111111..2222222 100644
     assert "145 |  +  | value = new_call()" in bundle.rendered
     assert "### Surrounding context (lines 115-176):" in bundle.rendered
     assert bundle.package.anchor_coverage == 1.0
-    assert bundle.telemetry["anchor_coverage"] == 1.0
+    assert bundle.telemetry.anchor_coverage == 1.0
     assert bundle.fetched_files["app.py"].startswith("line_1")
 
 
@@ -77,7 +77,7 @@ index 1111111..2222222 100644
     )
 
     assert bundle.package.anchor_coverage == 1.0
-    assert bundle.telemetry["anchor_coverage"] == 1.0
+    assert bundle.telemetry.anchor_coverage == 1.0
     assert bundle.fetched_files == {}
     assert "## Anchor map (content-validated)" in bundle.rendered
     assert "app.py:145 => value = new_call()" in bundle.rendered

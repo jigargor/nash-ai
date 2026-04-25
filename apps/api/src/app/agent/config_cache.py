@@ -3,6 +3,7 @@ import logging
 from dataclasses import asdict
 from decimal import Decimal
 
+import redis.exceptions as redis_exc
 from redis.asyncio import Redis
 
 from app.agent.review_config import ReviewConfig, ReviewModelConfig
@@ -44,7 +45,7 @@ async def get_cached_review_config(owner: str, repo: str, head_sha: str) -> Revi
         if not cached:
             return None
         return _deserialize_config(cached)
-    except Exception:
+    except (redis_exc.RedisError, json.JSONDecodeError, ValueError):
         logger.exception("Failed to read review config cache key=%s", key)
         return None
     finally:
@@ -56,7 +57,7 @@ async def set_cached_review_config(owner: str, repo: str, head_sha: str, config:
     redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
     try:
         await redis.setex(key, CONFIG_CACHE_TTL_SECONDS, _serialize_config(config))
-    except Exception:
+    except redis_exc.RedisError:
         logger.exception("Failed to write review config cache key=%s", key)
     finally:
         await redis.aclose()

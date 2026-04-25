@@ -90,7 +90,7 @@ class FindingValidator:
         if language not in self._parsers:
             try:
                 self._parsers[language] = get_parser(language)
-            except Exception:
+            except (LookupError, ValueError):
                 return True
 
         parser = self._parsers[language]

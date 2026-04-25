@@ -8,11 +8,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
-from app.api.router import router as api_router
 from app.admin.router import router as admin_router
+from app.api.router import router as api_router
 from app.config import settings
-from app.observability import init_observability
 from app.db.session import engine
+from app.observability import init_observability
 from app.queue.connection import create_redis_pool, format_redis_target
 from app.webhooks.router import router as webhook_router
 

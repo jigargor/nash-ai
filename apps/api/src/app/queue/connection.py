@@ -1,7 +1,6 @@
+from app.config import settings
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
-
-from app.config import settings
 
 
 def format_redis_target(redis_url: str) -> str:
