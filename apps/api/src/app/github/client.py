@@ -10,6 +10,8 @@ BASE = "https://api.github.com"
 
 JsonDict = dict[str, Any]
 
+_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=2.0)
+
 
 class GitHubClient:
     def __init__(self, token: str):
@@ -28,7 +30,7 @@ class GitHubClient:
         return await self.get_json(f"/repos/{owner}/{repo}/pulls/{pr_number}")
 
     async def get_pull_request_commits(self, owner: str, repo: str, pr_number: int) -> list[JsonDict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/commits",
                 headers=self._headers,
@@ -41,7 +43,7 @@ class GitHubClient:
         return [item for item in payload if isinstance(item, dict)]
 
     async def get_pull_request_files(self, owner: str, repo: str, pr_number: int) -> list[JsonDict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/files",
                 headers=self._headers,
@@ -55,7 +57,7 @@ class GitHubClient:
 
     async def get_pull_request_diff(self, owner: str, repo: str, pr_number: int) -> str:
         headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             r = await client.get(f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}", headers=headers)
             r.raise_for_status()
             return r.text
@@ -78,7 +80,7 @@ class GitHubClient:
         return [item for item in items if isinstance(item, dict)]
 
     async def get_file_history(self, owner: str, repo: str, path: str) -> list[JsonDict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/commits",
                 headers=self._headers,
@@ -101,7 +103,7 @@ class GitHubClient:
         params: dict[str, str | int] = {"path": path, "per_page": 100}
         if since is not None:
             params["since"] = since.isoformat()
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/commits",
                 headers=self._headers,
@@ -138,7 +140,7 @@ class GitHubClient:
         return [item for item in files if isinstance(item, dict)]
 
     async def get_pull_review_comment_reactions(self, owner: str, repo: str, comment_id: int) -> list[JsonDict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions",
                 headers=self._headers,
@@ -164,7 +166,7 @@ class GitHubClient:
         return normalized
 
     async def get_pull_review_comment_replies(self, owner: str, repo: str, comment_id: int) -> list[JsonDict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/comments/{comment_id}/replies",
                 headers=self._headers,
@@ -190,7 +192,7 @@ class GitHubClient:
         return normalized
 
     async def is_pull_review_thread_resolved(self, owner: str, repo: str, pr_number: int, comment_id: int) -> bool:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/threads",
                 headers=self._headers,
@@ -242,7 +244,7 @@ class GitHubClient:
         pr_number: int,
         bot_login: str | None = None,
     ) -> list[JsonDict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/comments",
                 headers=self._headers,
@@ -271,7 +273,7 @@ class GitHubClient:
         return bot_comments
 
     async def get_json(self, path: str, params: dict[str, str | int] | None = None) -> JsonDict:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             r = await client.get(f"{BASE}{path}", headers=self._headers, params=params)
             r.raise_for_status()
             data = r.json()
@@ -280,7 +282,7 @@ class GitHubClient:
         return cast(JsonDict, data)
 
     async def post_json(self, path: str, payload: JsonDict) -> JsonDict:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             r = await client.post(f"{BASE}{path}", headers=self._headers, json=payload)
             r.raise_for_status()
             data = r.json()

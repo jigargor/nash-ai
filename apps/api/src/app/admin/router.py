@@ -1,21 +1,18 @@
 import hmac
 import logging
-
-from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+import time
 
 from app.config import settings
 from app.db.models import Review
 from app.db.session import AsyncSessionLocal, set_installation_context
+from app.github.utils import split_repo_full_name as _split_repo_full_name
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
-def _split_repo_full_name(repo_full_name: str) -> tuple[str, str]:
-    owner_repo = repo_full_name.split("/", 1)
-    if len(owner_repo) != 2 or not owner_repo[0] or not owner_repo[1]:
-        raise ValueError(f"Invalid repo_full_name: {repo_full_name}")
-    return owner_repo[0], owner_repo[1]
+_ADMIN_RATE_LIMIT = 5
+_ADMIN_RATE_WINDOW = 60
 
 
 def _require_admin_key(x_admin_api_key: str | None) -> None:
@@ -28,6 +25,25 @@ def _require_admin_key(x_admin_api_key: str | None) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
 
 
+async def _check_admin_rate_limit(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"admin:retry:{client_ip}"
+    redis = request.app.state.redis
+    now = time.time()
+    cutoff = now - _ADMIN_RATE_WINDOW
+    pipe = redis.pipeline()
+    pipe.zremrangebyscore(key, 0, cutoff)
+    pipe.zcard(key)
+    pipe.zadd(key, {str(now): now})
+    pipe.expire(key, _ADMIN_RATE_WINDOW)
+    _, count, _, _ = await pipe.execute()
+    if int(count) >= _ADMIN_RATE_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Admin rate limit exceeded: max {_ADMIN_RATE_LIMIT} requests per {_ADMIN_RATE_WINDOW}s",
+        )
+
+
 @router.post("/reviews/{review_id}/retry")
 async def retry_review(
     request: Request,
@@ -37,6 +53,7 @@ async def retry_review(
     force: bool = Query(default=False),
 ) -> dict[str, object]:
     _require_admin_key(x_admin_api_key)
+    await _check_admin_rate_limit(request)
 
     async with AsyncSessionLocal() as session:
         if installation_id is not None:

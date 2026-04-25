@@ -1,7 +1,22 @@
-from datetime import datetime, timezone
 import time
+from datetime import datetime, timezone
 
 from redis.asyncio import Redis
+
+# Atomic check-and-increment: reads current value, aborts if over limit, otherwise
+# increments and refreshes TTL — all in one round-trip so two concurrent reviews
+# cannot both pass the budget check at the same time.
+_BUDGET_INCR_SCRIPT = """
+local key = KEYS[1]
+local tokens = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local current = tonumber(redis.call('GET', key) or 0)
+if current + tokens > limit then return 0 end
+redis.call('INCRBY', key, tokens)
+redis.call('EXPIRE', key, ttl)
+return 1
+"""
 
 
 async def check_installation_review_rate_limit(
@@ -38,12 +53,8 @@ async def check_and_consume_daily_token_budget(
     daily_limit: int,
 ) -> bool:
     key = token_budget_key(installation_id)
-    current = int(await redis.get(key) or 0)
-    if current + tokens > daily_limit:
-        return False
-    await redis.incrby(key, tokens)
-    await redis.expire(key, 86400 * 2)
-    return True
+    result = await redis.eval(_BUDGET_INCR_SCRIPT, 1, key, str(tokens), str(daily_limit), "86400")  # type: ignore[misc]
+    return bool(result)
 
 
 async def current_daily_token_usage(redis: Redis, installation_id: int) -> int:

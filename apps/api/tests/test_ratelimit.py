@@ -48,6 +48,14 @@ class _FakeRedis:
     async def expire(self, _key: str, _ttl: int) -> None:
         return None
 
+    async def eval(self, _script: str, _numkeys: int, key: str, tokens: str, limit: str, _ttl: str) -> int:
+        """Simulate the budget Lua script: atomic check-and-increment."""
+        current = int(self.values.get(key, 0))
+        if current + int(tokens) > int(limit):
+            return 0
+        self.values[key] = current + int(tokens)
+        return 1
+
 
 def test_token_budget_key_uses_utc_date() -> None:
     key = token_budget_key(42)

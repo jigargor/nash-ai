@@ -1,23 +1,26 @@
 import asyncio
+import hmac
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from app.config import settings
+from app.db.models import Installation, Review
+from app.db.session import AsyncSessionLocal, set_installation_context
+from app.github.utils import split_repo_full_name as _split_repo_full_name
+from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
-from app.db.models import Installation, Review
-from app.db.session import AsyncSessionLocal, set_installation_context
-from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 
-router = APIRouter(prefix="/api/v1")
+def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
+    if not settings.api_access_key:
+        return  # key not configured — open access (backwards-compatible default)
+    if not x_api_key or not hmac.compare_digest(x_api_key, settings.api_access_key):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key")
 
 
-def _split_repo_full_name(repo_full_name: str) -> tuple[str, str]:
-    owner_repo = repo_full_name.split("/", 1)
-    if len(owner_repo) != 2 or not owner_repo[0] or not owner_repo[1]:
-        raise ValueError(f"Invalid repo_full_name: {repo_full_name}")
-    return owner_repo[0], owner_repo[1]
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(_verify_api_access)])
 
 
 @router.get("/installations")

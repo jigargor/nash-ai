@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 
 import httpx
@@ -99,6 +100,10 @@ async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str,
             ecosystem = OSV_ECOSYSTEM_MAP[tool_input["ecosystem"]]
             package = tool_input["package"]
             version = tool_input["version"]
+            if not re.match(r"^[a-zA-Z0-9._\-]{1,200}$", package):
+                return json.dumps({"error": "invalid package name"})
+            if not re.match(r"^[a-zA-Z0-9._\-+]{1,50}$", version):
+                return json.dumps({"error": "invalid version"})
             payload = {
                 "package": {"name": package, "ecosystem": ecosystem},
                 "version": version,

@@ -44,13 +44,13 @@ class Settings(BaseSettings):
     db_pool_recycle_seconds: int = 1800
     db_command_timeout_seconds: int = 30
     db_statement_timeout_ms: int | None = None
-    db_require_ssl_in_production: bool = True
     redis_url: str = "redis://localhost:6379"
     fernet_key: str
     anthropic_api_key: str
     environment: str = "development"
     log_webhook_payloads: bool = False
     admin_retry_api_key: str | None = None
+    api_access_key: str | None = None
     enable_reviews: bool = True
     reviews_per_hour_limit: int = 30
     daily_token_budget_per_installation: int = 10_000_000
@@ -82,7 +82,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_database_tls(self) -> "Settings":
-        if self.environment.lower() != "production" or not self.db_require_ssl_in_production:
+        if self.environment.lower() != "production":
             return self
         if _database_url_has_ssl(self.database_url):
             return self
