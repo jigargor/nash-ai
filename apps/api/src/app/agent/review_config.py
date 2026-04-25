@@ -1,11 +1,12 @@
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Protocol, cast
 
-import httpx
 import yaml
+from pydantic import ValidationError
 
 from app.agent.schema import ContextBudgets
+from app.github.utils import safe_fetch_file
 
 
 class _GitHubFileReader(Protocol):
@@ -57,13 +58,8 @@ class ReviewConfig:
 
 
 async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: str) -> ReviewConfig:
-    try:
-        raw_config = await gh.get_file_content(owner, repo, ".codereview.yml", ref)
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            return ReviewConfig()
-        return ReviewConfig()
-    except Exception:
+    raw_config = await safe_fetch_file(gh, owner, repo, ".codereview.yml", ref)
+    if raw_config is None:
         return ReviewConfig()
 
     try:
@@ -153,7 +149,7 @@ def _parse_budgets(raw_value: object) -> ContextBudgets:
         return ContextBudgets()
     try:
         return ContextBudgets.model_validate(raw_value)
-    except Exception:
+    except ValidationError:
         return ContextBudgets()
 
 
@@ -229,7 +225,7 @@ def _normalize_path_patterns(raw_value: object) -> list[str]:
 def _normalize_decimal(raw_value: object, default: Decimal) -> Decimal:
     try:
         value = Decimal(str(raw_value))
-    except Exception:
+    except (InvalidOperation, ValueError):
         return default
     if value <= 0:
         return default

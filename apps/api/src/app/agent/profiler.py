@@ -1,9 +1,8 @@
 import json
 from dataclasses import dataclass, field
 
-import httpx
-
 from app.github.client import GitHubClient
+from app.github.utils import safe_fetch_file
 
 
 @dataclass
@@ -13,13 +12,20 @@ class RepoProfile:
 
 
 async def profile_repo(gh: GitHubClient, owner: str, repo: str, ref: str) -> RepoProfile:
-    profile = RepoProfile()
+    # Import here to avoid circular imports at module load time
+    from app.agent.profiler_cache import get_cached_repo_profile, set_cached_repo_profile
 
+    cached = await get_cached_repo_profile(owner, repo, ref)
+    if cached is not None:
+        return cached
+
+    profile = RepoProfile()
     await _profile_package_json(gh, owner, repo, ref, profile)
     await _profile_pyproject(gh, owner, repo, ref, profile)
     await _profile_by_file_presence(gh, owner, repo, ref, profile)
-
     profile.frameworks = sorted(set(profile.frameworks))
+
+    await set_cached_repo_profile(owner, repo, ref, profile)
     return profile
 
 
@@ -30,11 +36,8 @@ async def _profile_package_json(
     ref: str,
     profile: RepoProfile,
 ) -> None:
-    try:
-        package_json = await gh.get_file_content(owner, repo, "package.json", ref)
-    except httpx.HTTPStatusError:
-        return
-    except Exception:
+    package_json = await safe_fetch_file(gh, owner, repo, "package.json", ref)
+    if package_json is None:
         return
 
     try:
@@ -64,13 +67,10 @@ async def _profile_pyproject(
     ref: str,
     profile: RepoProfile,
 ) -> None:
-    try:
-        pyproject = (await gh.get_file_content(owner, repo, "pyproject.toml", ref)).lower()
-    except httpx.HTTPStatusError:
+    raw = await safe_fetch_file(gh, owner, repo, "pyproject.toml", ref)
+    if raw is None:
         return
-    except Exception:
-        return
-
+    pyproject = raw.lower()
     if "fastapi" in pyproject:
         profile.frameworks.append("fastapi")
     if "django" in pyproject:
@@ -78,11 +78,7 @@ async def _profile_pyproject(
 
 
 async def _repo_has_file(gh: GitHubClient, owner: str, repo: str, path: str, ref: str) -> bool:
-    try:
-        await gh.get_file_content(owner, repo, path, ref)
-        return True
-    except Exception:
-        return False
+    return await safe_fetch_file(gh, owner, repo, path, ref) is not None
 
 
 async def _profile_by_file_presence(

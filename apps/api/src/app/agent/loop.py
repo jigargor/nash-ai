@@ -1,12 +1,12 @@
 from time import monotonic
 from typing import Any
 
+from app.agent.constants import MAX_ITERATIONS
 from app.agent.review_config import DEFAULT_MODEL_NAME
 from app.agent.tools import TOOLS, execute_tool
 from app.config import settings
 from app.observability import create_async_anthropic_client
 
-MAX_ITERATIONS = 10
 client = create_async_anthropic_client(settings.anthropic_api_key)
 
 

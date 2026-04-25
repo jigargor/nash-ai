@@ -1,7 +1,33 @@
 import re
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from typing_extensions import TypedDict
+
+if TYPE_CHECKING:
+    from app.github.client import GitHubClient
+
+
+class RunContext(TypedDict, total=False):
+    """Mutable bag passed through the review pipeline stages in runner.py.
+
+    Keys marked with `total=False` may be absent early in the pipeline and
+    are progressively populated as stages complete.
+    """
+
+    review_id: int
+    installation_id: int
+    owner: str
+    repo: str
+    pr_number: int
+    head_sha: str
+    github_client: "GitHubClient"
+    fetched_files: dict[str, str]
+    input_tokens: int
+    output_tokens: int
+    tokens_used: int
+    debug_artifacts: dict[str, Any]
+    agent_metrics: dict[str, Any]
 
 Severity = Literal["critical", "high", "medium", "low"]
 Category = Literal["security", "performance", "correctness", "style", "maintainability"]
