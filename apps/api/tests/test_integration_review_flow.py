@@ -9,12 +9,12 @@ to avoid event-loop lifecycle issues with the async connection pool in tests.
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.agent.runner import run_review
-from app.agent.schema import ReviewResult
+from app.agent.schema import EditedReview, ReviewResult
 
 _INSTALLATION_ID = 99_001
 _OWNER = "acme"
@@ -117,6 +117,11 @@ async def test_run_review_full_pipeline_marks_done() -> None:
     review = _make_fake_review()
     mock_gh = _make_mock_gh()
     empty_result = ReviewResult(findings=[], summary="No issues found in this minimal diff.")
+    edited_pass_through = EditedReview(
+        findings=list(empty_result.findings),
+        summary=empty_result.summary,
+        decisions=[],
+    )
 
     with (
         patch("app.agent.runner.AsyncSessionLocal", return_value=_make_fake_session(review)),
@@ -124,6 +129,7 @@ async def test_run_review_full_pipeline_marks_done() -> None:
         patch("app.agent.runner.GitHubClient.for_installation", return_value=mock_gh),
         patch("app.agent.runner.run_agent", new=AsyncMock(return_value=[])),
         patch("app.agent.runner.finalize_review", new=AsyncMock(return_value=empty_result)),
+        patch("app.agent.runner.run_editor", new=AsyncMock(return_value=edited_pass_through)),
         patch("app.agent.runner._record_token_budget_usage", new=AsyncMock()),
         patch("app.agent.runner.record_review_trace"),
         patch("app.agent.runner.post_review", new=AsyncMock(return_value={})),
