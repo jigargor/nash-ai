@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { AUTH_COOKIE_TTL_SECONDS, AUTH_STATE_COOKIE_NAME } from "@/lib/auth/constants";
+import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/env/monorepo-env";
 import { buildGitHubAuthorizeUrl } from "@/lib/auth/github";
 import { createOAuthState } from "@/lib/auth/session";
 
@@ -10,11 +11,12 @@ function callbackUrl(requestUrl: string): string {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
+  hydrateGithubOAuthEnvFromAncestors();
   if (!process.env.GITHUB_CLIENT_ID?.trim() || !process.env.GITHUB_CLIENT_SECRET?.trim()) {
     return NextResponse.json(
       {
         error:
-          "GitHub OAuth is not configured. Copy apps/web/.env.example to apps/web/.env.local and set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET (Next.js reads env from apps/web, not the repo root).",
+          "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in repo-root or apps/web `.env.local`, then restart `next dev`.",
       },
       { status: 503 },
     );

@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { AUTH_COOKIE_NAME, AUTH_COOKIE_TTL_SECONDS, AUTH_STATE_COOKIE_NAME } from "@/lib/auth/constants";
+import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/env/monorepo-env";
 import { exchangeCodeForToken, getGitHubUser } from "@/lib/auth/github";
 import { createSessionToken } from "@/lib/auth/session";
 
@@ -15,6 +16,7 @@ function callbackUrl(requestUrl: string): string {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
+  hydrateGithubOAuthEnvFromAncestors();
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -26,7 +28,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   try {
     const token = await exchangeCodeForToken(code, callbackUrl(request.url));
     const user = await getGitHubUser(token.access_token);
-    const sessionToken = createSessionToken({ id: user.id, login: user.login });
+    const sessionToken = await createSessionToken({ id: user.id, login: user.login });
     const response = NextResponse.redirect(new URL("/dashboard", request.url));
     response.cookies.set(AUTH_COOKIE_NAME, sessionToken, {
       httpOnly: true,

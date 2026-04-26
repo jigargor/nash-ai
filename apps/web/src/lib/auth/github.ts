@@ -1,3 +1,5 @@
+import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/env/monorepo-env";
+
 export interface GitHubOAuthTokenResponse {
   access_token: string;
   token_type: string;
@@ -10,12 +12,14 @@ export interface GitHubUser {
 }
 
 function getGitHubClientId(): string {
+  hydrateGithubOAuthEnvFromAncestors();
   const value = process.env.GITHUB_CLIENT_ID;
   if (!value) throw new Error("Missing GITHUB_CLIENT_ID");
   return value;
 }
 
 function getGitHubClientSecret(): string {
+  hydrateGithubOAuthEnvFromAncestors();
   const value = process.env.GITHUB_CLIENT_SECRET;
   if (!value) throw new Error("Missing GITHUB_CLIENT_SECRET");
   return value;

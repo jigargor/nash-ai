@@ -7,7 +7,7 @@ import { parseSessionToken } from "@/lib/auth/session";
 export async function GET(): Promise<NextResponse> {
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE_NAME)?.value;
-  const session = parseSessionToken(token);
+  const session = await parseSessionToken(token);
   if (!session) return NextResponse.json({ authenticated: false }, { status: 401 });
   return NextResponse.json({
     authenticated: true,

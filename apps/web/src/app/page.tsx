@@ -7,7 +7,7 @@ import { parseSessionToken } from "@/lib/auth/session";
 export default async function Home() {
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE_NAME)?.value;
-  const session = parseSessionToken(token);
+  const session = await parseSessionToken(token);
   if (session) redirect("/dashboard");
   redirect("/login");
 }
