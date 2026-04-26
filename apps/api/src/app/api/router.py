@@ -323,6 +323,12 @@ async def rerun_review(
         elif int(review.installation_id) != installation_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
+        if not settings.has_llm_api_key_configured():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No LLM API key configured (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)",
+            )
+
         owner, repo = _split_repo_full_name(review.repo_full_name)
         job = await request.app.state.redis.enqueue_job(
             "review_pr",

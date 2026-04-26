@@ -54,6 +54,12 @@ async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestW
     if not settings.enable_reviews:
         logger.warning("Skipping review enqueue because ENABLE_REVIEWS is false")
         return
+    if not settings.has_llm_api_key_configured():
+        logger.warning(
+            "Skipping review enqueue: ENABLE_REVIEWS is true but no LLM API key is set "
+            "(configure ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)"
+        )
+        return
 
     installation_id = payload.installation.id
     repo_full_name = payload.repository.full_name
