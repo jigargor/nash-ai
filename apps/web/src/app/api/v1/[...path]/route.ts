@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
+import { hydrateApiProxyEnvFromAncestors } from "@/lib/monorepo-env";
+
 const API_BASE = process.env.API_URL ?? "http://localhost:8000";
+
+export const runtime = "nodejs";
 
 interface ApiProxyRouteContext {
   params: Promise<{
@@ -9,6 +13,7 @@ interface ApiProxyRouteContext {
 }
 
 async function proxyApiRequest(request: Request, context: ApiProxyRouteContext): Promise<Response> {
+  hydrateApiProxyEnvFromAncestors();
   const apiAccessKey = process.env.API_ACCESS_KEY;
   if (!apiAccessKey) {
     return NextResponse.json({ detail: "API access key is not configured for the web proxy." }, { status: 503 });
@@ -16,7 +21,8 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
 
   const { path } = await context.params;
   const incomingUrl = new URL(request.url);
-  const targetUrl = new URL(`/api/v1/${path.join("/")}${incomingUrl.search}`, API_BASE);
+  const apiBase = process.env.API_URL ?? API_BASE;
+  const targetUrl = new URL(`/api/v1/${path.join("/")}${incomingUrl.search}`, apiBase);
   const headers = new Headers(request.headers);
   headers.set("X-Api-Key", apiAccessKey);
   headers.delete("host");

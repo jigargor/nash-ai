@@ -24,6 +24,17 @@ def _payload_bytes(action: str = "opened") -> bytes:
     return json.dumps(payload).encode("utf-8")
 
 
+def _installation_payload_bytes(action: str = "created") -> bytes:
+    payload = {
+        "action": action,
+        "installation": {
+            "id": 42,
+            "account": {"login": "acme", "type": "Organization"},
+        },
+    }
+    return json.dumps(payload).encode("utf-8")
+
+
 def _signature(payload: bytes) -> str:
     digest = hmac.new(settings.github_webhook_secret.encode(), payload, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
@@ -100,6 +111,33 @@ async def test_github_webhook_with_valid_signature_and_synchronize_action_enqueu
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert calls == ["queued"]
+
+
+@pytest.mark.anyio
+async def test_github_webhook_with_installation_event_syncs(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_sync(_payload: object) -> None:
+        calls.append("synced")
+
+    monkeypatch.setattr(webhook_router, "sync_installation_from_webhook", fake_sync)
+
+    payload = _installation_payload_bytes(action="created")
+    response = await client.post(
+        "/webhooks/github",
+        content=payload,
+        headers={
+            "X-Hub-Signature-256": _signature(payload),
+            "X-GitHub-Event": "installation",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls == ["synced"]
 
 
 @pytest.mark.anyio

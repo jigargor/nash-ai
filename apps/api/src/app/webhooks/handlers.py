@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC, datetime
 
 from arq.connections import ArqRedis
 from sqlalchemy import select
@@ -8,9 +9,45 @@ from app.config import settings
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.ratelimit import check_installation_review_rate_limit, current_daily_token_usage
-from app.webhooks.schemas import GitHubPullRequestWebhookPayload
+from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
 
 logger = logging.getLogger(__name__)
+
+
+async def sync_installation_from_webhook(payload: GitHubInstallationWebhookPayload) -> None:
+    installation_id = payload.installation.id
+    account = payload.installation.account
+    account_login = account.login if account is not None else f"installation-{installation_id}"
+    account_type = account.type if account is not None else "Unknown"
+    suspended_at = datetime.now(UTC) if payload.action in {"deleted", "suspend"} else None
+
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        installation = await session.scalar(
+            select(Installation).where(Installation.installation_id == installation_id)
+        )
+        if installation is None:
+            session.add(
+                Installation(
+                    installation_id=installation_id,
+                    account_login=account_login,
+                    account_type=account_type,
+                    suspended_at=suspended_at,
+                )
+            )
+        else:
+            installation.account_login = account_login
+            installation.account_type = account_type
+            installation.suspended_at = suspended_at
+        await session.commit()
+
+    logger.warning(
+        "Synced GitHub App installation action=%s installation_id=%s account=%s active=%s",
+        payload.action,
+        installation_id,
+        account_login,
+        suspended_at is None,
+    )
 
 
 async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestWebhookPayload) -> None:
@@ -66,6 +103,11 @@ async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestW
                     account_type=payload.repository.owner.type,
                 )
             )
+            await session.flush()
+        elif installation.suspended_at is not None:
+            installation.account_login = payload.repository.owner.login
+            installation.account_type = payload.repository.owner.type
+            installation.suspended_at = None
             await session.flush()
 
         existing_review = await session.scalar(

@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-/** True after we have walked ancestor dirs looking for OAuth vars (success or not). */
-let githubOAuthScanDone = false;
+const completedEnvScans = new Set<string>();
 
 function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
@@ -27,14 +26,16 @@ function parseDotEnvContent(content: string): Record<string, string> {
   return out;
 }
 
-function applyGithubOAuthFromFile(filePath: string): void {
+function applyEnvFromFile(filePath: string, keys: readonly string[]): void {
   const parsed = parseDotEnvContent(fs.readFileSync(filePath, "utf8"));
-  if (!process.env.GITHUB_CLIENT_ID?.trim() && parsed.GITHUB_CLIENT_ID?.trim()) {
-    process.env.GITHUB_CLIENT_ID = parsed.GITHUB_CLIENT_ID.trim();
+  for (const key of keys) {
+    if (process.env[key]?.trim()) continue;
+    if (parsed[key]?.trim()) process.env[key] = parsed[key].trim();
   }
-  if (!process.env.GITHUB_CLIENT_SECRET?.trim() && parsed.GITHUB_CLIENT_SECRET?.trim()) {
-    process.env.GITHUB_CLIENT_SECRET = parsed.GITHUB_CLIENT_SECRET.trim();
-  }
+}
+
+function allEnvSet(keys: readonly string[]): boolean {
+  return keys.every((key) => Boolean(process.env[key]?.trim()));
 }
 
 /**
@@ -44,9 +45,19 @@ function applyGithubOAuthFromFile(filePath: string): void {
  * in each directory until both are set or the filesystem root is reached.
  */
 export function hydrateGithubOAuthEnvFromAncestors(): void {
-  if (process.env.GITHUB_CLIENT_ID?.trim() && process.env.GITHUB_CLIENT_SECRET?.trim()) return;
-  if (githubOAuthScanDone) return;
-  githubOAuthScanDone = true;
+  hydrateEnvFromAncestors(["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"]);
+}
+
+export function hydrateApiProxyEnvFromAncestors(): void {
+  hydrateEnvFromAncestors(["API_ACCESS_KEY", "API_URL"]);
+}
+
+export function hydrateEnvFromAncestors(keys: readonly string[]): void {
+  const requiredKeys = [...keys].sort();
+  const scanKey = requiredKeys.join("\0");
+  if (allEnvSet(requiredKeys)) return;
+  if (completedEnvScans.has(scanKey)) return;
+  completedEnvScans.add(scanKey);
 
   let dir = path.resolve(process.cwd());
   for (let i = 0; i < 16; i++) {
@@ -54,12 +65,12 @@ export function hydrateGithubOAuthEnvFromAncestors(): void {
       const full = path.join(dir, name);
       if (!fs.existsSync(full)) continue;
       try {
-        applyGithubOAuthFromFile(full);
+        applyEnvFromFile(full, requiredKeys);
       } catch {
         /* unreadable or race; skip */
       }
     }
-    if (process.env.GITHUB_CLIENT_ID?.trim() && process.env.GITHUB_CLIENT_SECRET?.trim()) return;
+    if (allEnvSet(requiredKeys)) return;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;

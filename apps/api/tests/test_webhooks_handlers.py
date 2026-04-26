@@ -1,11 +1,13 @@
+from random import randint
+
 import pytest
 from sqlalchemy import func, select
 from uuid import uuid4
 
-from app.db.models import Review
-from app.db.session import AsyncSessionLocal, set_installation_context
-from app.webhooks.handlers import queue_pull_request_review
-from app.webhooks.schemas import GitHubPullRequestWebhookPayload
+from app.db.models import Installation, Review
+from app.db.session import AsyncSessionLocal, engine, set_installation_context
+from app.webhooks.handlers import queue_pull_request_review, sync_installation_from_webhook
+from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
 
 
 class _FakeJob:
@@ -32,6 +34,53 @@ def _payload(action: str = "opened") -> GitHubPullRequestWebhookPayload:
             "pull_request": {"number": 99, "head": {"sha": head_sha}},
         }
     )
+
+
+def _installation_payload(installation_id: int, action: str) -> GitHubInstallationWebhookPayload:
+    return GitHubInstallationWebhookPayload.model_validate(
+        {
+            "action": action,
+            "installation": {
+                "id": installation_id,
+                "account": {"login": f"acme-{installation_id}", "type": "Organization"},
+            },
+        }
+    )
+
+
+@pytest.mark.anyio
+async def test_sync_installation_from_webhook_tracks_uninstall_and_reinstall() -> None:
+    installation_id = randint(100_000_000, 999_999_999)
+
+    try:
+        await sync_installation_from_webhook(_installation_payload(installation_id, "created"))
+        async with AsyncSessionLocal() as session:
+            await set_installation_context(session, installation_id)
+            installation = await session.scalar(
+                select(Installation).where(Installation.installation_id == installation_id)
+            )
+            assert installation is not None
+            assert installation.suspended_at is None
+
+        await sync_installation_from_webhook(_installation_payload(installation_id, "deleted"))
+        async with AsyncSessionLocal() as session:
+            await set_installation_context(session, installation_id)
+            installation = await session.scalar(
+                select(Installation).where(Installation.installation_id == installation_id)
+            )
+            assert installation is not None
+            assert installation.suspended_at is not None
+
+        await sync_installation_from_webhook(_installation_payload(installation_id, "created"))
+        async with AsyncSessionLocal() as session:
+            await set_installation_context(session, installation_id)
+            installation = await session.scalar(
+                select(Installation).where(Installation.installation_id == installation_id)
+            )
+            assert installation is not None
+            assert installation.suspended_at is None
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.anyio

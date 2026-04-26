@@ -26,14 +26,22 @@ router = APIRouter(prefix="/api/v1", dependencies=[Depends(_verify_api_access)])
 
 
 @router.get("/installations")
-async def list_installations(limit: int = Query(default=50, ge=1, le=100)) -> list[dict[str, object]]:
+async def list_installations(
+    active_only: bool = Query(default=True),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> list[dict[str, object]]:
     async with AsyncSessionLocal() as session:
-        installations = await session.scalars(select(Installation).order_by(Installation.installed_at.desc()).limit(limit))
+        stmt = select(Installation).order_by(Installation.installed_at.desc()).limit(limit)
+        if active_only:
+            stmt = stmt.where(Installation.suspended_at.is_(None))
+        installations = await session.scalars(stmt)
         return [
             {
                 "installation_id": int(item.installation_id),
                 "account_login": item.account_login,
                 "account_type": item.account_type,
+                "active": item.suspended_at is None,
+                "suspended_at": item.suspended_at.isoformat() if item.suspended_at is not None else None,
             }
             for item in installations
         ]

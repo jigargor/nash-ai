@@ -6,7 +6,8 @@ import { useReviews } from "@/hooks/use-reviews";
 
 export default function DashboardHomePage() {
   const installations = useInstallations();
-  const installationId = installations.data?.[0]?.installation_id;
+  const activeInstallations = installations.data?.filter((installation) => installation.active) ?? [];
+  const installationId = activeInstallations[0]?.installation_id;
   const reviews = useReviews(installationId);
   const outcomeSummary = useOutcomeSummary(installationId);
   const totalTokens = (reviews.data ?? []).reduce((sum, review) => sum + (review.tokens_used ?? 0), 0);
@@ -69,9 +70,15 @@ export default function DashboardHomePage() {
           ? `${(outcomeSummary.data.global_metrics.dismiss_rate * 100).toFixed(1)}%`
           : "N/A"}
       </div>
-      <a href="https://github.com/settings/apps" target="_blank" rel="noreferrer">
-        Install GitHub App
-      </a>
+      {activeInstallations.length > 0 ? (
+        <div style={{ color: "var(--text-muted)" }}>
+          GitHub App installed for {activeInstallations.map((installation) => installation.account_login).join(", ")}
+        </div>
+      ) : (
+        <a href="https://github.com/settings/apps" target="_blank" rel="noreferrer">
+          Install GitHub App
+        </a>
+      )}
     </section>
   );
 }

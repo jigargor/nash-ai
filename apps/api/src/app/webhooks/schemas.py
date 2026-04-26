@@ -1,8 +1,14 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class GitHubInstallationAccount(BaseModel):
+    login: str = Field(min_length=1, max_length=255)
+    type: str = Field(min_length=1, max_length=100)
+
+
 class GitHubInstallation(BaseModel):
     id: int = Field(ge=1)
+    account: GitHubInstallationAccount | None = None
 
 
 class GitHubRepositoryOwner(BaseModel):
@@ -39,3 +45,10 @@ class GitHubPullRequestWebhookPayload(BaseModel):
     installation: GitHubInstallation
     repository: GitHubRepository
     pull_request: GitHubPullRequest
+
+
+class GitHubInstallationWebhookPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    action: str = Field(min_length=1, max_length=50)
+    installation: GitHubInstallation

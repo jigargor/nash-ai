@@ -10,8 +10,9 @@ from app.config import settings
 from app.webhooks.handlers import (
     queue_pull_request_outcome_classification,
     queue_pull_request_review,
+    sync_installation_from_webhook,
 )
-from app.webhooks.schemas import GitHubPullRequestWebhookPayload
+from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -45,11 +46,37 @@ async def github_webhook(request: Request) -> dict[str, bool]:
         logger.warning("GitHub webhook signature verification failed event=%s delivery_id=%s", event, delivery_id)
         raise HTTPException(status_code=401, detail="Invalid signature")
 
+    if event == "installation":
+        try:
+            installation_payload = GitHubInstallationWebhookPayload.model_validate_json(payload_bytes)
+        except ValidationError as exc:
+            logger.warning(
+                "GitHub installation webhook payload validation failed delivery_id=%s errors=%s",
+                delivery_id,
+                exc.errors(),
+            )
+            raise HTTPException(status_code=400, detail="Invalid payload")
+
+        if installation_payload.action in {"created", "deleted", "suspend", "unsuspend", "new_permissions_accepted"}:
+            await sync_installation_from_webhook(installation_payload)
+        else:
+            logger.warning(
+                "GitHub installation webhook ignored action=%s delivery_id=%s",
+                installation_payload.action,
+                delivery_id,
+            )
+        logger.info(
+            "Webhook processed delivery_id=%s ack_latency_ms=%s",
+            delivery_id,
+            int((monotonic() - started_at) * 1000),
+        )
+        return {"ok": True}
+
     if event != "pull_request":
         return {"ok": True}
 
     try:
-        payload = GitHubPullRequestWebhookPayload.model_validate_json(payload_bytes)
+        pull_request_payload = GitHubPullRequestWebhookPayload.model_validate_json(payload_bytes)
     except ValidationError as exc:
         logger.warning(
             "GitHub webhook payload validation failed delivery_id=%s errors=%s",
@@ -59,16 +86,20 @@ async def github_webhook(request: Request) -> dict[str, bool]:
         raise HTTPException(status_code=400, detail="Invalid payload")
 
     if settings.log_webhook_payloads and settings.environment != "production":
-        logger.debug("GitHub webhook payload delivery_id=%s payload=%s", delivery_id, payload.model_dump(mode="json"))
+        logger.debug(
+            "GitHub webhook payload delivery_id=%s payload=%s",
+            delivery_id,
+            pull_request_payload.model_dump(mode="json"),
+        )
 
-    if payload.action in {"opened", "synchronize"}:
-        await queue_pull_request_review(request.app.state.redis, payload)
-    elif payload.action == "closed":
-        await queue_pull_request_outcome_classification(request.app.state.redis, payload)
+    if pull_request_payload.action in {"opened", "synchronize"}:
+        await queue_pull_request_review(request.app.state.redis, pull_request_payload)
+    elif pull_request_payload.action == "closed":
+        await queue_pull_request_outcome_classification(request.app.state.redis, pull_request_payload)
     else:
         logger.warning(
             "GitHub pull_request webhook ignored action=%s delivery_id=%s (only opened/synchronize/closed are handled)",
-            payload.action,
+            pull_request_payload.action,
             delivery_id,
         )
 
