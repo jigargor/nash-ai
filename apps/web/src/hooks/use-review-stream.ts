@@ -22,7 +22,9 @@ export function useReviewStream(reviewId: number, installationId: number) {
     if (!reviewId || !installationId) return undefined;
 
     const eventSource = new EventSource(`/api/v1/reviews/${reviewId}/stream?installation_id=${installationId}`);
-    setConnectionState("connected");
+    eventSource.onopen = () => {
+      setConnectionState("connected");
+    };
 
     eventSource.onmessage = (event) => {
       try {

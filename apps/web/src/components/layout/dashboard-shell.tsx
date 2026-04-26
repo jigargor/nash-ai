@@ -62,6 +62,7 @@ export function DashboardShell({ children }: PropsWithChildren) {
               <span>{item.label}</span>
             </Link>
           ))}
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- session cookie clear via API */}
           <a href="/api/v1/auth/logout" className="app-sidebar-link">
             <span>Logout</span>
           </a>

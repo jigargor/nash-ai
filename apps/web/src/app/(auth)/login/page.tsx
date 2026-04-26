@@ -21,6 +21,8 @@ export default function LoginPage() {
         <p style={{ color: "var(--text-muted)" }}>
           Authenticate with your GitHub account to access the review dashboard.
         </p>
+        {/* Full navigation: OAuth route must not use client-side <Link>. */}
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- API OAuth redirect */}
         <a
           href="/api/v1/auth/login"
           style={{
