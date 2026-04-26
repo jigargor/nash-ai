@@ -6,7 +6,11 @@ import { parseSessionToken } from "@/lib/auth/session";
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const pathname = request.nextUrl.pathname;
-  const isDashboardRoute = pathname.startsWith("/dashboard") || pathname.startsWith("/repos");
+  const isDashboardRoute =
+    pathname.startsWith("/dashboard") ||
+    pathname.startsWith("/repos") ||
+    pathname.startsWith("/reviews") ||
+    pathname.startsWith("/settings");
   if (!isDashboardRoute) return NextResponse.next();
 
   const token = request.cookies.get(AUTH_COOKIE_NAME)?.value;
@@ -19,5 +23,5 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/repos/:path*"],
+  matcher: ["/dashboard/:path*", "/repos/:path*", "/reviews/:path*", "/settings/:path*"],
 };

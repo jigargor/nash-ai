@@ -8,6 +8,5 @@ export function useReviews(installationId?: number) {
   return useQuery({
     queryKey: ["reviews", installationId ?? null],
     queryFn: () => fetchReviews(installationId),
-    enabled: installationId !== undefined,
   });
 }
