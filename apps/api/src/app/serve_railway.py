@@ -14,6 +14,7 @@ import uvicorn
 
 def main() -> None:
     port = int(os.environ.get("PORT", "8000"))
+    print(f"serve_railway: binding 0.0.0.0:{port}", flush=True)
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",

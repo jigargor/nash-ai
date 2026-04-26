@@ -10,6 +10,7 @@ from app.config import settings
 from app.db.models import Installation, Review, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.utils import split_repo_full_name as _split_repo_full_name
+from app.queue.connection import require_app_redis
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -330,7 +331,8 @@ async def rerun_review(
             )
 
         owner, repo = _split_repo_full_name(review.repo_full_name)
-        job = await request.app.state.redis.enqueue_job(
+        redis = require_app_redis(request)
+        job = await redis.enqueue_job(
             "review_pr",
             int(review.id),
             int(review.installation_id),

@@ -181,9 +181,8 @@ Review jobs build **layered context** (project → repo profile/additions → di
 
 Backend deployment target: Railway.
 
-- `apps/api/railway.toml` defines API and worker start commands.
-- API start command: `python -m app.serve_railway` (reads `PORT` from the environment; avoids 502s when `$PORT` is not expanded)
-- Worker start command: `arq app.queue.worker.WorkerSettings`
+- `apps/api/railway.toml` is for the **API** only: `python -m app.serve_railway` (reads `PORT`; avoids 502s when `$PORT` is not expanded in the shell).
+- The **ARQ worker** is a second Railway service with the same root directory `apps/api`, but it **must not** use that file or Nixpacks will start the web server. Set the worker’s **config as code** path to `apps/api/railway.worker.json` (or set **Start command** to `python -m arq app.queue.worker.WorkerSettings` and **Healthcheck** to disabled; the JSON file also sets `healthcheckPath` to `null` because the worker has no HTTP port).
 - Set `APP_PRIVATE_KEY_PEM` in Railway variables for both API and worker services.
 - Keep `APP_PRIVATE_KEY_PEM_PATH` for local development fallback only.
 

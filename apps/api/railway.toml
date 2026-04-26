@@ -13,7 +13,8 @@ healthcheckPath = "/health"
 healthcheckTimeout = 180
 restartPolicyType = "ON_FAILURE"
 
-# Deploy the ARQ worker as a separate Railway service (duplicate repo, same root).
-# That service must NOT use an HTTP healthcheck: it has no web server. In the
-# worker service settings set healthcheckPath to empty / disabled, or use a
-# dedicated railway.worker.toml with healthcheckPath = null.
+# ARQ worker (separate Railway service, same root directory apps/api):
+# Point that service at apps/api/railway.worker.json (Settings → Config as code
+# / config file path). That file runs `python -m arq app.queue.worker.WorkerSettings`
+# and sets healthcheckPath to null — do not use this railway.toml for the worker
+# or you will get uvicorn on the worker.

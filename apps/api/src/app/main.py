@@ -15,7 +15,7 @@ from app.api.router import router as api_router
 from app.config import settings
 from app.db.session import engine
 from app.observability import init_observability
-from app.queue.connection import create_redis_pool, format_redis_target
+from app.queue.connection import create_redis_pool, format_redis_target, require_app_redis
 from app.webhooks.router import router as webhook_router
 
 logger = logging.getLogger(__name__)
@@ -50,16 +50,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "Redis pool target %s (worker must use the same REDIS_URL; shell env overrides .env.local).",
         format_redis_target(settings.redis_url),
     )
+    app.state.redis = None
     try:
         app.state.redis = await asyncio.wait_for(create_redis_pool(), timeout=25.0)
-    except TimeoutError as exc:
+    except Exception:
         logger.exception(
-            "Redis connection timed out after 25s; check REDIS_URL and private networking. "
-            "Railway healthchecks need the app to finish startup."
+            "Redis unavailable at startup; HTTP still binds so /health and DB-only webhooks work. "
+            "Fix REDIS_URL for pull_request enqueue, admin retry, and /health/queue."
         )
-        raise RuntimeError("Redis pool connection timed out") from exc
     yield
-    await app.state.redis.close()
+    redis = getattr(app.state, "redis", None)
+    if redis is not None:
+        await redis.close()
     await engine.dispose()
 
 
@@ -91,7 +93,7 @@ async def health_queue(request: Request, x_api_key: str | None = Header(default=
         or not hmac.compare_digest(x_api_key, settings.api_access_key)
     ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key")
-    redis = request.app.state.redis
+    redis = require_app_redis(request)
     queued_jobs = await redis.zcard(redis.default_queue_name)
     return {
         "queue_name": redis.default_queue_name,

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
 from app.config import settings
+from app.queue.connection import require_app_redis
 from app.webhooks.handlers import (
     queue_pull_request_outcome_classification,
     queue_pull_request_review,
@@ -16,6 +17,12 @@ from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullReq
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.get("/github")
+async def github_webhook_probe() -> dict[str, str]:
+    """URL checks and probes often use GET; GitHub deliveries are signed POST requests."""
+    return {"status": "ok", "deliveries": "POST with X-Hub-Signature-256"}
 
 
 def verify_signature(payload: bytes, signature: str) -> bool:
@@ -93,9 +100,11 @@ async def github_webhook(request: Request) -> dict[str, bool]:
         )
 
     if pull_request_payload.action in {"opened", "synchronize"}:
-        await queue_pull_request_review(request.app.state.redis, pull_request_payload)
+        redis = require_app_redis(request)
+        await queue_pull_request_review(redis, pull_request_payload)
     elif pull_request_payload.action == "closed":
-        await queue_pull_request_outcome_classification(request.app.state.redis, pull_request_payload)
+        redis = require_app_redis(request)
+        await queue_pull_request_outcome_classification(redis, pull_request_payload)
     else:
         logger.warning(
             "GitHub pull_request webhook ignored action=%s delivery_id=%s (only opened/synchronize/closed are handled)",

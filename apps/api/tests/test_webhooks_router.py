@@ -56,6 +56,34 @@ async def client(test_app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 
 
 @pytest.mark.anyio
+async def test_github_webhook_get_probe_returns_ok(client: httpx.AsyncClient) -> None:
+    response = await client.get("/webhooks/github")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert "POST" in body["deliveries"]
+
+
+@pytest.mark.anyio
+async def test_github_webhook_pull_request_without_redis_returns_503(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+) -> None:
+    test_app.state.redis = None
+    payload = _payload_bytes(action="opened")
+    response = await client.post(
+        "/webhooks/github",
+        content=payload,
+        headers={
+            "X-Hub-Signature-256": _signature(payload),
+            "X-GitHub-Event": "pull_request",
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Redis unavailable"
+
+
+@pytest.mark.anyio
 async def test_github_webhook_with_valid_signature_and_opened_action_enqueues(
     client: httpx.AsyncClient,
     test_app: FastAPI,

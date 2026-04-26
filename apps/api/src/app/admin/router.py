@@ -4,6 +4,7 @@ import time
 
 from app.config import settings
 from app.db.models import Review
+from app.queue.connection import require_app_redis
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.utils import split_repo_full_name as _split_repo_full_name
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
@@ -28,7 +29,7 @@ def _require_admin_key(x_admin_api_key: str | None) -> None:
 async def _check_admin_rate_limit(request: Request) -> None:
     client_ip = request.client.host if request.client else "unknown"
     key = f"admin:retry:{client_ip}"
-    redis = request.app.state.redis
+    redis = require_app_redis(request)
     now = time.time()
     cutoff = now - _ADMIN_RATE_WINDOW
     pipe = redis.pipeline()
@@ -85,7 +86,8 @@ async def retry_review(
                 detail="No LLM API key configured (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)",
             )
 
-        job = await request.app.state.redis.enqueue_job(
+        redis = require_app_redis(request)
+        job = await redis.enqueue_job(
             "review_pr",
             int(review.id),
             int(review.installation_id),
