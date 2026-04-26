@@ -39,6 +39,7 @@ export interface ReviewResult {
   findings: Finding[];
   summary: string;
   tokens_used: number;
+  model_provider?: "anthropic" | "openai" | "gemini";
   model: string;
 }
 

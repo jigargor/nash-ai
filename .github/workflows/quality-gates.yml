@@ -74,7 +74,7 @@ jobs:
       - name: Migrations
         run: uv run alembic upgrade head
       - name: Pytest
-        run: uv run pytest --cov=src/app/agent --cov-report=term-missing --cov-fail-under=66
+        run: uv run pytest --cov=src/app/agent --cov=src/app/telemetry --cov=src/app/api --cov-report=term-missing --cov-fail-under=60
       - name: Bandit
         run: uv run bandit -r src
 
@@ -95,6 +95,8 @@ jobs:
         run: pnpm --filter web lint
       - name: Web typecheck
         run: pnpm --filter web typecheck
+      - name: Web tests
+        run: pnpm --filter web test
 
   evals:
     runs-on: ubuntu-latest

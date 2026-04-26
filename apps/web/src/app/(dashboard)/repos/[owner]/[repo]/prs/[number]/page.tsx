@@ -12,8 +12,10 @@ interface PrDetailPageProps {
 }
 
 export default function PrDetailPage({ params, searchParams }: PrDetailPageProps) {
-  const fallbackReviewId = Number(params.number) || 1;
-  const reviewId = Number(searchParams.reviewId ?? fallbackReviewId);
+  const reviewId = Number(searchParams.reviewId);
+  if (!Number.isInteger(reviewId) || reviewId <= 0) {
+    throw new Error("Missing or invalid reviewId query parameter.");
+  }
 
   return <PrReviewPageClient owner={params.owner} repo={params.repo} prNumber={params.number} reviewId={reviewId} />;
 }
