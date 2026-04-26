@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReviewStreamEvent } from "@/hooks/use-review-stream";
+import { Panel } from "@/components/ui/panel";
 
 interface ReviewTimelineProps {
   events: ReviewStreamEvent[];
@@ -8,14 +9,7 @@ interface ReviewTimelineProps {
 
 export function ReviewTimeline({ events }: ReviewTimelineProps) {
   return (
-    <section
-      style={{
-        border: "1px solid var(--border)",
-        borderRadius: "0.75rem",
-        background: "var(--card)",
-        padding: "0.75rem",
-      }}
-    >
+    <Panel>
       <h3 style={{ marginTop: 0 }}>Agent timeline</h3>
       {events.length === 0 ? <p style={{ color: "var(--text-muted)" }}>Waiting for stream events...</p> : null}
       {events.map((event, index) => (
@@ -25,6 +19,6 @@ export function ReviewTimeline({ events }: ReviewTimelineProps) {
           {event.message ? ` · ${event.message}` : ""}
         </div>
       ))}
-    </section>
+    </Panel>
   );
 }

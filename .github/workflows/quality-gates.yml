@@ -46,7 +46,7 @@ jobs:
       GITHUB_WEBHOOK_SECRET: ${{ secrets.APP_WEBHOOK_SECRET || 'test-webhook-secret' }}
       GITHUB_CLIENT_ID: ${{ secrets.APP_CLIENT_ID || 'test-client-id' }}
       GITHUB_CLIENT_SECRET: ${{ secrets.APP_CLIENT_SECRET || 'test-client-secret' }}
-      GITHUB_PRIVATE_KEY_PATH: private-key.pem
+      APP_PRIVATE_KEY_PEM_PATH: private-key.pem
       FERNET_KEY: 4nYA5RU2f22W4DvwW8Hpt4W6YKfYwQMUqlGQv6ygfA4=
       ANTHROPIC_API_KEY: test-anthropic-key
       ENVIRONMENT: development

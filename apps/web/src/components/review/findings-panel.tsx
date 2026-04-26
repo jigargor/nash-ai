@@ -2,6 +2,8 @@
 
 import type { Finding, FindingOutcome } from "@ai-code-review/shared-types";
 
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useReviewUiStore } from "@/stores/review-ui-store";
 
 interface FindingsPanelProps {
@@ -40,44 +42,37 @@ export function FindingsPanel({
   const severities = [...new Set(findings.map((finding) => finding.severity))];
   const categories = [...new Set(findings.map((finding) => finding.category))];
 
+  function severityVariant(value: Finding["severity"]): "critical" | "high" | "medium" | "low" | "info" {
+    if (value === "critical" || value === "high" || value === "medium" || value === "low") return value;
+    return "info";
+  }
+
   return (
     <section style={{ borderLeft: "1px solid var(--border)", padding: "0.75rem", overflowY: "auto" }}>
       <h3 style={{ marginTop: 0 }}>Findings</h3>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.6rem" }}>
         {severities.map((severity) => (
-          <button
+          <Button
             key={severity}
-            type="button"
+            variant="ghost"
             onClick={() => toggleSeverityFilter(severity)}
-            style={{
-              border: "1px solid var(--border)",
-              borderRadius: "999px",
-              background: severityFilters[severity] ? "rgba(245, 158, 11, 0.3)" : "transparent",
-              color: "inherit",
-              padding: "0.2rem 0.6rem",
-            }}
+            className={severityFilters[severity] ? "button-primary" : ""}
           >
             {severity}
-          </button>
+          </Button>
         ))}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.8rem" }}>
         {categories.map((category) => (
-          <button
+          <Button
             key={category}
-            type="button"
+            variant="ghost"
             onClick={() => toggleCategoryFilter(category)}
-            style={{
-              border: "1px solid var(--border)",
-              borderRadius: "999px",
-              background: categoryFilters[category] ? "rgba(245, 158, 11, 0.3)" : "transparent",
-              color: "inherit",
-              padding: "0.2rem 0.6rem",
-            }}
+            className={categoryFilters[category] ? "button-primary" : ""}
           >
             {category}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -98,9 +93,10 @@ export function FindingsPanel({
             onClick={() => onSelectFinding(index)}
             style={{ background: "transparent", border: "none", color: "inherit", width: "100%", textAlign: "left" }}
           >
-            <strong>
-              {finding.severity.toUpperCase()} · {finding.category}
-            </strong>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
+              <Badge variant={severityVariant(finding.severity)}>{finding.severity.toUpperCase()}</Badge>
+              <strong>{finding.category}</strong>
+            </div>
             <div style={{ marginTop: "0.25rem" }}>{finding.message}</div>
             <div style={{ marginTop: "0.25rem", color: "var(--text-muted)" }}>
               {finding.file_path}:{finding.line_start}
@@ -110,32 +106,18 @@ export function FindingsPanel({
             </div>
           </button>
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
               onClick={() => onCopySuggestion(index)}
-              style={{
-                border: "1px solid var(--border)",
-                borderRadius: "0.375rem",
-                background: "transparent",
-                color: "inherit",
-                padding: "0.25rem 0.5rem",
-              }}
             >
               Copy suggestion
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="danger"
               onClick={() => onDismiss(index)}
-              style={{
-                border: "1px solid var(--border)",
-                borderRadius: "0.375rem",
-                background: "transparent",
-                color: "inherit",
-                padding: "0.25rem 0.5rem",
-              }}
             >
               Dismiss
-            </button>
+            </Button>
           </div>
         </article>
       ))}

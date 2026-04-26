@@ -1,4 +1,5 @@
 import { PrReviewPageClient } from "@/components/review/pr-review-page-client";
+import { StateBlock } from "@/components/ui/state-block";
 
 interface PrDetailPageProps {
   params: Promise<{
@@ -21,14 +22,10 @@ export default async function PrDetailPage({ params, searchParams }: PrDetailPag
   const installationId = Number(installationIdRaw);
   if (!Number.isInteger(reviewId) || reviewId <= 0 || !Number.isInteger(installationId) || installationId <= 0) {
     return (
-      <section style={{ padding: "1rem" }}>
-        <h1>
-          {owner}/{repo} PR #{number}
-        </h1>
-        <p style={{ color: "var(--text-muted)" }}>
-          Open this pull request from the dashboard review list so the matching review can be loaded.
-        </p>
-      </section>
+      <StateBlock
+        title={`${owner}/${repo} · PR #${number}`}
+        description="Open this pull request from the dashboard review list so the matching review context can be loaded."
+      />
     );
   }
 
