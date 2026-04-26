@@ -30,7 +30,8 @@ const csp = [
   "frame-ancestors 'none'",
   "img-src 'self' data: https:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  // Allow HTTPS APIs when NEXT_PUBLIC_* points at Railway (or OAuth); prefer same-origin /api/* via BFF.
+  "connect-src 'self' https:",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
 ].join("; ");

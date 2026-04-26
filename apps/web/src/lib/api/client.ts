@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.trim() ?? "";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") ?? "";
 
 export class ApiError extends Error {
   status: number;
@@ -9,8 +9,17 @@ export class ApiError extends Error {
   }
 }
 
+function resolveApiRequestUrl(path: string): string {
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  // Dashboard data must hit the Next.js BFF (`/api/v1/*` routes) so cookies and `X-Api-Key` work.
+  // Never merge NEXT_PUBLIC_API_BASE with `/api/…` or the browser CSP blocks cross-origin connects.
+  if (path.startsWith("/api/")) return path;
+  if (!API_BASE) return path;
+  return path.startsWith("/") ? `${API_BASE}${path}` : `${API_BASE}/${path}`;
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const requestUrl = path.startsWith("/api/") ? path : `${API_BASE}${path}`;
+  const requestUrl = resolveApiRequestUrl(path);
   const response = await fetch(requestUrl, {
     ...init,
     headers: {

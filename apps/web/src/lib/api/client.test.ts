@@ -21,4 +21,15 @@ describe("apiFetch", () => {
 
     await expect(apiFetch("/api/v1/reviews")).rejects.toBeInstanceOf(ApiError);
   });
+
+  it("does not send /api/* to NEXT_PUBLIC_API_BASE (same-origin BFF + CSP)", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_API_BASE", "https://nash-ai-api-production.up.railway.app");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    const { apiFetch: apiFetchFresh } = await import("./client");
+    await apiFetchFresh("/api/v1/reviews");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/v1/reviews");
+  });
 });
