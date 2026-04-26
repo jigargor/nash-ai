@@ -6,7 +6,8 @@ builder = "NIXPACKS"
 buildCommand = ". /opt/venv/bin/activate && pip install ."
 
 [deploy]
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+# Use Python to read PORT — some runners do not expand `$PORT` in the shell.
+startCommand = "python -m app.serve_railway"
 healthcheckPath = "/health"
 # Allow Redis + migrations + cold start; 30s is often too tight on Railway.
 healthcheckTimeout = 180

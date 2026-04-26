@@ -182,7 +182,7 @@ Review jobs build **layered context** (project → repo profile/additions → di
 Backend deployment target: Railway.
 
 - `apps/api/railway.toml` defines API and worker start commands.
-- API start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- API start command: `python -m app.serve_railway` (reads `PORT` from the environment; avoids 502s when `$PORT` is not expanded)
 - Worker start command: `arq app.queue.worker.WorkerSettings`
 - Set `APP_PRIVATE_KEY_PEM` in Railway variables for both API and worker services.
 - Keep `APP_PRIVATE_KEY_PEM_PATH` for local development fallback only.
