@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     db_pool_timeout_seconds: int = 30
     db_pool_recycle_seconds: int = 1800
     db_command_timeout_seconds: int = 30
+    # asyncpg connect establishment timeout (avoid long hangs before pool timeout / LB 502).
+    db_connect_timeout_seconds: int = 15
     db_statement_timeout_ms: int | None = None
     redis_url: str = "redis://localhost:6379"
     fernet_key: str
@@ -94,6 +96,14 @@ class Settings(BaseSettings):
         if v is None:
             return None
         text = str(v).strip()
+        return text or None
+
+    @field_validator("web_app_url", mode="before")
+    @classmethod
+    def normalize_web_app_url(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        text = str(v).strip().rstrip("/")
         return text or None
 
     @model_validator(mode="after")

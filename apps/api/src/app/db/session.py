@@ -7,7 +7,10 @@ from sqlalchemy.orm import DeclarativeBase
 from app.config import settings
 from app.db.url import normalize_asyncpg_database_url
 
-connect_args: dict[str, object] = {"command_timeout": settings.db_command_timeout_seconds}
+connect_args: dict[str, object] = {
+    "timeout": settings.db_connect_timeout_seconds,
+    "command_timeout": settings.db_command_timeout_seconds,
+}
 if settings.db_statement_timeout_ms is not None:
     connect_args["server_settings"] = {"statement_timeout": str(settings.db_statement_timeout_ms)}
 

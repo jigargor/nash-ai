@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_observability("api")
+    if (
+        settings.environment.lower() == "production"
+        and settings.api_access_key
+        and not settings.web_app_url
+    ):
+        logger.warning(
+            "WEB_APP_URL is unset in production. Browser traffic to this API (OPTIONS preflight, fetch) "
+            "will miss CORS headers; set WEB_APP_URL to the exact frontend origin (e.g. https://nash-ai.app)."
+        )
     # Database schema is managed by Alembic migrations.
     db = urlparse(settings.database_url)
     logger.info(
