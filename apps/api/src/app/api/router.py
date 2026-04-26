@@ -2,6 +2,9 @@ import asyncio
 import hmac
 import json
 from collections.abc import AsyncIterator
+from datetime import datetime
+from decimal import Decimal
+from typing import TypedDict
 
 from app.config import settings
 from app.db.models import Installation, Review, ReviewModelAudit
@@ -11,6 +14,7 @@ from app.telemetry.finding_outcomes import list_review_finding_outcomes, summari
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
@@ -25,16 +29,55 @@ def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(_verify_api_access)])
 
 
+class RepoAccumulator(TypedDict):
+    installation_id: int
+    repo_full_name: str
+    review_count: int
+    failed_review_count: int
+    total_tokens: int
+    estimated_cost_usd: Decimal
+    latest_review_id: int
+    latest_pr_number: int
+    latest_status: str
+    last_review_at: datetime
+
+
+async def _list_installation_rows(
+    session: AsyncSession,
+    *,
+    active_only: bool = True,
+    limit: int = 100,
+) -> list[Installation]:
+    stmt = select(Installation).order_by(Installation.installed_at.desc()).limit(limit)
+    if active_only:
+        stmt = stmt.where(Installation.suspended_at.is_(None))
+    rows = await session.scalars(stmt)
+    return list(rows)
+
+
+def _review_list_item(review: Review) -> dict[str, object]:
+    return {
+        "id": int(review.id),
+        "installation_id": int(review.installation_id),
+        "repo_full_name": review.repo_full_name,
+        "pr_number": int(review.pr_number),
+        "status": review.status,
+        "model_provider": review.model_provider,
+        "model": review.model,
+        "tokens_used": int(review.tokens_used) if review.tokens_used is not None else None,
+        "cost_usd": str(review.cost_usd) if review.cost_usd is not None else None,
+        "created_at": review.created_at.isoformat(),
+        "completed_at": review.completed_at.isoformat() if review.completed_at is not None else None,
+    }
+
+
 @router.get("/installations")
 async def list_installations(
     active_only: bool = Query(default=True),
     limit: int = Query(default=50, ge=1, le=100),
 ) -> list[dict[str, object]]:
     async with AsyncSessionLocal() as session:
-        stmt = select(Installation).order_by(Installation.installed_at.desc()).limit(limit)
-        if active_only:
-            stmt = stmt.where(Installation.suspended_at.is_(None))
-        installations = await session.scalars(stmt)
+        installations = await _list_installation_rows(session, active_only=active_only, limit=limit)
         return [
             {
                 "installation_id": int(item.installation_id),
@@ -47,31 +90,102 @@ async def list_installations(
         ]
 
 
+@router.get("/repos")
+async def list_repos(
+    installation_id: int | None = Query(default=None, ge=1),
+    active_only: bool = Query(default=True),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict[str, object]]:
+    async with AsyncSessionLocal() as session:
+        if installation_id is not None:
+            installation_ids = [installation_id]
+        else:
+            installations = await _list_installation_rows(session, active_only=active_only, limit=100)
+            installation_ids = [int(item.installation_id) for item in installations]
+
+        repos: dict[tuple[int, str], RepoAccumulator] = {}
+        for current_installation_id in installation_ids:
+            await set_installation_context(session, current_installation_id)
+            rows = await session.scalars(
+                select(Review)
+                .where(Review.installation_id == current_installation_id)
+                .order_by(Review.created_at.desc())
+                .limit(limit)
+            )
+            for review in rows:
+                key = (int(review.installation_id), review.repo_full_name)
+                repo = repos.setdefault(
+                    key,
+                    {
+                        "installation_id": int(review.installation_id),
+                        "repo_full_name": review.repo_full_name,
+                        "review_count": 0,
+                        "failed_review_count": 0,
+                        "total_tokens": 0,
+                        "estimated_cost_usd": Decimal("0"),
+                        "latest_review_id": int(review.id),
+                        "latest_pr_number": int(review.pr_number),
+                        "latest_status": review.status,
+                        "last_review_at": review.created_at,
+                    },
+                )
+                repo["review_count"] += 1
+                if review.status == "failed":
+                    repo["failed_review_count"] += 1
+                repo["total_tokens"] += int(review.tokens_used or 0)
+                repo["estimated_cost_usd"] += Decimal(str(review.cost_usd or 0))
+
+                if review.created_at >= repo["last_review_at"]:
+                    repo["latest_review_id"] = int(review.id)
+                    repo["latest_pr_number"] = int(review.pr_number)
+                    repo["latest_status"] = review.status
+                    repo["last_review_at"] = review.created_at
+
+        sorted_repos = sorted(
+            repos.values(),
+            key=lambda item: item["last_review_at"],
+            reverse=True,
+        )
+        return [
+            {
+                **repo,
+                "estimated_cost_usd": str(repo["estimated_cost_usd"]),
+                "last_review_at": repo["last_review_at"].isoformat(),
+            }
+            for repo in sorted_repos[:limit]
+        ]
+
+
 @router.get("/reviews")
 async def list_reviews(
     installation_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict[str, object]]:
     async with AsyncSessionLocal() as session:
-        stmt = select(Review).order_by(Review.created_at.desc()).limit(limit)
         if installation_id is not None:
             await set_installation_context(session, installation_id)
-            stmt = stmt.where(Review.installation_id == installation_id)
-        reviews = await session.scalars(stmt)
-        return [
-            {
-                "id": int(review.id),
-                "installation_id": int(review.installation_id),
-                "repo_full_name": review.repo_full_name,
-                "pr_number": int(review.pr_number),
-                "status": review.status,
-                "model_provider": review.model_provider,
-                "model": review.model,
-                "tokens_used": int(review.tokens_used) if review.tokens_used is not None else None,
-                "cost_usd": str(review.cost_usd) if review.cost_usd is not None else None,
-            }
-            for review in reviews
-        ]
+            reviews = await session.scalars(
+                select(Review)
+                .where(Review.installation_id == installation_id)
+                .order_by(Review.created_at.desc())
+                .limit(limit)
+            )
+            return [_review_list_item(review) for review in reviews]
+
+        installations = await _list_installation_rows(session, active_only=True, limit=100)
+        all_reviews: list[Review] = []
+        for installation in installations:
+            await set_installation_context(session, int(installation.installation_id))
+            reviews = await session.scalars(
+                select(Review)
+                .where(Review.installation_id == int(installation.installation_id))
+                .order_by(Review.created_at.desc())
+                .limit(limit)
+            )
+            all_reviews.extend(reviews)
+
+        all_reviews.sort(key=lambda review: review.created_at, reverse=True)
+        return [_review_list_item(review) for review in all_reviews[:limit]]
 
 
 @router.get("/reviews/{review_id}")

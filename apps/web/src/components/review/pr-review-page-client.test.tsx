@@ -53,6 +53,14 @@ vi.mock("@/hooks/use-review-stream", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-review-model-audits", () => ({
+  useReviewModelAudits: () => ({
+    data: {
+      model_audits: [],
+    },
+  }),
+}));
+
 vi.mock("@/hooks/use-review-actions", () => ({
   useRerunReview: () => ({
     mutate: vi.fn(),
