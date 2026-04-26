@@ -12,7 +12,12 @@ export interface SessionPayload {
 }
 
 function getSessionSecret(): string {
-  return process.env.AUTH_SESSION_SECRET ?? "dev-insecure-session-secret";
+  const secret = process.env.AUTH_SESSION_SECRET?.trim();
+  if (secret) return secret;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("Missing AUTH_SESSION_SECRET in production");
+  }
+  return "dev-insecure-session-secret";
 }
 
 let hmacKeyPromise: Promise<CryptoKey> | null = null;

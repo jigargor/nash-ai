@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.trim() ?? "";
 
 export class ApiError extends Error {
   status: number;
@@ -10,7 +10,8 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const requestUrl = path.startsWith("/api/") ? path : `${API_BASE}${path}`;
+  const response = await fetch(requestUrl, {
     ...init,
     headers: {
       "Content-Type": "application/json",

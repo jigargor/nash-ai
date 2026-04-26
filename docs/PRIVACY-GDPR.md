@@ -46,3 +46,10 @@ Support export and deletion workflows at the tenant/account level, including:
 - review findings
 - model audit records
 - OAuth-linked account data
+
+## Cookies and Consent
+
+- Current dashboard auth uses an essential httpOnly session cookie (`nash_session`) with `sameSite=lax`.
+- Essential cookies used strictly for authentication/session security are generally exempt from opt-in consent in many jurisdictions.
+- If you add analytics, marketing, A/B testing, or cross-site tracking cookies, implement a consent banner before setting those cookies.
+- Publish a user-facing cookie notice that explains cookie purpose, lifetime, and how users can revoke optional consent.
