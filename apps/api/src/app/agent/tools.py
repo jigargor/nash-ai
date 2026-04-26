@@ -62,6 +62,13 @@ OSV_ECOSYSTEM_MAP = {
 }
 
 
+def _normalize_repo_path(raw_path: object) -> str:
+    path = str(raw_path).strip().replace("\\", "/")
+    if not path or path.startswith("/") or ".." in path.split("/"):
+        raise ValueError("invalid path")
+    return path
+
+
 async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str, Any]) -> str:
     try:
         gh: GitHubClient = context["github_client"]
@@ -70,7 +77,7 @@ async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str,
         head_sha: str = context["head_sha"]
 
         if name == "fetch_file_content":
-            path = tool_input["path"]
+            path = _normalize_repo_path(tool_input["path"])
             normalized_content = normalize_file_content(await gh.get_file_content(owner, repo, path, head_sha))
             fetched_files = context.setdefault("fetched_files", {})
             if isinstance(fetched_files, dict):
@@ -85,7 +92,7 @@ async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str,
             return json.dumps(normalized)
 
         if name == "get_file_history":
-            path = tool_input["path"]
+            path = _normalize_repo_path(tool_input["path"])
             commits = await gh.get_file_history(owner, repo, path)
             normalized = [
                 {

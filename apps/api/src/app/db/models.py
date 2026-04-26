@@ -71,6 +71,7 @@ class Review(Base):
     pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
     pr_head_sha: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, server_default="queued")
+    model_provider: Mapped[str] = mapped_column(Text, nullable=False, server_default="anthropic")
     model: Mapped[str] = mapped_column(Text, nullable=False)
     findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     debug_artifacts: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
@@ -78,6 +79,32 @@ class Review(Base):
     cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class ReviewModelAudit(Base):
+    __tablename__ = "review_model_audits"
+    __table_args__ = (
+        Index("review_model_audits_review_stage", "review_id", "stage"),
+        Index("review_model_audits_provider_model", "provider", "model"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    review_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("reviews.id"), nullable=False)
+    installation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    findings_count: Mapped[int | None] = mapped_column(Integer)
+    accepted_findings_count: Mapped[int | None] = mapped_column(Integer)
+    conflict_score: Mapped[int | None] = mapped_column(Integer)
+    decision: Mapped[str | None] = mapped_column(Text)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

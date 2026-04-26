@@ -440,6 +440,7 @@ async def summarize_finding_outcomes(
     confidence_bucket_breakdown: dict[str, dict[str, int]] = {}
     vendor_claim_breakdown: dict[str, dict[str, int]] = {}
     model_breakdown: dict[str, dict[str, int]] = {}
+    provider_breakdown: dict[str, dict[str, int]] = {}
     repo_breakdown: dict[str, dict[str, int]] = {}
     prompt_version_breakdown: dict[str, dict[str, int]] = {}
 
@@ -463,6 +464,7 @@ async def summarize_finding_outcomes(
         _increment_breakdown(confidence_bucket_breakdown, _confidence_bucket(confidence), outcome_row.outcome)
         _increment_breakdown(vendor_claim_breakdown, "vendor" if is_vendor_claim else "non_vendor", outcome_row.outcome)
         _increment_breakdown(model_breakdown, review.model, outcome_row.outcome)
+        _increment_breakdown(provider_breakdown, str(review.model_provider), outcome_row.outcome)
         _increment_breakdown(repo_breakdown, review.repo_full_name, outcome_row.outcome)
         _increment_breakdown(prompt_version_breakdown, prompt_version, outcome_row.outcome)
 
@@ -489,6 +491,7 @@ async def summarize_finding_outcomes(
             "confidence_bucket": confidence_bucket_breakdown,
             "is_vendor_claim": vendor_claim_breakdown,
             "model": model_breakdown,
+            "provider": provider_breakdown,
             "repo": repo_breakdown,
             "prompt_version": prompt_version_breakdown,
         },

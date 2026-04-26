@@ -10,6 +10,8 @@ from app.agent.runner import (
     _apply_review_config_filters,
     _apply_confidence_threshold,
     _attach_debug_artifacts,
+    _calculate_conflict_score,
+    _merge_debate_results,
     _mark_review_done,
     _repair_findings_from_files,
     _summarize_target_line_mismatch_subtypes,
@@ -98,6 +100,7 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
         threshold=85,
         context_telemetry=ContextTelemetry(anchor_coverage=1.0),
         mismatch_subtypes={"target_line_mismatch_whitespace": 1},
+        debate_conflict_score=28,
     )
     artifacts = context["debug_artifacts"]
     assert artifacts["generated_findings_count"] == 4
@@ -115,6 +118,7 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
     assert artifacts["confidence_dropped"][0]["file_path"] == "low.py"
     assert artifacts["target_line_mismatch_subtypes"]["target_line_mismatch_whitespace"] == 1
     assert artifacts["acceptance_quality_check"]["target_sample_size"] == 50
+    assert artifacts["debate_conflict_score"] == 28
 
 
 def test_repair_findings_from_files_rewrites_line_start_when_match_in_window() -> None:
@@ -165,6 +169,7 @@ def test_summarize_target_line_mismatch_subtypes_breaks_down_reasons() -> None:
 async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.MonkeyPatch) -> None:
     review = SimpleNamespace(
         status="running",
+        model_provider="anthropic",
         model="claude-sonnet-4-5",
         findings=None,
         debug_artifacts=None,
@@ -209,6 +214,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
     await _mark_review_done(ReviewResult(findings=[], summary="ok"), context, "done", review_config)
 
     assert review.status == "done"
+    assert review.model_provider == "anthropic"
     assert review.model == "claude-3-5-haiku-latest"
 
 
@@ -273,3 +279,19 @@ def test_apply_review_config_filters_enforces_category_severity_ignore_and_cap()
     filtered = _apply_review_config_filters(result, config)
     assert len(filtered.findings) == 1
     assert filtered.findings[0].file_path == "src/auth.py"
+
+
+def test_calculate_conflict_score_accounts_for_overlap() -> None:
+    primary = [_finding("a.py"), _finding("b.py")]
+    challenger = [_finding("a.py"), _finding("c.py")]
+    score = _calculate_conflict_score(primary, challenger)
+    assert score == 50
+
+
+def test_merge_debate_results_keeps_consensus_findings() -> None:
+    primary = ReviewResult(findings=[_finding("a.py"), _finding("b.py")], summary="Primary")
+    challenger = ReviewResult(findings=[_finding("a.py"), _finding("c.py")], summary="Challenger")
+    tie_break = ReviewResult(findings=[_finding("a.py"), _finding("c.py")], summary="Tie")
+    merged = _merge_debate_results(primary=primary, challenger=challenger, tie_break=tie_break)
+    assert len(merged.findings) == 2
+    assert {item.file_path for item in merged.findings} == {"a.py", "c.py"}

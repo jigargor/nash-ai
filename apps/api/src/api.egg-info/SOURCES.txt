@@ -13,13 +13,16 @@ src/app/admin/router.py
 src/app/agent/__init__.py
 src/app/agent/acknowledgments.py
 src/app/agent/config_cache.py
+src/app/agent/constants.py
 src/app/agent/context_builder.py
 src/app/agent/diff_parser.py
 src/app/agent/editor.py
+src/app/agent/exceptions.py
 src/app/agent/finalize.py
 src/app/agent/loop.py
 src/app/agent/normalization.py
 src/app/agent/profiler.py
+src/app/agent/profiler_cache.py
 src/app/agent/review_config.py
 src/app/agent/runner.py
 src/app/agent/schema.py
@@ -40,6 +43,7 @@ src/app/github/auth.py
 src/app/github/client.py
 src/app/github/comments.py
 src/app/github/smoke_check.py
+src/app/github/utils.py
 src/app/queue/connection.py
 src/app/queue/recovery.py
 src/app/queue/worker.py
@@ -65,8 +69,10 @@ tests/test_diff_parser.py
 tests/test_github_auth.py
 tests/test_github_comments.py
 tests/test_github_live_auth.py
+tests/test_integration_review_flow.py
 tests/test_queue_recovery.py
 tests/test_ratelimit.py
+tests/test_telemetry_audit.py
 tests/test_text_sanitizer.py
 tests/test_webhooks_handlers.py
 tests/test_webhooks_router.py

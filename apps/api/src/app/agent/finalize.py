@@ -3,13 +3,17 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.agent.review_config import DEFAULT_MODEL_NAME
+from app.agent.provider_clients import (
+    anthropic_tools_to_openai_tools,
+    create_openai_compatible_client,
+    get_provider_api_key,
+    parse_openai_tool_arguments,
+)
+from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.schema import ReviewResult
 from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
-from app.config import settings
 from app.observability import create_async_anthropic_client
 
-client = create_async_anthropic_client(settings.anthropic_api_key)
 logger = logging.getLogger(__name__)
 
 FINAL_TOOL = {
@@ -25,9 +29,40 @@ async def finalize_review(
     context: dict[str, Any],
     *,
     model_name: str = DEFAULT_MODEL_NAME,
+    provider: ModelProvider = "anthropic",
     validation_feedback: str | None = None,
     allow_retry: bool = True,
 ) -> ReviewResult:
+    if provider in {"openai", "gemini"}:
+        return await _finalize_openai_compatible(
+            system_prompt=system_prompt,
+            messages=messages,
+            context=context,
+            model_name=model_name,
+            provider=provider,
+            validation_feedback=validation_feedback,
+            allow_retry=allow_retry,
+        )
+    return await _finalize_anthropic(
+        system_prompt=system_prompt,
+        messages=messages,
+        context=context,
+        model_name=model_name,
+        validation_feedback=validation_feedback,
+        allow_retry=allow_retry,
+    )
+
+
+async def _finalize_anthropic(
+    *,
+    system_prompt: str,
+    messages: list[dict[str, Any]],
+    context: dict[str, Any],
+    model_name: str,
+    validation_feedback: str | None,
+    allow_retry: bool,
+) -> ReviewResult:
+    client = create_async_anthropic_client(get_provider_api_key("anthropic"))
     final_prompt = "Now submit your final review using the submit_review tool."
     if validation_feedback:
         final_prompt = (
@@ -71,10 +106,85 @@ async def finalize_review(
                         messages=messages,
                         context=context,
                         model_name=model_name,
+                        provider="anthropic",
                         validation_feedback=retry_feedback,
                         allow_retry=False,
                     )
                 raise RuntimeError("Final review schema validation failed after retry") from exc
+    raise RuntimeError("Model did not return submit_review tool output")
+
+
+async def _finalize_openai_compatible(
+    *,
+    system_prompt: str,
+    messages: list[dict[str, Any]],
+    context: dict[str, Any],
+    model_name: str,
+    provider: ModelProvider,
+    validation_feedback: str | None,
+    allow_retry: bool,
+) -> ReviewResult:
+    client = create_openai_compatible_client(provider)
+    final_prompt = "Now submit your final review using the submit_review tool."
+    if validation_feedback:
+        final_prompt = (
+            "Regenerate the final review. Previous findings failed validation checks.\n"
+            f"{validation_feedback}\n\n"
+            "Now submit your corrected review using the submit_review tool."
+        )
+    openai_messages = list(messages)
+    has_system = bool(openai_messages and openai_messages[0].get("role") == "system")
+    if not has_system:
+        openai_messages.insert(0, {"role": "system", "content": system_prompt})
+    openai_messages.append({"role": "user", "content": final_prompt})
+
+    openai_messages_any: Any = openai_messages
+    openai_tools_any: Any = anthropic_tools_to_openai_tools([FINAL_TOOL])
+    openai_tool_choice_any: Any = {"type": "function", "function": {"name": "submit_review"}}
+    response = await client.chat.completions.create(
+        model=model_name,
+        temperature=0,
+        messages=openai_messages_any,
+        tools=openai_tools_any,
+        tool_choice=openai_tool_choice_any,
+    )
+    usage = response.usage
+    if usage is not None:
+        context["input_tokens"] = context.get("input_tokens", 0) + int(usage.prompt_tokens or 0)
+        context["output_tokens"] = context.get("output_tokens", 0) + int(usage.completion_tokens or 0)
+        context["tokens_used"] = context.get("tokens_used", 0) + int(usage.total_tokens or 0)
+    if not response.choices:
+        raise RuntimeError("Model did not return submit_review output")
+    message = response.choices[0].message
+    for call in list(message.tool_calls or []):
+        function_obj = getattr(call, "function", None)
+        function_name = getattr(function_obj, "name", None)
+        function_arguments = getattr(function_obj, "arguments", "{}")
+        if function_name != "submit_review":
+            continue
+        repaired_input = _repair_review_input(
+            parse_openai_tool_arguments(function_arguments if isinstance(function_arguments, str) else "{}")
+        )
+        try:
+            return ReviewResult.model_validate(repaired_input)
+        except ValidationError as exc:
+            logger.warning("Final review validation failed: %s", exc)
+            if allow_retry:
+                retry_feedback = _build_schema_feedback(exc)
+                if validation_feedback:
+                    retry_feedback = f"{validation_feedback}\n\n{retry_feedback}"
+                return await finalize_review(
+                    system_prompt=system_prompt,
+                    messages=messages,
+                    context=context,
+                    model_name=model_name,
+                    provider=provider,
+                    validation_feedback=retry_feedback,
+                    allow_retry=False,
+                )
+            raise RuntimeError("Final review schema validation failed after retry") from exc
+    if message.content:
+        logger.warning("submit_review tool missing; raw content excerpt=%s", str(message.content)[:200])
     raise RuntimeError("Model did not return submit_review tool output")
 
 

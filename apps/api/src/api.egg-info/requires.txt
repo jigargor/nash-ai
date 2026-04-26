@@ -17,6 +17,7 @@ pyyaml>=6.0.3
 tree-sitter-language-pack>=1.6.2
 langfuse>=2.60.0
 sentry-sdk[fastapi]>=2.20.0
+openai>=2.32.0
 
 [dev]
 pytest>=9.0.0

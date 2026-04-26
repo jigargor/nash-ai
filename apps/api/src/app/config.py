@@ -46,7 +46,12 @@ class Settings(BaseSettings):
     db_statement_timeout_ms: int | None = None
     redis_url: str = "redis://localhost:6379"
     fernet_key: str
-    anthropic_api_key: str
+    anthropic_api_key: str | None = None
+    openai_api_key: str | None = None
+    gemini_api_key: str | None = None
+    anthropic_default_model: str = "claude-sonnet-4-5"
+    openai_default_model: str = "gpt-5.5"
+    gemini_default_model: str = "gemini-2.5-pro"
     environment: str = "development"
     log_webhook_payloads: bool = False
     admin_retry_api_key: str | None = None
@@ -87,6 +92,25 @@ class Settings(BaseSettings):
         if _database_url_has_ssl(self.database_url):
             return self
         raise ValueError("DATABASE_URL must enable TLS in production")
+
+    @model_validator(mode="after")
+    def validate_llm_provider_keys(self) -> "Settings":
+        if not self.enable_reviews:
+            return self
+        has_any_key = any(
+            key and key.strip()
+            for key in (
+                self.anthropic_api_key,
+                self.openai_api_key,
+                self.gemini_api_key,
+            )
+        )
+        if has_any_key:
+            return self
+        raise ValueError(
+            "At least one LLM provider key must be configured when ENABLE_REVIEWS is true "
+            "(ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)."
+        )
 
 
 def _database_url_has_ssl(database_url: str) -> bool:

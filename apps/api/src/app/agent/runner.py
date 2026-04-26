@@ -5,6 +5,7 @@ from decimal import Decimal
 from fnmatch import fnmatch
 from time import monotonic
 from typing import Any, cast
+from uuid import uuid4
 
 import redis.exceptions as redis_exc
 from redis.asyncio import Redis
@@ -25,12 +26,12 @@ from app.agent.loop import run_agent
 from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
 from app.agent.prompts import build_initial_user_prompt, build_system_prompt, load_verified_fact_ids
-from app.agent.review_config import ReviewConfig, load_review_config
+from app.agent.review_config import ModelProvider, ReviewConfig, load_review_config
 from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
 from app.agent.validator import FindingValidator
 from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.config import settings
-from app.db.models import Review
+from app.db.models import Review, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
 from app.github.comments import post_review
@@ -74,6 +75,7 @@ async def _fetch_pr_inputs(
             "repo": f"{owner}/{repo}",
             "pr_number": pr_number,
             "head_sha": head_sha,
+            "run_id": context.get("run_id"),
         }
     )
     diff_text = await gh.get_pull_request_diff(owner, repo, pr_number)
@@ -87,7 +89,9 @@ async def _fetch_pr_inputs(
             "repo": f"{owner}/{repo}",
             "pr_number": pr_number,
             "head_sha": head_sha,
+            "run_id": context.get("run_id"),
             "model": review_config.model.name,
+            "provider": review_config.model.provider,
             "prompt_version": PROMPT_VERSION,
         }
     )
@@ -138,6 +142,7 @@ async def run_review(
     await _mark_review_running(review_id, installation_id)
 
     context: dict[str, Any] = {
+        "run_id": str(uuid4()),
         "review_id": review_id,
         "installation_id": installation_id,
         "owner": owner,
@@ -169,12 +174,29 @@ async def run_review(
         files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt = await _assemble_context(
             gh, context, diff_text, review_config
         )
-        messages = await run_agent(system_prompt, user_prompt, context, model_name=review_config.model.name)
+        token_snapshot = _token_snapshot(context)
+        messages = await run_agent(
+            system_prompt,
+            user_prompt,
+            context,
+            model_name=review_config.model.name,
+            provider=review_config.model.provider,
+        )
         result = await finalize_review(
             system_prompt,
             messages,
             context,
             model_name=review_config.model.name,
+            provider=review_config.model.provider,
+        )
+        await _record_model_audit(
+            context=context,
+            stage="primary",
+            provider=review_config.model.provider,
+            model=review_config.model.name,
+            token_before=token_snapshot,
+            findings_count=len(result.findings),
+            decision="generated",
         )
         tools_called_per_file = extract_tool_usage_by_file(messages)
         tool_call_history = extract_tool_call_history(messages)
@@ -228,6 +250,7 @@ async def run_review(
                     [{"role": "user", "content": repair_prompt}],
                     context,
                     model_name=review_config.model.name,
+                    provider=review_config.model.provider,
                     allow_retry=False,
                 )
                 repaired.findings = _repair_findings_from_files(
@@ -263,6 +286,7 @@ async def run_review(
                     context,
                     validation_feedback=feedback,
                     model_name=review_config.model.name,
+                    provider=review_config.model.provider,
                 )
                 retried.findings = _repair_findings_from_files(
                     retried.findings,
@@ -288,6 +312,60 @@ async def run_review(
         evidence_rejections = [*auto_tag_vendor_rejected, *evidence_tool_rejected, *evidence_fact_rejected]
         evidence_rejection_reasons = Counter(reason for _, reason in evidence_rejections)
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
+        debate_conflict_score: int | None = None
+        if review_config.max_mode.enabled:
+            challenger_prompt = _build_challenger_prompt(draft_result, final_summary_hint=result.summary)
+            challenger_messages = [{"role": "user", "content": challenger_prompt}]
+            challenger_snapshot = _token_snapshot(context)
+            challenger_result = await finalize_review(
+                system_prompt,
+                challenger_messages,
+                context,
+                model_name=review_config.max_mode.challenger_model,
+                provider=review_config.max_mode.challenger_provider,
+                allow_retry=False,
+            )
+            debate_conflict_score = _calculate_conflict_score(draft_result.findings, challenger_result.findings)
+            await _record_model_audit(
+                context=context,
+                stage="challenger",
+                provider=review_config.max_mode.challenger_provider,
+                model=review_config.max_mode.challenger_model,
+                token_before=challenger_snapshot,
+                findings_count=len(challenger_result.findings),
+                conflict_score=debate_conflict_score,
+                decision="challenged",
+            )
+            tie_break_result: ReviewResult | None = None
+            should_tie_break = debate_conflict_score >= review_config.max_mode.conflict_threshold or _has_high_risk_findings(
+                draft_result.findings, review_config.max_mode.high_risk_severity
+            )
+            if should_tie_break:
+                tie_break_prompt = _build_tie_break_prompt(draft_result, challenger_result)
+                tie_break_snapshot = _token_snapshot(context)
+                tie_break_result = await finalize_review(
+                    system_prompt,
+                    [{"role": "user", "content": tie_break_prompt}],
+                    context,
+                    model_name=review_config.max_mode.tie_break_model,
+                    provider=review_config.max_mode.tie_break_provider,
+                    allow_retry=False,
+                )
+                await _record_model_audit(
+                    context=context,
+                    stage="tie_break",
+                    provider=review_config.max_mode.tie_break_provider,
+                    model=review_config.max_mode.tie_break_model,
+                    token_before=tie_break_snapshot,
+                    findings_count=len(tie_break_result.findings),
+                    conflict_score=debate_conflict_score,
+                    decision="tie_break",
+                )
+            draft_result = _merge_debate_results(
+                primary=draft_result,
+                challenger=challenger_result,
+                tie_break=tie_break_result,
+            )
         code_acknowledgments = extract_todo_fixme_markers(fetched_map)
         prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
         edited_result = await run_editor(
@@ -300,9 +378,21 @@ async def run_review(
             prior_reviews=prior_reviews,
             code_acknowledgments=code_acknowledgments,
             model_name=review_config.model.name,
+            provider=review_config.model.provider,
         )
         final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
         final_result = _apply_review_config_filters(final_result, review_config)
+        await _record_model_audit(
+            context=context,
+            stage="final_post",
+            provider=review_config.model.provider,
+            model=review_config.model.name,
+            token_before=_token_snapshot(context),
+            findings_count=len(draft_result.findings),
+            accepted_findings_count=len(final_result.findings),
+            conflict_score=debate_conflict_score,
+            decision="posted",
+        )
         _attach_debug_artifacts(
             context=context,
             generated=generated,
@@ -328,6 +418,7 @@ async def run_review(
             threshold=threshold,
             context_telemetry=context_bundle.telemetry,
             mismatch_subtypes=mismatch_subtypes,
+            debate_conflict_score=debate_conflict_score,
         )
         _log_quality_metrics(
             context=context,
@@ -395,6 +486,7 @@ async def _mark_review_done(
             return
         review.status = status
         if review_config is not None:
+            review.model_provider = review_config.model.provider
             review.model = review_config.model.name
         review.findings = session_data.model_dump(mode="json")
         review.debug_artifacts = context.get("debug_artifacts")
@@ -626,6 +718,7 @@ def _attach_debug_artifacts(
     threshold: int,
     context_telemetry: ContextTelemetry,
     mismatch_subtypes: dict[str, int],
+    debate_conflict_score: int | None,
 ) -> None:
     validator_entries = [
         {
@@ -667,7 +760,133 @@ def _attach_debug_artifacts(
         "target_line_mismatch_subtypes": mismatch_subtypes,
         "context_telemetry": context_telemetry.as_dict(),
         "agent_metrics": context.get("agent_metrics", {}),
+        "prompt_version": PROMPT_VERSION,
+        "debate_conflict_score": debate_conflict_score,
     }
+
+
+def _token_snapshot(context: dict[str, Any]) -> dict[str, int]:
+    return {
+        "input_tokens": int(context.get("input_tokens", 0)),
+        "output_tokens": int(context.get("output_tokens", 0)),
+        "tokens_used": int(context.get("tokens_used", 0)),
+    }
+
+
+async def _record_model_audit(
+    *,
+    context: dict[str, Any],
+    stage: str,
+    provider: ModelProvider,
+    model: str,
+    token_before: dict[str, int],
+    findings_count: int | None = None,
+    conflict_score: int | None = None,
+    decision: str | None = None,
+    accepted_findings_count: int | None = None,
+) -> None:
+    installation_id = cast(int, context["installation_id"])
+    review_id = cast(int, context["review_id"])
+    input_tokens_after = int(context.get("input_tokens", 0))
+    output_tokens_after = int(context.get("output_tokens", 0))
+    total_tokens_after = int(context.get("tokens_used", 0))
+    input_delta = max(0, input_tokens_after - token_before["input_tokens"])
+    output_delta = max(0, output_tokens_after - token_before["output_tokens"])
+    total_delta = max(0, total_tokens_after - token_before["tokens_used"])
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            ReviewModelAudit(
+                review_id=review_id,
+                installation_id=installation_id,
+                run_id=cast(str, context["run_id"]),
+                stage=stage,
+                provider=provider,
+                model=model,
+                prompt_version=PROMPT_VERSION,
+                input_tokens=input_delta,
+                output_tokens=output_delta,
+                total_tokens=total_delta,
+                findings_count=findings_count,
+                accepted_findings_count=accepted_findings_count,
+                conflict_score=conflict_score,
+                decision=decision,
+            )
+        )
+        await session.commit()
+
+
+def _build_challenger_prompt(primary: ReviewResult, *, final_summary_hint: str) -> str:
+    payload = primary.model_dump(mode="json")
+    return (
+        "You are a challenger reviewer. Verify whether each finding is valid and significant.\n"
+        "Drop weak findings, keep strong findings, and optionally refine wording.\n"
+        "Return your full result with the submit_review tool.\n\n"
+        f"Original summary hint: {final_summary_hint}\n\n"
+        f"Primary findings JSON:\n{payload}"
+    )
+
+
+def _build_tie_break_prompt(primary: ReviewResult, challenger: ReviewResult) -> str:
+    primary_json = primary.model_dump(mode="json")
+    challenger_json = challenger.model_dump(mode="json")
+    return (
+        "You are a tie-break adjudicator.\n"
+        "Compare primary and challenger findings and return the best final set.\n"
+        "Prioritize correctness and evidence quality over quantity.\n"
+        "Return your result with submit_review.\n\n"
+        f"Primary:\n{primary_json}\n\n"
+        f"Challenger:\n{challenger_json}"
+    )
+
+
+def _finding_key(finding: Finding) -> tuple[str, int, int, str]:
+    return (
+        finding.file_path,
+        finding.line_start,
+        finding.line_end or finding.line_start,
+        normalize_for_match(finding.message),
+    )
+
+
+def _calculate_conflict_score(primary: list[Finding], challenger: list[Finding]) -> int:
+    primary_keys = {_finding_key(item) for item in primary}
+    challenger_keys = {_finding_key(item) for item in challenger}
+    union = primary_keys.union(challenger_keys)
+    if not union:
+        return 0
+    overlap = primary_keys.intersection(challenger_keys)
+    disagreement = len(union) - len(overlap)
+    return int(round((disagreement / len(union)) * 100))
+
+
+def _has_high_risk_findings(findings: list[Finding], threshold: str) -> bool:
+    threshold_rank = SEVERITY_RANK.get(threshold, SEVERITY_RANK["high"])
+    return any(SEVERITY_RANK.get(item.severity, 0) >= threshold_rank for item in findings)
+
+
+def _merge_debate_results(
+    *,
+    primary: ReviewResult,
+    challenger: ReviewResult,
+    tie_break: ReviewResult | None,
+) -> ReviewResult:
+    candidates = [primary, challenger]
+    if tie_break is not None:
+        candidates.append(tie_break)
+    votes: dict[tuple[str, int, int, str], list[Finding]] = {}
+    for candidate in candidates:
+        for finding in candidate.findings:
+            votes.setdefault(_finding_key(finding), []).append(finding)
+    required_votes = 2 if len(candidates) >= 2 else 1
+    merged: list[Finding] = []
+    for key, finding_votes in votes.items():
+        if len(finding_votes) >= required_votes or SEVERITY_RANK.get(finding_votes[0].severity, 0) >= SEVERITY_RANK["high"]:
+            best = max(finding_votes, key=lambda item: item.confidence)
+            merged.append(best.model_copy(deep=True))
+    merged.sort(key=lambda item: (SEVERITY_RANK[item.severity], item.confidence), reverse=True)
+    summary = primary.summary if primary.summary else "Automated review completed."
+    return ReviewResult(findings=merged, summary=summary)
 
 
 def extract_tool_usage_by_file(messages: list[dict[str, object]]) -> set[str]:

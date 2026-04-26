@@ -6,6 +6,7 @@ from app.agent.review_config import (
     DEFAULT_SEVERITY_THRESHOLD,
     _parse_budgets,
     _parse_categories,
+    _parse_max_mode,
     _parse_model_config,
     _parse_packaging,
     _parse_severity_threshold,
@@ -16,10 +17,12 @@ from app.agent.review_config import (
 def test_parse_model_config_accepts_custom_pricing_override() -> None:
     model = _parse_model_config(
         {
+            "provider": "anthropic",
             "name": "claude-3-5-haiku-latest",
             "pricing": {"input_per_1m": 1.5, "output_per_1m": 6.5},
         }
     )
+    assert model.provider == "anthropic"
     assert model.name == "claude-3-5-haiku-latest"
     assert str(model.input_per_1m_usd) == "1.5"
     assert str(model.output_per_1m_usd) == "6.5"
@@ -124,3 +127,25 @@ def test_load_review_config_reads_new_phase4_fields() -> None:
     assert config.ignore_paths == ["**/*.md"]
     assert config.review_drafts is True
     assert config.max_findings_per_pr == 7
+
+
+def test_parse_model_config_provider_defaults_to_anthropic() -> None:
+    model = _parse_model_config({"provider": "bogus", "name": "model-x"})
+    assert model.provider == "anthropic"
+
+
+def test_parse_max_mode_reads_challenger_and_tie_break() -> None:
+    max_mode = _parse_max_mode(
+        {
+            "enabled": True,
+            "conflict_threshold": 42,
+            "high_risk_severity": "critical",
+            "challenger": {"provider": "openai", "name": "gpt-5.5"},
+            "tie_break": {"provider": "gemini", "name": "gemini-2.5-pro"},
+        }
+    )
+    assert max_mode.enabled is True
+    assert max_mode.conflict_threshold == 42
+    assert max_mode.high_risk_severity == "critical"
+    assert max_mode.challenger_provider == "openai"
+    assert max_mode.tie_break_provider == "gemini"

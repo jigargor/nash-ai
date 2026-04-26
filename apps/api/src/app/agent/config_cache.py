@@ -2,11 +2,12 @@ import json
 import logging
 from dataclasses import asdict
 from decimal import Decimal
+from typing import cast
 
 import redis.exceptions as redis_exc
 from redis.asyncio import Redis
 
-from app.agent.review_config import ReviewConfig, ReviewModelConfig
+from app.agent.review_config import MaxModeConfig, ModelProvider, ReviewConfig, ReviewModelConfig
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -28,12 +29,27 @@ def _serialize_config(config: ReviewConfig) -> str:
 def _deserialize_config(raw_value: str) -> ReviewConfig:
     data = json.loads(raw_value)
     model_data = dict(data.get("model") or {})
+    model_provider = cast(ModelProvider, str(model_data.get("provider", "anthropic")))
     model = ReviewModelConfig(
+        provider=model_provider,
         name=str(model_data.get("name", "")),
         input_per_1m_usd=Decimal(str(model_data.get("input_per_1m_usd", "3.00"))),
         output_per_1m_usd=Decimal(str(model_data.get("output_per_1m_usd", "15.00"))),
     )
+    max_mode_data = dict(data.get("max_mode") or {})
+    challenger_provider = cast(ModelProvider, str(max_mode_data.get("challenger_provider", "openai")))
+    tie_break_provider = cast(ModelProvider, str(max_mode_data.get("tie_break_provider", "gemini")))
+    max_mode = MaxModeConfig(
+        enabled=bool(max_mode_data.get("enabled", False)),
+        challenger_provider=challenger_provider,
+        challenger_model=str(max_mode_data.get("challenger_model", "gpt-5.5")),
+        tie_break_provider=tie_break_provider,
+        tie_break_model=str(max_mode_data.get("tie_break_model", "gemini-2.5-pro")),
+        conflict_threshold=int(max_mode_data.get("conflict_threshold", 35)),
+        high_risk_severity=str(max_mode_data.get("high_risk_severity", "high")),
+    )
     data["model"] = model
+    data["max_mode"] = max_mode
     return ReviewConfig(**data)
 
 

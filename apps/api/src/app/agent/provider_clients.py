@@ -1,0 +1,54 @@
+import json
+from typing import Any
+
+from openai import AsyncOpenAI
+
+from app.agent.review_config import ModelProvider
+from app.config import settings
+
+GEMINI_OPENAI_COMPAT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+
+def get_provider_api_key(provider: ModelProvider) -> str:
+    if provider == "anthropic":
+        if settings.anthropic_api_key:
+            return settings.anthropic_api_key
+        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
+    if provider == "openai":
+        if settings.openai_api_key:
+            return settings.openai_api_key
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+    if settings.gemini_api_key:
+        return settings.gemini_api_key
+    raise RuntimeError("GEMINI_API_KEY is not configured")
+
+
+def create_openai_compatible_client(provider: ModelProvider) -> AsyncOpenAI:
+    api_key = get_provider_api_key(provider)
+    if provider == "gemini":
+        return AsyncOpenAI(api_key=api_key, base_url=GEMINI_OPENAI_COMPAT_BASE_URL)
+    return AsyncOpenAI(api_key=api_key)
+
+
+def anthropic_tools_to_openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": str(tool["name"]),
+                "description": str(tool["description"]),
+                "parameters": tool["input_schema"],
+            },
+        }
+        for tool in tools
+    ]
+
+
+def parse_openai_tool_arguments(raw_arguments: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw_arguments)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        return {}
+    return {}

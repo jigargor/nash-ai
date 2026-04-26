@@ -1,6 +1,6 @@
 # AI Code Review Agent
 
-Automated pull request reviews powered by Claude and the GitHub App API.
+Automated pull request reviews powered by multi-model LLM orchestration and the GitHub App API.
 
 ## What it does
 
@@ -15,7 +15,7 @@ Automated pull request reviews powered by Claude and the GitHub App API.
 
 - **Backend**: Python 3.12 + FastAPI + SQLAlchemy 2.0 (async) + ARQ (Redis queue)
 - **Frontend**: Next.js 15 + TypeScript + Zustand + TanStack Query
-- **AI**: Anthropic Claude; default model `claude-sonnet-4-5`, overridable per repo via `.codereview.yml` (see below)
+- **AI**: Anthropic + OpenAI + Gemini (provider/model selectable per repository via `.codereview.yml`)
 - **Infra**: Postgres + Redis (docker-compose locally, Railway in prod)
 
 ## Observability (optional)
@@ -55,7 +55,7 @@ pnpm install
 
 ```bash
 cp .env.example apps/api/.env
-# Fill in GITHUB_APP_ID, GITHUB_WEBHOOK_SECRET, ANTHROPIC_API_KEY, etc.
+# Fill in GITHUB_APP_ID, GITHUB_WEBHOOK_SECRET, and at least one LLM provider API key.
 # Windows note: use forward slashes for GITHUB_PRIVATE_KEY_PATH
 # e.g. C:/Users/you/Documents/2026/your-app.private-key.pem
 ```
@@ -159,8 +159,13 @@ Typical keys:
 | `review_drafts` | If `true`, review draft pull requests; default `false`. |
 | `max_findings_per_pr` | Hard cap on posted findings after filtering. |
 | `prompt_additions` | Extra repo-specific instructions appended to the system prompt. |
-| `model.name` | Anthropic model id (e.g. `claude-sonnet-4-5`). |
+| `model.provider` | Model provider (`anthropic`, `openai`, `gemini`). |
+| `model.name` | Provider-specific model id (e.g. `claude-sonnet-4-5`, `gpt-5.5`, `gemini-2.5-pro`). |
 | `model.pricing` | Optional `input_per_1m` / `output_per_1m` (USD per 1M tokens) for cost estimation when defaults don’t match your billing. |
+| `max_mode.enabled` | Enables primary+challenger review mode. |
+| `max_mode.challenger` | Challenger provider/model used to validate primary findings. |
+| `max_mode.tie_break` | Tie-break provider/model used only on conflicts/high-risk findings. |
+| `max_mode.conflict_threshold` | Conflict score threshold (0-100) that triggers tie-break. |
 | `budgets` | Token budgets for layers, e.g. `system_prompt`, `repo_profile`, `diff_hunks`, `surrounding_context`, `total_cap`, etc. |
 | `layered_context_enabled` | Use layered project/repo/review context packing (default on). |
 | `partial_review_mode_enabled` | For large PRs, scope review to top-ranked files (default on). |
@@ -169,7 +174,7 @@ Typical keys:
 | `max_summary_calls_per_review` | Cap on summarization steps per review. |
 | `generated_paths` / `vendor_paths` | Glob-style path patterns to treat generated or vendored files differently when packing context. |
 
-Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. `.codereview.yml` is cached per `(owner, repo, sha)` in Redis for one hour. `tokens_used` / `cost_usd` on each `reviews` row reflect the selected model’s pricing when configured.
+Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. `.codereview.yml` is cached per `(owner, repo, sha)` in Redis for one hour. `tokens_used` / `cost_usd` on each `reviews` row reflect the selected model’s pricing when configured. When `max_mode` is enabled, the pipeline records per-stage audit rows for primary/challenger/tie-break decisions.
 
 ### 11. Production deployment
 
@@ -190,10 +195,19 @@ Frontend deployment target: Vercel.
 - Webhook signatures verified with `hmac.compare_digest`.
 - Installation tokens are short-lived and never persisted.
 - OAuth tokens are stored encrypted via Fernet.
+- At least one LLM provider key is required when `ENABLE_REVIEWS=true`.
 - `ENABLE_REVIEWS` kill switch is available for incident mitigation.
 - `REVIEWS_PER_HOUR_LIMIT` and `DAILY_TOKEN_BUDGET_PER_INSTALLATION` are enforced.
 - Sentry and Langfuse env vars should be configured in production.
 - Run `uv run bandit -r src` and CI quality gates before deploy.
+
+### 16. Privacy and GDPR notes
+
+- Review processing transmits repository diffs and selected file context to configured model providers.
+- You must establish data processing agreements with each enabled provider for production use.
+- Use strict tenant scoping (RLS + installation context) for all review and audit tables.
+- Configure data retention/deletion workflows for review artifacts before public launch.
+- See `SECURITY.md` for coordinated vulnerability reporting requirements.
 
 ### 13. Incident response and runbook
 

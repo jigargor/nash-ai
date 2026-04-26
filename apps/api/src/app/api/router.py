@@ -4,7 +4,7 @@ import json
 from collections.abc import AsyncIterator
 
 from app.config import settings
-from app.db.models import Installation, Review
+from app.db.models import Installation, Review, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.utils import split_repo_full_name as _split_repo_full_name
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
@@ -14,8 +14,10 @@ from sqlalchemy import select
 
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
+    if settings.environment.lower() == "production" and not settings.api_access_key:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured")
     if not settings.api_access_key:
-        return  # key not configured — open access (backwards-compatible default)
+        return
     if not x_api_key or not hmac.compare_digest(x_api_key, settings.api_access_key):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key")
 
@@ -39,12 +41,11 @@ async def list_installations(limit: int = Query(default=50, ge=1, le=100)) -> li
 
 @router.get("/reviews")
 async def list_reviews(
-    installation_id: int | None = Query(default=None, ge=1),
+    installation_id: int = Query(..., ge=1),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict[str, object]]:
     async with AsyncSessionLocal() as session:
-        if installation_id is not None:
-            await set_installation_context(session, installation_id)
+        await set_installation_context(session, installation_id)
         reviews = await session.scalars(select(Review).order_by(Review.created_at.desc()).limit(limit))
         return [
             {
@@ -52,6 +53,8 @@ async def list_reviews(
                 "repo_full_name": review.repo_full_name,
                 "pr_number": int(review.pr_number),
                 "status": review.status,
+                "model_provider": review.model_provider,
+                "model": review.model,
                 "tokens_used": int(review.tokens_used) if review.tokens_used is not None else None,
                 "cost_usd": str(review.cost_usd) if review.cost_usd is not None else None,
             }
@@ -60,15 +63,14 @@ async def list_reviews(
 
 
 @router.get("/reviews/{review_id}")
-async def get_review(review_id: int, installation_id: int | None = Query(default=None, ge=1)) -> dict[str, object]:
+async def get_review(review_id: int, installation_id: int = Query(..., ge=1)) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        if installation_id is not None:
-            await set_installation_context(session, installation_id)
+        await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            await set_installation_context(session, int(review.installation_id))
+        if int(review.installation_id) != installation_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
         return {
             "id": int(review.id),
@@ -77,6 +79,7 @@ async def get_review(review_id: int, installation_id: int | None = Query(default
             "pr_number": int(review.pr_number),
             "pr_head_sha": review.pr_head_sha,
             "status": review.status,
+            "model_provider": review.model_provider,
             "model": review.model,
             "findings": review.findings,
             "tokens_used": int(review.tokens_used) if review.tokens_used is not None else None,
@@ -90,23 +93,62 @@ async def get_review(review_id: int, installation_id: int | None = Query(default
 @router.get("/reviews/{review_id}/outcomes")
 async def get_review_outcomes(
     review_id: int,
-    installation_id: int | None = Query(default=None, ge=1),
+    installation_id: int = Query(..., ge=1),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        if installation_id is not None:
-            await set_installation_context(session, installation_id)
+        await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            await set_installation_context(session, int(review.installation_id))
-        elif int(review.installation_id) != installation_id:
+        if int(review.installation_id) != installation_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
         return {
             "review_id": int(review.id),
             "finding_outcomes": await list_review_finding_outcomes(int(review.id), int(review.installation_id)),
         }
+
+
+@router.get("/reviews/{review_id}/model-audits")
+async def get_review_model_audits(
+    review_id: int,
+    installation_id: int = Query(..., ge=1),
+) -> dict[str, object]:
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        review = await session.get(Review, review_id)
+        if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if int(review.installation_id) != installation_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+        rows = await session.scalars(
+            select(ReviewModelAudit)
+            .where(ReviewModelAudit.review_id == review_id)
+            .order_by(ReviewModelAudit.created_at.asc())
+        )
+        audits = [
+            {
+                "id": int(row.id),
+                "run_id": row.run_id,
+                "stage": row.stage,
+                "provider": row.provider,
+                "model": row.model,
+                "prompt_version": row.prompt_version,
+                "input_tokens": int(row.input_tokens),
+                "output_tokens": int(row.output_tokens),
+                "total_tokens": int(row.total_tokens),
+                "findings_count": int(row.findings_count) if row.findings_count is not None else None,
+                "accepted_findings_count": (
+                    int(row.accepted_findings_count) if row.accepted_findings_count is not None else None
+                ),
+                "conflict_score": int(row.conflict_score) if row.conflict_score is not None else None,
+                "decision": row.decision,
+                "metadata_json": row.metadata_json,
+                "created_at": row.created_at.isoformat() if row.created_at is not None else None,
+            }
+            for row in rows
+        ]
+    return {"review_id": review_id, "model_audits": audits}
 
 
 @router.get("/telemetry/outcomes/summary")
@@ -129,16 +171,15 @@ async def get_outcome_summary(
 async def rerun_review(
     request: Request,
     review_id: int,
-    installation_id: int | None = Query(default=None, ge=1),
+    installation_id: int = Query(..., ge=1),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        if installation_id is not None:
-            await set_installation_context(session, installation_id)
+        await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            await set_installation_context(session, int(review.installation_id))
+        if int(review.installation_id) != installation_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
         owner, repo = _split_repo_full_name(review.repo_full_name)
         job = await request.app.state.redis.enqueue_job(
@@ -162,16 +203,15 @@ async def rerun_review(
 async def dismiss_finding(
     review_id: int,
     finding_index: int,
-    installation_id: int | None = Query(default=None, ge=1),
+    installation_id: int = Query(..., ge=1),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        if installation_id is not None:
-            await set_installation_context(session, installation_id)
+        await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            await set_installation_context(session, int(review.installation_id))
+        if int(review.installation_id) != installation_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
         debug_artifacts = review.debug_artifacts or {}
         dismissed = list(debug_artifacts.get("dismissed_findings", []))
@@ -187,20 +227,20 @@ async def dismiss_finding(
 @router.get("/reviews/{review_id}/stream")
 async def stream_review_events(
     review_id: int,
-    installation_id: int | None = Query(default=None, ge=1),
+    installation_id: int = Query(..., ge=1),
 ) -> StreamingResponse:
     async def event_generator() -> AsyncIterator[str]:
         previous_status: str | None = None
         for _ in range(120):
             async with AsyncSessionLocal() as session:
-                if installation_id is not None:
-                    await set_installation_context(session, installation_id)
+                await set_installation_context(session, installation_id)
                 review = await session.get(Review, review_id)
                 if review is None:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Review not found'})}\n\n"
                     return
-                if installation_id is None:
-                    await set_installation_context(session, int(review.installation_id))
+                if int(review.installation_id) != installation_id:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'installation_id mismatch'})}\n\n"
+                    return
 
                 if previous_status is None:
                     yield f"data: {json.dumps({'type': 'started', 'status': review.status})}\n\n"
