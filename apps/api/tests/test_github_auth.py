@@ -30,6 +30,24 @@ def test_create_jwt_uses_expected_claims(monkeypatch: pytest.MonkeyPatch) -> Non
     assert payload["exp"] == 1_700_000_000 + 600
 
 
+def test_create_jwt_coerces_numeric_app_id_to_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_encode(payload: dict[str, int | str], key: str, algorithm: str) -> str:
+        captured["payload"] = payload
+        return "jwt-token"
+
+    monkeypatch.setattr(auth, "_load_private_key", lambda: "private-key")
+    monkeypatch.setattr(auth.settings, "github_app_id", 12345)
+    monkeypatch.setattr(auth.jwt, "encode", fake_encode)
+
+    auth.create_jwt()
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["iss"] == "12345"
+
+
 def test_get_installation_token_posts_expected_request(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setattr(auth, "create_jwt", lambda: "jwt-token")

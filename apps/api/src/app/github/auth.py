@@ -17,13 +17,17 @@ def _load_private_key() -> str:
     return path.read_text()
 
 
+def _github_app_issuer() -> str:
+    return str(settings.github_app_id).strip()
+
+
 def create_jwt() -> str:
     now = int(time.time())
     # PyJWT requires iss to be a str. GitHub accepts the App ID as digits in a string.
     payload = {
         "iat": now - 60,
         "exp": now + 600,
-        "iss": str(settings.github_app_id).strip(),
+        "iss": _github_app_issuer(),
     }
     return jwt.encode(payload, _load_private_key(), algorithm="RS256")
 
