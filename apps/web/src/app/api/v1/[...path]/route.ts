@@ -5,7 +5,10 @@ import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
 import { parseSessionToken } from "@/lib/auth/session";
 import { hydrateApiProxyEnvFromAncestors } from "@/lib/monorepo-env";
 
-const API_BASE = process.env.API_URL ?? "http://localhost:8000";
+const DEFAULT_DEV_API = "http://localhost:8000";
+
+/** Upstream fetch timeout so the browser does not hang on "Loading…" if Railway is unreachable. */
+const UPSTREAM_TIMEOUT_MS = 25_000;
 
 export const runtime = "nodejs";
 
@@ -27,9 +30,29 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
     return NextResponse.json({ detail: "API access key is not configured for the web proxy." }, { status: 503 });
   }
 
+  const apiBase =
+    process.env.API_URL?.trim() || (process.env.NODE_ENV !== "production" ? DEFAULT_DEV_API : "");
+  if (!apiBase) {
+    return NextResponse.json(
+      {
+        detail:
+          "API_URL is not set. Add your Railway API origin (e.g. https://nash-ai-api-production.up.railway.app) to Vercel env vars.",
+      },
+      { status: 503 },
+    );
+  }
+  if (process.env.NODE_ENV === "production" && apiBase.includes("localhost")) {
+    return NextResponse.json(
+      {
+        detail:
+          "API_URL points at localhost in production. Set API_URL to your public Railway API URL in Vercel.",
+      },
+      { status: 503 },
+    );
+  }
+
   const { path } = await context.params;
   const incomingUrl = new URL(request.url);
-  const apiBase = process.env.API_URL ?? API_BASE;
   const targetUrl = new URL(`/api/v1/${path.join("/")}${incomingUrl.search}`, apiBase);
   const headers = new Headers();
   const contentType = request.headers.get("content-type");
@@ -38,13 +61,22 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   if (accept) headers.set("Accept", accept);
   headers.set("X-Api-Key", apiAccessKey);
 
-  return fetch(targetUrl, {
-    method: request.method,
-    headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
-    cache: "no-store",
-    redirect: "manual",
-  });
+  try {
+    return await fetch(targetUrl, {
+      method: request.method,
+      headers,
+      body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
+      cache: "no-store",
+      redirect: "manual",
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Upstream request failed";
+    return NextResponse.json(
+      { detail: `Backend request failed (${message}). Check API_URL and that the Railway API is running.` },
+      { status: 504 },
+    );
+  }
 }
 
 export function GET(request: Request, context: ApiProxyRouteContext): Promise<Response> {
