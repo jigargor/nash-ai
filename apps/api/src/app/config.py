@@ -4,6 +4,8 @@ from urllib.parse import parse_qs, urlparse
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.db.url import is_railway_managed_postgres_host
+
 
 def _env_files() -> tuple[str, ...]:
     """Resolve .env paths relative to this package (not the process cwd).
@@ -110,7 +112,10 @@ class Settings(BaseSettings):
 
 
 def _database_url_has_ssl(database_url: str) -> bool:
-    query = parse_qs(urlparse(database_url).query)
+    parsed = urlparse(database_url)
+    if is_railway_managed_postgres_host(parsed.hostname):
+        return True
+    query = parse_qs(parsed.query)
     ssl_values = [value.lower() for value in query.get("ssl", [])]
     sslmode_values = [value.lower() for value in query.get("sslmode", [])]
 
