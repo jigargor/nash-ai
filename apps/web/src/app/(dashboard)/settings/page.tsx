@@ -33,6 +33,7 @@ export default function SettingsPage() {
           <a className="button button-primary" href="https://github.com/settings/apps" target="_blank" rel="noreferrer">
             Open GitHub settings
           </a>
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- session cookie clear via API */}
           <a className="button button-ghost" href="/api/v1/auth/logout">
             Logout
           </a>
