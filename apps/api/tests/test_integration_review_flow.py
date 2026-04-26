@@ -55,6 +55,9 @@ def _make_fake_session(review: SimpleNamespace) -> object:
         async def commit(self) -> None:
             return None
 
+        def add(self, _obj: object) -> None:
+            return None
+
     return FakeSession()
 
 

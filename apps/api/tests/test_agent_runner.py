@@ -285,7 +285,8 @@ def test_calculate_conflict_score_accounts_for_overlap() -> None:
     primary = [_finding("a.py"), _finding("b.py")]
     challenger = [_finding("a.py"), _finding("c.py")]
     score = _calculate_conflict_score(primary, challenger)
-    assert score == 50
+    # Union size 3, overlap 1 → disagreement 2 → round(2/3 * 100) == 67
+    assert score == 67
 
 
 def test_merge_debate_results_keeps_consensus_findings() -> None:

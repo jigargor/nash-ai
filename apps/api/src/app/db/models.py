@@ -71,7 +71,11 @@ class Review(Base):
     pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
     pr_head_sha: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, server_default="queued")
-    model_provider: Mapped[str] = mapped_column(Text, nullable=False, server_default="anthropic")
+    model_provider: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        insert_default="anthropic",
+    )
     model: Mapped[str] = mapped_column(Text, nullable=False)
     findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     debug_artifacts: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

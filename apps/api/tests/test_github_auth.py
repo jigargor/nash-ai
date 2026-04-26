@@ -25,7 +25,7 @@ def test_create_jwt_uses_expected_claims(monkeypatch: pytest.MonkeyPatch) -> Non
     assert captured["key"] == "private-key"
     payload = captured["payload"]
     assert isinstance(payload, dict)
-    assert payload["iss"] == 12345
+    assert payload["iss"] == "12345"
     assert payload["iat"] == 1_700_000_000 - 60
     assert payload["exp"] == 1_700_000_000 + 600
 

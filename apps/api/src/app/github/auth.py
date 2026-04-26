@@ -19,11 +19,11 @@ def _load_private_key() -> str:
 
 def create_jwt() -> str:
     now = int(time.time())
-    # GitHub requires iss to be the App ID numeric value (see GitHub App JWT docs).
+    # PyJWT requires iss to be a str. GitHub accepts the App ID as digits in a string.
     payload = {
         "iat": now - 60,
         "exp": now + 600,
-        "iss": int(settings.github_app_id),
+        "iss": str(settings.github_app_id).strip(),
     }
     return jwt.encode(payload, _load_private_key(), algorithm="RS256")
 

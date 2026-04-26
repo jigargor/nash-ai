@@ -1,7 +1,8 @@
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from openai import AsyncOpenAI
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 from app.agent.review_config import ModelProvider
 from app.config import settings
@@ -23,7 +24,14 @@ def get_provider_api_key(provider: ModelProvider) -> str:
     raise RuntimeError("GEMINI_API_KEY is not configured")
 
 
-def create_openai_compatible_client(provider: ModelProvider) -> AsyncOpenAI:
+def create_openai_compatible_client(provider: ModelProvider) -> "AsyncOpenAI":
+    try:
+        from openai import AsyncOpenAI
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "openai package is required for OpenAI/Gemini model providers. "
+            "Run `uv sync` (or `uv add openai`) in apps/api."
+        ) from exc
     api_key = get_provider_api_key(provider)
     if provider == "gemini":
         return AsyncOpenAI(api_key=api_key, base_url=GEMINI_OPENAI_COMPAT_BASE_URL)
