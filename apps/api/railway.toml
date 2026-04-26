@@ -1,5 +1,9 @@
 [build]
 builder = "NIXPACKS"
+# Force Railway/Nixpacks away from its auto-detected `uv sync` build step.
+# The generated image does not install `uv`, and this project installs cleanly
+# as a package after the full `src/` tree has been copied into the image.
+buildCommand = ". /opt/venv/bin/activate && pip install ."
 
 [deploy]
 startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
