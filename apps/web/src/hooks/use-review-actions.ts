@@ -11,6 +11,7 @@ export function useRerunReview() {
       rerunReview(reviewId, installationId),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["review", variables.reviewId] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews", variables.installationId] });
       void queryClient.invalidateQueries({ queryKey: ["reviews"] });
     },
   });

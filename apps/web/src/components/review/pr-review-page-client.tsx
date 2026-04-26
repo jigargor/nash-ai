@@ -36,6 +36,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const findings = reviewQuery.data?.findings?.findings?.filter(isFindingVisible) ?? [];
   const summary = reviewQuery.data?.findings?.summary ?? "";
   const findingOutcomes = reviewQuery.data?.finding_outcomes ?? [];
+  const isFailedReview = reviewQuery.data?.status === "failed";
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -75,8 +76,29 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
           {owner}/{repo} · PR #{prNumber}
         </h1>
         <p style={{ color: "var(--text-muted)" }}>
-          {reviewQuery.data.status === "running" ? "Review still running..." : "No findings for this review."}
+          {reviewQuery.data.status === "running"
+            ? "Review still running..."
+            : isFailedReview
+              ? "Review failed before findings were produced."
+              : "No findings for this review."}
         </p>
+        {isFailedReview ? (
+          <button
+            type="button"
+            disabled={rerunMutation.isPending}
+            onClick={() => rerunMutation.mutate({ reviewId, installationId })}
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: "0.5rem",
+              background: "transparent",
+              color: "inherit",
+              cursor: rerunMutation.isPending ? "wait" : "pointer",
+              padding: "0.35rem 0.8rem",
+            }}
+          >
+            {rerunMutation.isPending ? "Retrying..." : "Retry review"}
+          </button>
+        ) : null}
       </section>
     );
 
@@ -122,7 +144,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
             padding: "0.35rem 0.8rem",
           }}
         >
-          {rerunMutation.isPending ? "Re-running..." : "Re-run review"}
+          {rerunMutation.isPending ? "Retrying..." : isFailedReview ? "Retry review" : "Re-run review"}
         </button>
       </header>
 

@@ -2,6 +2,7 @@
 
 import { useOutcomeSummary } from "@/hooks/use-outcome-summary";
 import { useInstallations } from "@/hooks/use-installations";
+import { useRerunReview } from "@/hooks/use-review-actions";
 import { useReviews } from "@/hooks/use-reviews";
 
 export default function DashboardHomePage() {
@@ -10,6 +11,7 @@ export default function DashboardHomePage() {
   const installationId = activeInstallations[0]?.installation_id;
   const reviews = useReviews(installationId);
   const outcomeSummary = useOutcomeSummary(installationId);
+  const retryReview = useRerunReview();
   const totalTokens = (reviews.data ?? []).reduce((sum, review) => sum + (review.tokens_used ?? 0), 0);
   const totalCost = (reviews.data ?? []).reduce((sum, review) => sum + Number(review.cost_usd ?? 0), 0);
 
@@ -48,8 +50,41 @@ export default function DashboardHomePage() {
           <a href={`/repos/${review.repo_full_name}/prs/${review.pr_number}?reviewId=${review.id}&installationId=${review.installation_id}`}>
             {review.repo_full_name} PR #{review.pr_number}
           </a>
-          <div style={{ color: "var(--text-muted)" }}>
-            {review.status} / {review.tokens_used ?? 0} tokens
+          <div
+            style={{
+              alignItems: "center",
+              color: "var(--text-muted)",
+              display: "flex",
+              gap: "0.75rem",
+              justifyContent: "space-between",
+              marginTop: "0.35rem",
+            }}
+          >
+            <span>
+              {review.status} / {review.tokens_used ?? 0} tokens
+            </span>
+            {review.status === "failed" ? (
+              <button
+                type="button"
+                disabled={retryReview.isPending}
+                onClick={() =>
+                  retryReview.mutate({
+                    reviewId: review.id,
+                    installationId: review.installation_id,
+                  })
+                }
+                style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: "0.5rem",
+                  background: "transparent",
+                  color: "inherit",
+                  cursor: retryReview.isPending ? "wait" : "pointer",
+                  padding: "0.25rem 0.65rem",
+                }}
+              >
+                {retryReview.isPending && retryReview.variables?.reviewId === review.id ? "Retrying..." : "Retry"}
+              </button>
+            ) : null}
           </div>
         </article>
       ))}
