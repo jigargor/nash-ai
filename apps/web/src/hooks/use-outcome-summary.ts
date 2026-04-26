@@ -8,5 +8,6 @@ export function useOutcomeSummary(installationId?: number, repoFullName?: string
   return useQuery({
     queryKey: ["outcome-summary", installationId ?? null, repoFullName ?? null],
     queryFn: () => fetchOutcomeSummary(installationId, repoFullName),
+    enabled: installationId !== undefined,
   });
 }

@@ -18,19 +18,20 @@ interface PrReviewPageClientProps {
   repo: string;
   prNumber: string;
   reviewId: number;
+  installationId: number;
 }
 
 function isFindingVisible(_finding: Finding): boolean {
   return true;
 }
 
-export function PrReviewPageClient({ owner, repo, prNumber, reviewId }: PrReviewPageClientProps) {
-  const reviewQuery = useReview(reviewId);
+export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installationId }: PrReviewPageClientProps) {
+  const reviewQuery = useReview(reviewId, installationId);
   const rerunMutation = useRerunReview();
   const dismissMutation = useDismissFinding();
   const selectedFindingIndex = useReviewUiStore((state) => state.selectedFindingIndex);
   const setSelectedFindingIndex = useReviewUiStore((state) => state.setSelectedFindingIndex);
-  const { events, connectionState } = useReviewStream(reviewId);
+  const { events, connectionState } = useReviewStream(reviewId, installationId);
 
   const findings = reviewQuery.data?.findings?.findings?.filter(isFindingVisible) ?? [];
   const summary = reviewQuery.data?.findings?.summary ?? "";
@@ -86,7 +87,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId }: PrReview
   }
 
   function handleDismiss(index: number): void {
-    void dismissMutation.mutateAsync({ reviewId, findingIndex: index });
+    void dismissMutation.mutateAsync({ reviewId, findingIndex: index, installationId });
   }
 
   return (
@@ -111,7 +112,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId }: PrReview
         </div>
         <button
           type="button"
-          onClick={() => rerunMutation.mutate(reviewId)}
+          onClick={() => rerunMutation.mutate({ reviewId, installationId })}
           style={{
             marginTop: "0.75rem",
             border: "1px solid var(--border)",

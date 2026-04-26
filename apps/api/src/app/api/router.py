@@ -41,15 +41,19 @@ async def list_installations(limit: int = Query(default=50, ge=1, le=100)) -> li
 
 @router.get("/reviews")
 async def list_reviews(
-    installation_id: int = Query(..., ge=1),
+    installation_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict[str, object]]:
     async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
-        reviews = await session.scalars(select(Review).order_by(Review.created_at.desc()).limit(limit))
+        stmt = select(Review).order_by(Review.created_at.desc()).limit(limit)
+        if installation_id is not None:
+            await set_installation_context(session, installation_id)
+            stmt = stmt.where(Review.installation_id == installation_id)
+        reviews = await session.scalars(stmt)
         return [
             {
                 "id": int(review.id),
+                "installation_id": int(review.installation_id),
                 "repo_full_name": review.repo_full_name,
                 "pr_number": int(review.pr_number),
                 "status": review.status,
@@ -63,13 +67,17 @@ async def list_reviews(
 
 
 @router.get("/reviews/{review_id}")
-async def get_review(review_id: int, installation_id: int = Query(..., ge=1)) -> dict[str, object]:
+async def get_review(review_id: int, installation_id: int | None = Query(default=None, ge=1)) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
+        if installation_id is not None:
+            await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) != installation_id:
+        if installation_id is None:
+            installation_id = int(review.installation_id)
+            await set_installation_context(session, installation_id)
+        elif int(review.installation_id) != installation_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
         return {
@@ -93,14 +101,18 @@ async def get_review(review_id: int, installation_id: int = Query(..., ge=1)) ->
 @router.get("/reviews/{review_id}/outcomes")
 async def get_review_outcomes(
     review_id: int,
-    installation_id: int = Query(..., ge=1),
+    installation_id: int | None = Query(default=None, ge=1),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
+        if installation_id is not None:
+            await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) != installation_id:
+        if installation_id is None:
+            installation_id = int(review.installation_id)
+            await set_installation_context(session, installation_id)
+        elif int(review.installation_id) != installation_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
         return {
@@ -112,14 +124,18 @@ async def get_review_outcomes(
 @router.get("/reviews/{review_id}/model-audits")
 async def get_review_model_audits(
     review_id: int,
-    installation_id: int = Query(..., ge=1),
+    installation_id: int | None = Query(default=None, ge=1),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
+        if installation_id is not None:
+            await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) != installation_id:
+        if installation_id is None:
+            installation_id = int(review.installation_id)
+            await set_installation_context(session, installation_id)
+        elif int(review.installation_id) != installation_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
         rows = await session.scalars(
             select(ReviewModelAudit)
@@ -171,14 +187,18 @@ async def get_outcome_summary(
 async def rerun_review(
     request: Request,
     review_id: int,
-    installation_id: int = Query(..., ge=1),
+    installation_id: int | None = Query(default=None, ge=1),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
+        if installation_id is not None:
+            await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) != installation_id:
+        if installation_id is None:
+            installation_id = int(review.installation_id)
+            await set_installation_context(session, installation_id)
+        elif int(review.installation_id) != installation_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
         owner, repo = _split_repo_full_name(review.repo_full_name)
@@ -203,14 +223,18 @@ async def rerun_review(
 async def dismiss_finding(
     review_id: int,
     finding_index: int,
-    installation_id: int = Query(..., ge=1),
+    installation_id: int | None = Query(default=None, ge=1),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
+        if installation_id is not None:
+            await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) != installation_id:
+        if installation_id is None:
+            installation_id = int(review.installation_id)
+            await set_installation_context(session, installation_id)
+        elif int(review.installation_id) != installation_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
 
         debug_artifacts = review.debug_artifacts or {}
@@ -227,18 +251,21 @@ async def dismiss_finding(
 @router.get("/reviews/{review_id}/stream")
 async def stream_review_events(
     review_id: int,
-    installation_id: int = Query(..., ge=1),
+    installation_id: int | None = Query(default=None, ge=1),
 ) -> StreamingResponse:
     async def event_generator() -> AsyncIterator[str]:
         previous_status: str | None = None
         for _ in range(120):
             async with AsyncSessionLocal() as session:
-                await set_installation_context(session, installation_id)
+                if installation_id is not None:
+                    await set_installation_context(session, installation_id)
                 review = await session.get(Review, review_id)
                 if review is None:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Review not found'})}\n\n"
                     return
-                if int(review.installation_id) != installation_id:
+                if installation_id is None:
+                    await set_installation_context(session, int(review.installation_id))
+                elif int(review.installation_id) != installation_id:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'installation_id mismatch'})}\n\n"
                     return
 

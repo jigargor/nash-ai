@@ -74,7 +74,7 @@ describe("PrReviewPageClient", () => {
   });
 
   it("updates selected finding with keyboard navigation", () => {
-    render(<PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} />);
+    render(<PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />);
 
     fireEvent.keyDown(window, { key: "j" });
 
@@ -82,7 +82,7 @@ describe("PrReviewPageClient", () => {
   });
 
   it("links finding click to diff selection state", () => {
-    render(<PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} />);
+    render(<PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />);
 
     fireEvent.click(screen.getAllByText("first")[0]);
 

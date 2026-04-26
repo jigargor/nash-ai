@@ -3,6 +3,7 @@ import type { Finding, FindingOutcome } from "@ai-code-review/shared-types";
 
 export interface ReviewListItem {
   id: number;
+  installation_id: number;
   repo_full_name: string;
   pr_number: number;
   status: string;
@@ -60,15 +61,15 @@ export function fetchOutcomeSummary(installationId?: number, repoFullName?: stri
   return apiFetch<OutcomeSummary>(`/api/v1/telemetry/outcomes/summary${suffix}`);
 }
 
-export function rerunReview(reviewId: number) {
-  return apiFetch<{ ok: boolean; review_id: number }>(`/api/v1/reviews/${reviewId}/rerun`, {
+export function rerunReview(reviewId: number, installationId: number) {
+  return apiFetch<{ ok: boolean; review_id: number }>(`/api/v1/reviews/${reviewId}/rerun?installation_id=${installationId}`, {
     method: "POST",
   });
 }
 
-export function dismissFinding(reviewId: number, findingIndex: number) {
+export function dismissFinding(reviewId: number, findingIndex: number, installationId: number) {
   return apiFetch<{ ok: boolean; review_id: number; dismissed_finding_index: number }>(
-    `/api/v1/reviews/${reviewId}/findings/${findingIndex}/dismiss`,
+    `/api/v1/reviews/${reviewId}/findings/${findingIndex}/dismiss?installation_id=${installationId}`,
     {
       method: "POST",
     },

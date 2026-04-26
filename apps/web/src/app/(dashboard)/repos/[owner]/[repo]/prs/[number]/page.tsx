@@ -8,6 +8,7 @@ interface PrDetailPageProps {
   }>;
   searchParams: Promise<{
     reviewId?: string;
+    installationId?: string;
   }>;
 }
 
@@ -15,13 +16,29 @@ export default async function PrDetailPage({ params, searchParams }: PrDetailPag
   const { owner, repo, number } = await params;
   const sp = await searchParams;
   const reviewIdRaw = sp.reviewId;
+  const installationIdRaw = sp.installationId;
   const reviewId = Number(reviewIdRaw);
-  // #region agent log
-  fetch("http://127.0.0.1:7582/ingest/e6a057ab-47e4-4505-9884-d384fd412c69",{method:"POST",headers:{"Content-Type":"application/json","X-Debug-Session-Id":"7b2718"},body:JSON.stringify({sessionId:"7b2718",runId:"pre-fix-1",hypothesisId:"H3",location:"app/(dashboard)/repos/[owner]/[repo]/prs/[number]/page.tsx:21",message:"pr_detail_page_inputs",data:{owner,repo,number,reviewIdRaw,reviewIdParsed:reviewId,isValidReviewId:Number.isInteger(reviewId)&&reviewId>0},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
-  if (!Number.isInteger(reviewId) || reviewId <= 0) {
-    throw new Error("Missing or invalid reviewId query parameter.");
+  const installationId = Number(installationIdRaw);
+  if (!Number.isInteger(reviewId) || reviewId <= 0 || !Number.isInteger(installationId) || installationId <= 0) {
+    return (
+      <section style={{ padding: "1rem" }}>
+        <h1>
+          {owner}/{repo} PR #{number}
+        </h1>
+        <p style={{ color: "var(--text-muted)" }}>
+          Open this pull request from the dashboard review list so the matching review can be loaded.
+        </p>
+      </section>
+    );
   }
 
-  return <PrReviewPageClient owner={owner} repo={repo} prNumber={number} reviewId={reviewId} />;
+  return (
+    <PrReviewPageClient
+      owner={owner}
+      repo={repo}
+      prNumber={number}
+      reviewId={reviewId}
+      installationId={installationId}
+    />
+  );
 }
