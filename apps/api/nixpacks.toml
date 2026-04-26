@@ -1,0 +1,16 @@
+# Nixpacks' default Python install runs `pip install .` after copying only `pyproject.toml`.
+# Our layout uses setuptools `packages.find` with `where = ["src"]`, so that fails with:
+#   error in 'egg_base' option: 'src' does not exist or is not a directory
+#
+# Install only prepares `/opt/venv` (Railway's runtime PATH). The project and deps are
+# installed in the build phase after the full source tree is copied.
+
+[phases.install]
+cmds = [
+  "python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install --upgrade pip setuptools wheel",
+]
+
+[phases.build]
+cmds = [
+  ". /opt/venv/bin/activate && pip install .",
+]

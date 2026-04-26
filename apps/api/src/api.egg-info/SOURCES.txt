@@ -23,6 +23,7 @@ src/app/agent/loop.py
 src/app/agent/normalization.py
 src/app/agent/profiler.py
 src/app/agent/profiler_cache.py
+src/app/agent/provider_clients.py
 src/app/agent/review_config.py
 src/app/agent/runner.py
 src/app/agent/schema.py
