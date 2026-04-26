@@ -8,6 +8,10 @@ import { FileTree } from "@/components/review/file-tree";
 import { FindingsPanel } from "@/components/review/findings-panel";
 import { ReviewTimeline } from "@/components/review/review-timeline";
 import { StreamingStatus } from "@/components/review/streaming-status";
+import { Button } from "@/components/ui/button";
+import { Panel } from "@/components/ui/panel";
+import { StateBlock } from "@/components/ui/state-block";
+import { useReviewModelAudits } from "@/hooks/use-review-model-audits";
 import { useDismissFinding, useRerunReview } from "@/hooks/use-review-actions";
 import { useReview } from "@/hooks/use-review";
 import { useReviewStream } from "@/hooks/use-review-stream";
@@ -29,6 +33,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const reviewQuery = useReview(reviewId, installationId);
   const rerunMutation = useRerunReview();
   const dismissMutation = useDismissFinding();
+  const modelAudits = useReviewModelAudits(reviewId, installationId);
   const selectedFindingIndex = useReviewUiStore((state) => state.selectedFindingIndex);
   const setSelectedFindingIndex = useReviewUiStore((state) => state.setSelectedFindingIndex);
   const { events, connectionState } = useReviewStream(reviewId, installationId);
@@ -51,28 +56,26 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [findings.length, selectedFindingIndex, setSelectedFindingIndex]);
 
-  if (reviewQuery.isLoading)
-    return <section style={{ padding: "1rem" }}>Loading review details and findings panels...</section>;
+  if (reviewQuery.isLoading) {
+    return <StateBlock title="Loading review details" description="Preparing findings, stream status, and timeline." />;
+  }
 
-  if (reviewQuery.isError)
+  if (reviewQuery.isError) {
     return (
-      <section style={{ padding: "1rem" }}>
-        <h1>API unreachable</h1>
-        <p style={{ color: "var(--text-muted)" }}>Could not load review data. Retry in a moment.</p>
-      </section>
+      <StateBlock title="API unreachable" description="Could not load review data. Retry in a moment." />
     );
+  }
 
-  if (!reviewQuery.data)
+  if (!reviewQuery.data) {
     return (
-      <section style={{ padding: "1rem" }}>
-        <h1>Review not found</h1>
-      </section>
+      <StateBlock title="Review not found" description="The requested review is no longer available." />
     );
+  }
 
-  if (!findings.length)
+  if (!findings.length) {
     return (
-      <section style={{ padding: "1rem" }}>
-        <h1>
+      <Panel elevated>
+        <h1 style={{ marginTop: 0, fontFamily: "var(--font-instrument-serif)" }}>
           {owner}/{repo} · PR #{prNumber}
         </h1>
         <p style={{ color: "var(--text-muted)" }}>
@@ -83,24 +86,17 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
               : "No findings for this review."}
         </p>
         {isFailedReview ? (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
             disabled={rerunMutation.isPending}
             onClick={() => rerunMutation.mutate({ reviewId, installationId })}
-            style={{
-              border: "1px solid var(--border)",
-              borderRadius: "0.5rem",
-              background: "transparent",
-              color: "inherit",
-              cursor: rerunMutation.isPending ? "wait" : "pointer",
-              padding: "0.35rem 0.8rem",
-            }}
           >
             {rerunMutation.isPending ? "Retrying..." : "Retry review"}
-          </button>
+          </Button>
         ) : null}
-      </section>
+      </Panel>
     );
+  }
 
   function handleCopySuggestion(index: number): void {
     const suggestion = findings[index]?.suggestion;
@@ -114,14 +110,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
-      <header
-        style={{
-          border: "1px solid var(--border)",
-          borderRadius: "0.75rem",
-          background: "var(--card)",
-          padding: "0.75rem",
-        }}
-      >
+      <Panel elevated>
         <h1 style={{ margin: 0, fontFamily: "var(--font-instrument-serif)" }}>
           {owner}/{repo} · PR #{prNumber}
         </h1>
@@ -132,32 +121,20 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
             {reviewQuery.data.tokens_used ?? 0} tokens · ${reviewQuery.data.cost_usd ?? "0.000000"}
           </div>
         </div>
-        <button
-          type="button"
+        <p style={{ color: "var(--text-muted)", marginBottom: 0, marginTop: "0.45rem", fontSize: "0.85rem" }}>
+          Model: {reviewQuery.data.model_provider ?? "provider"} / {reviewQuery.data.model}
+          {modelAudits.data ? ` · audit stages: ${modelAudits.data.model_audits.length}` : ""}
+        </p>
+        <Button
+          variant={isFailedReview ? "danger" : "ghost"}
           onClick={() => rerunMutation.mutate({ reviewId, installationId })}
-          style={{
-            marginTop: "0.75rem",
-            border: "1px solid var(--border)",
-            borderRadius: "0.5rem",
-            background: "transparent",
-            color: "inherit",
-            padding: "0.35rem 0.8rem",
-          }}
+          style={{ marginTop: "0.75rem" }}
         >
           {rerunMutation.isPending ? "Retrying..." : isFailedReview ? "Retry review" : "Re-run review"}
-        </button>
-      </header>
+        </Button>
+      </Panel>
 
-      <div
-        style={{
-          border: "1px solid var(--border)",
-          borderRadius: "0.75rem",
-          background: "var(--card)",
-          display: "grid",
-          gridTemplateColumns: "minmax(220px, 1fr) minmax(380px, 2fr) minmax(260px, 1fr)",
-          minHeight: "60vh",
-        }}
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(380px, 2fr) minmax(260px, 1fr)", minHeight: "60vh" }} className="panel panel-elevated">
         <FileTree findings={findings} onSelectFinding={setSelectedFindingIndex} />
         <DiffViewer findings={findings} selectedFindingIndex={selectedFindingIndex} onSelectFinding={setSelectedFindingIndex} />
         <FindingsPanel

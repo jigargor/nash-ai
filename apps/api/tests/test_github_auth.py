@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -85,3 +86,28 @@ def test_get_installation_token_posts_expected_request(monkeypatch: pytest.Monke
     assert headers["Authorization"] == "Bearer jwt-token"
     assert headers["Accept"] == "application/vnd.github+json"
     assert captured["json"] == {}
+
+
+def test_load_private_key_prefers_env_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM", "line1\\nline2")
+    monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM_path", Path("does-not-matter.pem"))
+
+    assert auth._load_private_key() == "line1\nline2"
+
+
+def test_load_private_key_falls_back_to_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    private_key_path = tmp_path / "private-key.pem"
+    private_key_path.write_text("pem-file-value")
+    monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM", None)
+    monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM_path", private_key_path)
+
+    assert auth._load_private_key() == "pem-file-value"
+
+
+def test_load_private_key_raises_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.pem"
+    monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM", None)
+    monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM_path", missing_path)
+
+    with pytest.raises(FileNotFoundError):
+        auth._load_private_key()

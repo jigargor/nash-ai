@@ -45,9 +45,9 @@ export function FileTree({ findings, onSelectFinding }: FileTreeProps) {
                     width: "100%",
                     textAlign: "left",
                     marginTop: "0.25rem",
-                    borderRadius: "0.375rem",
+                    borderRadius: "var(--radius-sm)",
                     border: "1px solid var(--border)",
-                    background: selectedFindingIndex === index ? "rgba(245, 158, 11, 0.2)" : "transparent",
+                    background: selectedFindingIndex === index ? "var(--accent-muted)" : "transparent",
                     color: "inherit",
                     padding: "0.3rem 0.5rem",
                   }}

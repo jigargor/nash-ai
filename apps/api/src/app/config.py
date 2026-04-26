@@ -34,7 +34,8 @@ class Settings(BaseSettings):
 
     github_app_id: str
     github_webhook_secret: str
-    github_private_key_path: Path = Path("private-key.pem")
+    APP_PRIVATE_KEY_PEM: str | None = None
+    APP_PRIVATE_KEY_PEM_path: Path = Path("private-key.pem")
     github_client_id: str
     github_client_secret: str
     database_url: str
@@ -72,9 +73,9 @@ class Settings(BaseSettings):
             raise ValueError("GITHUB_APP_ID is required")
         return str(v).strip()
 
-    @field_validator("github_private_key_path", mode="after")
+    @field_validator("APP_PRIVATE_KEY_PEM_path", mode="after")
     @classmethod
-    def resolve_github_private_key_path(cls, v: Path) -> Path:
+    def resolve_APP_PRIVATE_KEY_PEM_path(cls, v: Path) -> Path:
         """Paths from .env are relative to apps/api (not the process cwd).
 
         Workers are often started from apps/api/src; without this, ./private-key.pem
@@ -84,6 +85,14 @@ class Settings(BaseSettings):
             return v.resolve()
         apps_api = Path(__file__).resolve().parent.parent.parent
         return (apps_api / v).resolve()
+
+    @field_validator("APP_PRIVATE_KEY_PEM", mode="before")
+    @classmethod
+    def strip_APP_PRIVATE_KEY_PEM(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
 
     @model_validator(mode="after")
     def validate_production_database_tls(self) -> "Settings":

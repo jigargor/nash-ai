@@ -56,7 +56,8 @@ pnpm install
 ```bash
 cp .env.example apps/api/.env
 # Fill in GITHUB_APP_ID, GITHUB_WEBHOOK_SECRET, and at least one LLM provider API key.
-# Windows note: use forward slashes for GITHUB_PRIVATE_KEY_PATH
+# Prefer APP_PRIVATE_KEY_PEM on hosted environments; keep APP_PRIVATE_KEY_PEM_PATH for local dev.
+# Windows note: use forward slashes for APP_PRIVATE_KEY_PEM_PATH
 # e.g. C:/Users/you/Documents/2026/your-app.private-key.pem
 ```
 
@@ -183,12 +184,15 @@ Backend deployment target: Railway.
 - `apps/api/railway.toml` defines API and worker start commands.
 - API start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - Worker start command: `arq app.queue.worker.WorkerSettings`
+- Set `APP_PRIVATE_KEY_PEM` in Railway variables for both API and worker services.
+- Keep `APP_PRIVATE_KEY_PEM_PATH` for local development fallback only.
 
 Frontend deployment target: Vercel.
 
 - Project root: `apps/web`
 - Required backend URL wiring should use your deployed API domain.
 - Set `WEB_APP_URL` in API env to the exact frontend origin for strict CORS.
+- Vercel typically does not need `APP_PRIVATE_KEY_PEM` (web uses OAuth client ID/secret), unless you add a server route there that signs GitHub App JWTs.
 
 ### 12. Production security checklist
 

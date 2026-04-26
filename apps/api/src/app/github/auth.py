@@ -7,12 +7,20 @@ import jwt
 from app.config import settings
 
 
+def _normalized_inline_private_key(raw_value: str) -> str:
+    return raw_value.replace("\\n", "\n").strip()
+
+
 def _load_private_key() -> str:
-    path = Path(settings.github_private_key_path)
+    if settings.APP_PRIVATE_KEY_PEM:
+        return _normalized_inline_private_key(settings.APP_PRIVATE_KEY_PEM)
+
+    path = Path(settings.APP_PRIVATE_KEY_PEM_path)
     if not path.is_file():
         raise FileNotFoundError(
             f"GitHub App private key not found at {path}. "
-            "Set GITHUB_PRIVATE_KEY_PATH in apps/api/.env (paths are relative to apps/api)."
+            "Set APP_PRIVATE_KEY_PEM or APP_PRIVATE_KEY_PEM_PATH in apps/api/.env "
+            "(path values are relative to apps/api)."
         )
     return path.read_text()
 
@@ -57,7 +65,7 @@ async def get_installation_token(installation_id: int) -> str:
             if e.response.status_code == 401:
                 hint = (
                     " Check GITHUB_APP_ID matches the App that owns this key, and that "
-                    f"GITHUB_PRIVATE_KEY_PATH points to the correct .pem ({settings.github_private_key_path})."
+                    f"APP_PRIVATE_KEY_PEM is valid or APP_PRIVATE_KEY_PEM_PATH points to the correct .pem ({settings.APP_PRIVATE_KEY_PEM_path})."
                 )
             raise RuntimeError(
                 f"GitHub installation token request failed ({e.response.status_code}): {body}{hint}"

@@ -7,6 +7,8 @@ export interface ReviewListItem {
   repo_full_name: string;
   pr_number: number;
   status: string;
+  model_provider?: string | null;
+  model?: string | null;
   tokens_used: number | null;
   cost_usd: string | null;
 }
@@ -18,6 +20,7 @@ export interface ReviewDetail {
   pr_number: number;
   pr_head_sha: string;
   status: string;
+  model_provider?: string | null;
   model: string;
   findings: {
     findings: Finding[];
@@ -30,6 +33,34 @@ export interface ReviewDetail {
   finding_outcomes: FindingOutcome[];
 }
 
+export interface ReviewOutcomeResponse {
+  review_id: number;
+  finding_outcomes: FindingOutcome[];
+}
+
+export interface ReviewModelAudit {
+  id: number;
+  run_id: string;
+  stage: string;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  findings_count: number | null;
+  accepted_findings_count: number | null;
+  conflict_score: number | null;
+  decision: string;
+  metadata_json: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+export interface ReviewModelAuditsResponse {
+  review_id: number;
+  model_audits: ReviewModelAudit[];
+}
+
 export function fetchReviews(installationId?: number) {
   const suffix = installationId ? `?installation_id=${installationId}` : "";
   return apiFetch<ReviewListItem[]>(`/api/v1/reviews${suffix}`);
@@ -38,6 +69,16 @@ export function fetchReviews(installationId?: number) {
 export function fetchReview(reviewId: number, installationId?: number) {
   const suffix = installationId ? `?installation_id=${installationId}` : "";
   return apiFetch<ReviewDetail>(`/api/v1/reviews/${reviewId}${suffix}`);
+}
+
+export function fetchReviewOutcomes(reviewId: number, installationId?: number) {
+  const suffix = installationId ? `?installation_id=${installationId}` : "";
+  return apiFetch<ReviewOutcomeResponse>(`/api/v1/reviews/${reviewId}/outcomes${suffix}`);
+}
+
+export function fetchReviewModelAudits(reviewId: number, installationId?: number) {
+  const suffix = installationId ? `?installation_id=${installationId}` : "";
+  return apiFetch<ReviewModelAuditsResponse>(`/api/v1/reviews/${reviewId}/model-audits${suffix}`);
 }
 
 export interface OutcomeSummary {
