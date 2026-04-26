@@ -79,6 +79,12 @@ async def retry_review(
             logger.exception("Invalid review repo name review_id=%s", review_id)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
+        if not settings.has_llm_api_key_configured():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No LLM API key configured (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)",
+            )
+
         job = await request.app.state.redis.enqueue_job(
             "review_pr",
             int(review.id),

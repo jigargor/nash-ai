@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import hmac
 from collections.abc import AsyncIterator
@@ -40,7 +41,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "Redis pool target %s (worker must use the same REDIS_URL; shell env overrides .env.local).",
         format_redis_target(settings.redis_url),
     )
-    app.state.redis = await create_redis_pool()
+    try:
+        app.state.redis = await asyncio.wait_for(create_redis_pool(), timeout=25.0)
+    except TimeoutError as exc:
+        logger.exception(
+            "Redis connection timed out after 25s; check REDIS_URL and private networking. "
+            "Railway healthchecks need the app to finish startup."
+        )
+        raise RuntimeError("Redis pool connection timed out") from exc
     yield
     await app.state.redis.close()
     await engine.dispose()

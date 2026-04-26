@@ -102,23 +102,10 @@ class Settings(BaseSettings):
             return self
         raise ValueError("DATABASE_URL must enable TLS in production")
 
-    @model_validator(mode="after")
-    def validate_llm_provider_keys(self) -> "Settings":
-        if not self.enable_reviews:
-            return self
-        has_any_key = any(
-            key and key.strip()
-            for key in (
-                self.anthropic_api_key,
-                self.openai_api_key,
-                self.gemini_api_key,
-            )
-        )
-        if has_any_key:
-            return self
-        raise ValueError(
-            "At least one LLM provider key must be configured when ENABLE_REVIEWS is true "
-            "(ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)."
+    def has_llm_api_key_configured(self) -> bool:
+        return any(
+            (key or "").strip()
+            for key in (self.anthropic_api_key, self.openai_api_key, self.gemini_api_key)
         )
 
 

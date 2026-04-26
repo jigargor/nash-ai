@@ -8,9 +8,11 @@ buildCommand = ". /opt/venv/bin/activate && pip install ."
 [deploy]
 startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
-healthcheckTimeout = 30
+# Allow Redis + migrations + cold start; 30s is often too tight on Railway.
+healthcheckTimeout = 180
 restartPolicyType = "ON_FAILURE"
 
-[[services]]
-name = "worker"
-startCommand = "arq app.queue.worker.WorkerSettings"
+# Deploy the ARQ worker as a separate Railway service (duplicate repo, same root).
+# That service must NOT use an HTTP healthcheck: it has no web server. In the
+# worker service settings set healthcheckPath to empty / disabled, or use a
+# dedicated railway.worker.toml with healthcheckPath = null.
