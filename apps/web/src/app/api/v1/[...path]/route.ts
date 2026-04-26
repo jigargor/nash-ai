@@ -10,6 +10,19 @@ const DEFAULT_DEV_API = "http://localhost:8000";
 /** Upstream fetch timeout so the browser does not hang on "Loading…" if Railway is unreachable. */
 const UPSTREAM_TIMEOUT_MS = 25_000;
 
+/**
+ * Railway (and most hosts) speak HTTPS on the public URL. If `API_URL` uses `http://`,
+ * the upstream often responds with 302 → https. With `redirect: "manual"` that response
+ * was forwarded to the browser, which then followed the redirect cross-origin and hit CORS.
+ */
+function normalizeUpstreamBaseUrl(base: string): string {
+  const trimmed = base.trim();
+  if (process.env.NODE_ENV !== "production") return trimmed;
+  if (!trimmed.startsWith("http://")) return trimmed;
+  if (trimmed.includes("localhost") || trimmed.includes("127.0.0.1")) return trimmed;
+  return `https://${trimmed.slice("http://".length)}`;
+}
+
 export const runtime = "nodejs";
 
 interface ApiProxyRouteContext {
@@ -53,7 +66,8 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
 
   const { path } = await context.params;
   const incomingUrl = new URL(request.url);
-  const targetUrl = new URL(`/api/v1/${path.join("/")}${incomingUrl.search}`, apiBase);
+  const apiBaseNormalized = normalizeUpstreamBaseUrl(apiBase);
+  const targetUrl = new URL(`/api/v1/${path.join("/")}${incomingUrl.search}`, apiBaseNormalized);
   const headers = new Headers();
   const contentType = request.headers.get("content-type");
   const accept = request.headers.get("accept");
@@ -67,7 +81,7 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
       headers,
       body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
       cache: "no-store",
-      redirect: "manual",
+      redirect: "follow",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
   } catch (error) {
