@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { AUTH_COOKIE_NAME, AUTH_COOKIE_TTL_SECONDS, AUTH_STATE_COOKIE_NAME } from "@/lib/auth/constants";
-import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/env/monorepo-env";
+import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/monorepo-env";
 import { exchangeCodeForToken, getGitHubUser } from "@/lib/auth/github";
 import { createSessionToken } from "@/lib/auth/session";
 

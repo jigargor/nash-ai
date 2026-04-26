@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { AUTH_COOKIE_TTL_SECONDS, AUTH_STATE_COOKIE_NAME } from "@/lib/auth/constants";
-import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/env/monorepo-env";
+import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/monorepo-env";
 import { buildGitHubAuthorizeUrl } from "@/lib/auth/github";
 import { createOAuthState } from "@/lib/auth/session";
 

@@ -1,4 +1,4 @@
-import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/env/monorepo-env";
+import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/monorepo-env";
 
 export interface GitHubOAuthTokenResponse {
   access_token: string;
