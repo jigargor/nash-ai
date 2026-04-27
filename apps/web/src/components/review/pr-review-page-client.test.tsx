@@ -58,6 +58,8 @@ vi.mock("@/hooks/use-review-model-audits", () => ({
     data: {
       model_audits: [],
     },
+    isLoading: false,
+    isError: false,
   }),
 }));
 

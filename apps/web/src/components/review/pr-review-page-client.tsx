@@ -1,6 +1,7 @@
 "use client";
 
 import type { Finding } from "@ai-code-review/shared-types";
+import Link from "next/link";
 import { useEffect } from "react";
 
 import { ActionChain } from "@/components/review/action-chain";
@@ -29,6 +30,24 @@ interface PrReviewPageClientProps {
 
 function isFindingVisible(_finding: Finding): boolean {
   return true;
+}
+
+function noFindingsBodyText(
+  summary: string,
+  debugArtifacts: Record<string, unknown> | null | undefined,
+  isFailedReview: boolean,
+  isInFlight: boolean,
+): string {
+  const trimmed = summary.trim();
+  if (trimmed.length > 0) return trimmed;
+  const fp = debugArtifacts?.fast_path_decision;
+  if (fp && typeof fp === "object" && fp !== null && "reason" in fp) {
+    const reason = (fp as Record<string, unknown>).reason;
+    if (typeof reason === "string" && reason.trim().length > 0) return reason;
+  }
+  if (isFailedReview) return "Review failed before findings were produced.";
+  if (isInFlight) return "Review is queued or running. This page refreshes every few seconds.";
+  return "No issues matched the review thresholds, or findings were filtered before posting.";
 }
 
 function ReviewInProgressBanner(props: { reviewStatus: string; hasStaleFindings: boolean }) {
@@ -100,34 +119,14 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     );
   }
 
-  if (!findings.length) {
-    return (
-      <>
-        {isInFlight ? <ReviewInProgressBanner reviewStatus={reviewStatus} hasStaleFindings={false} /> : null}
-        <Panel elevated>
-          <h1 style={{ marginTop: 0, fontFamily: "var(--font-instrument-serif)" }}>
-            {owner}/{repo} · PR #{prNumber}
-          </h1>
-          <p style={{ color: "var(--text-muted)" }}>
-            {isInFlight
-              ? "Review is queued or running. This page refreshes every few seconds."
-              : isFailedReview
-                ? "Review failed before findings were produced."
-                : "No findings for this review."}
-          </p>
-          {isFailedReview ? (
-            <Button
-              variant="ghost"
-              disabled={isInFlight}
-              onClick={() => rerunMutation.mutate({ reviewId, installationId })}
-            >
-              {isInFlight ? "Review in progress…" : "Retry review"}
-            </Button>
-          ) : null}
-        </Panel>
-      </>
-    );
-  }
+  const data = reviewQuery.data;
+  const postedFindingsCount = findings.length;
+  const audits = modelAudits.data?.model_audits ?? [];
+  const pipelineEmptyHint = modelAudits.isLoading
+    ? "Loading pipeline stages…"
+    : modelAudits.isError
+      ? "Could not load model audits."
+      : null;
 
   function handleCopySuggestion(index: number): void {
     const suggestion = findings[index]?.suggestion;
@@ -139,22 +138,42 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     void dismissMutation.mutateAsync({ reviewId, findingIndex: index, installationId });
   }
 
+  const summaryParagraph = findings.length
+    ? summary
+    : noFindingsBodyText(summary, data.debug_artifacts, isFailedReview, isInFlight);
+
   return (
-    <section style={{ display: "grid", gap: "1rem" }}>
-      {isInFlight ? <ReviewInProgressBanner reviewStatus={reviewStatus} hasStaleFindings={findings.length > 0} /> : null}
+    <section className="pr-review-page" style={{ display: "grid", gap: "1rem" }}>
+      <div style={{ marginBottom: "-0.35rem" }}>
+        <Link
+          href="/reviews"
+          className="pr-review-back-link"
+          aria-label="Back to all reviews"
+        >
+          <span aria-hidden className="pr-review-back-arrow">
+            ←
+          </span>
+          Back to reviews
+        </Link>
+      </div>
+      {isInFlight ? (
+        <ReviewInProgressBanner reviewStatus={reviewStatus} hasStaleFindings={postedFindingsCount > 0} />
+      ) : null}
       <Panel elevated>
-        <h1 style={{ margin: 0, fontFamily: "var(--font-instrument-serif)" }}>
+        <h1 style={{ margin: 0, fontFamily: "var(--font-instrument-serif)", overflowWrap: "anywhere", wordBreak: "break-word" }}>
           {owner}/{repo} · PR #{prNumber}
         </h1>
-        <p style={{ marginBottom: "0.25rem", color: "var(--text-muted)" }}>{summary}</p>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <p className="pr-review-summary-text" style={{ marginBottom: "0.25rem", color: "var(--text-muted)" }}>
+          {summaryParagraph}
+        </p>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
           <StreamingStatus state={connectionState} />
           <div style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
-            {reviewQuery.data.tokens_used ?? 0} tokens · ${reviewQuery.data.cost_usd ?? "0.000000"}
+            {data.tokens_used ?? 0} tokens · ${data.cost_usd ?? "0.000000"} · {postedFindingsCount} findings
           </div>
         </div>
         <p style={{ color: "var(--text-muted)", marginBottom: 0, marginTop: "0.45rem", fontSize: "0.85rem" }}>
-          Model: {reviewQuery.data.model_provider ?? "provider"} / {reviewQuery.data.model}
+          Model: {data.model_provider ?? "provider"} / {data.model}
         </p>
         <Button
           variant={isFailedReview ? "danger" : "ghost"}
@@ -166,26 +185,35 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         </Button>
       </Panel>
 
-      {modelAudits.data && modelAudits.data.model_audits.length > 0 && (
-        <ActionChain
-          audits={modelAudits.data.model_audits}
-          debugArtifacts={reviewQuery.data.debug_artifacts ?? null}
-          costUsd={reviewQuery.data.cost_usd}
-        />
+      <ActionChain
+        audits={audits}
+        debugArtifacts={data.debug_artifacts ?? null}
+        costUsd={data.cost_usd}
+        postedFindingsCount={postedFindingsCount}
+        pipelineEmptyHint={pipelineEmptyHint}
+      />
+
+      {postedFindingsCount > 0 ? (
+        <div className="review-workspace-grid panel panel-elevated">
+          <FileTree findings={findings} onSelectFinding={setSelectedFindingIndex} />
+          <DiffViewer findings={findings} selectedFindingIndex={selectedFindingIndex} onSelectFinding={setSelectedFindingIndex} />
+          <FindingsPanel
+            findings={findings}
+            findingOutcomes={findingOutcomes}
+            selectedFindingIndex={selectedFindingIndex}
+            onSelectFinding={setSelectedFindingIndex}
+            onDismiss={handleDismiss}
+            onCopySuggestion={handleCopySuggestion}
+          />
+        </div>
+      ) : (
+        <Panel>
+          <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.9rem" }}>
+            No inline findings to show in the diff panels. Use the action chain above for pipeline detail and token cost.
+          </p>
+        </Panel>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(380px, 2fr) minmax(260px, 1fr)", minHeight: "60vh" }} className="panel panel-elevated">
-        <FileTree findings={findings} onSelectFinding={setSelectedFindingIndex} />
-        <DiffViewer findings={findings} selectedFindingIndex={selectedFindingIndex} onSelectFinding={setSelectedFindingIndex} />
-        <FindingsPanel
-          findings={findings}
-          findingOutcomes={findingOutcomes}
-          selectedFindingIndex={selectedFindingIndex}
-          onSelectFinding={setSelectedFindingIndex}
-          onDismiss={handleDismiss}
-          onCopySuggestion={handleCopySuggestion}
-        />
-      </div>
       <ReviewTimeline events={events} />
     </section>
   );

@@ -11,6 +11,9 @@ export interface ReviewListItem {
   model?: string | null;
   tokens_used: number | null;
   cost_usd: string | null;
+  findings_count?: number;
+  files_changed?: number | null;
+  lines_changed?: number | null;
 }
 
 export interface ReviewDetail {

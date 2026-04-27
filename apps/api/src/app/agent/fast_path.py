@@ -225,6 +225,7 @@ def fast_path_metadata(
     diff_tokens: int,
     fallback_reason: str | None,
 ) -> dict[str, Any]:
+    changed_line_count = sum(int(item.changed_lines) for item in classified)
     return {
         "decision": decision.decision,
         "risk_labels": decision.risk_labels,
@@ -235,6 +236,7 @@ def fast_path_metadata(
         "fallback_reason": fallback_reason,
         "diff_tokens": diff_tokens,
         "changed_file_count": len(classified),
+        "changed_line_count": changed_line_count,
         "file_classes": dict(sorted(_file_class_counts(classified).items())),
     }
 

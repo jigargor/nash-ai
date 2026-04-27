@@ -7,12 +7,29 @@ import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { useInstallations } from "@/hooks/use-installations";
 import { useReviews } from "@/hooks/use-reviews";
-import { isReviewInFlightStatus } from "@/lib/review-status";
+
+function statusVisualClass(status: string): string {
+  if (status === "done") return "review-status-dot review-status-done";
+  if (status === "failed") return "review-status-dot review-status-failed";
+  return "review-status-dot review-status-running";
+}
+
+function statusAriaLabel(status: string): string {
+  if (status === "done") return "Done";
+  if (status === "failed") return "Failed";
+  return "Running";
+}
+
+function modelLabel(provider?: string | null, model?: string | null): string {
+  if (!provider && !model) return "—";
+  return `${provider ?? "provider"} / ${model ?? "model"}`;
+}
 
 export default function ReviewsPage() {
   const installations = useInstallations();
   const [installationId, setInstallationId] = useState<number | undefined>(undefined);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [findingsFilter, setFindingsFilter] = useState<"all" | "zero" | "nonzero">("all");
   const reviewsQuery = useReviews(installationId);
 
   const allStatuses = useMemo(() => {
@@ -22,9 +39,17 @@ export default function ReviewsPage() {
 
   const filteredReviews = useMemo(() => {
     const reviews = reviewsQuery.data ?? [];
-    if (statusFilter === "all") return reviews;
-    return reviews.filter((item) => item.status === statusFilter);
-  }, [reviewsQuery.data, statusFilter]);
+    let list = reviews;
+    if (statusFilter !== "all") {
+      list = list.filter((item) => item.status === statusFilter);
+    }
+    if (findingsFilter === "zero") {
+      list = list.filter((item) => (item.findings_count ?? 0) === 0);
+    } else if (findingsFilter === "nonzero") {
+      list = list.filter((item) => (item.findings_count ?? 0) > 0);
+    }
+    return list;
+  }, [reviewsQuery.data, statusFilter, findingsFilter]);
 
   const installationOptions = installations.data ?? [];
 
@@ -69,6 +94,21 @@ export default function ReviewsPage() {
               </option>
             ))}
           </select>
+
+          <label htmlFor="findings-filter" style={{ color: "var(--text-muted)" }}>
+            Findings
+          </label>
+          <select
+            id="findings-filter"
+            className="app-search"
+            style={{ width: "200px" }}
+            value={findingsFilter}
+            onChange={(event) => setFindingsFilter(event.target.value as "all" | "zero" | "nonzero")}
+          >
+            <option value="all">Any count</option>
+            <option value="zero">0 findings</option>
+            <option value="nonzero">1+ findings</option>
+          </select>
         </div>
       </Panel>
 
@@ -81,35 +121,56 @@ export default function ReviewsPage() {
       ) : null}
 
       {!reviewsQuery.isLoading && !reviewsQuery.isError && filteredReviews.length === 0 ? (
-        <StateBlock title="No reviews found" description="Try a different installation or clear status filters." />
+        <StateBlock
+          title="No reviews found"
+          description="Try a different installation or relax status / findings filters."
+        />
       ) : null}
 
       {!reviewsQuery.isLoading && !reviewsQuery.isError && filteredReviews.length > 0 ? (
         <Panel>
-          <div style={{ display: "grid", gap: "0.5rem" }}>
+          <div className="reviews-list-grid">
             {filteredReviews.map((review) => (
               <Link
                 key={review.id}
                 href={`/repos/${review.repo_full_name}/prs/${review.pr_number}?reviewId=${review.id}&installationId=${review.installation_id}`}
-                style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-md)",
-                  padding: "0.65rem 0.8rem",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: "0.75rem",
-                }}
+                className="review-row-link"
               >
-                <span>
-                  {review.repo_full_name} · PR #{review.pr_number}
+                <span className="review-row-left">
+                  <span
+                    className={statusVisualClass(review.status)}
+                    aria-label={statusAriaLabel(review.status)}
+                    title={statusAriaLabel(review.status)}
+                  />
+                  <span className="review-row-title">
+                    {review.repo_full_name} · PR #{review.pr_number}
+                  </span>
                 </span>
-                <span style={{ color: "var(--text-muted)" }}>
-                  {isReviewInFlightStatus(review.status) ? "● " : ""}
-                  {review.status}
-                  {isReviewInFlightStatus(review.status) ? " (refreshing…)" : ""}
-                  {review.model_provider || review.model ? ` · ${review.model_provider ?? "provider"}/${review.model ?? "model"}` : ""}
-                  {" · "}
-                  {review.tokens_used ?? 0} tokens · ${review.cost_usd ?? "0.000000"}
+                <span className="review-row-right">
+                  <span className="review-findings-pill">{review.findings_count ?? 0} findings</span>
+                  <span className="review-cost-text">${review.cost_usd ?? "0.000000"}</span>
+                </span>
+                <span className="review-hover-card" aria-hidden>
+                  <span className="review-hover-row">
+                    <span className="review-hover-key">Model</span>
+                    <span className="review-hover-value">{modelLabel(review.model_provider, review.model)}</span>
+                  </span>
+                  <span className="review-hover-row">
+                    <span className="review-hover-key">Tokens</span>
+                    <span className="review-hover-value">{review.tokens_used ?? 0}</span>
+                  </span>
+                  <span className="review-hover-row">
+                    <span className="review-hover-key">Files changed</span>
+                    <span className="review-hover-value">
+                      {typeof review.files_changed === "number" ? review.files_changed : "—"}
+                    </span>
+                  </span>
+                  <span className="review-hover-row">
+                    <span className="review-hover-key">LOC changed</span>
+                    <span className="review-hover-value">
+                      {typeof review.lines_changed === "number" ? review.lines_changed : "—"}
+                    </span>
+                  </span>
                 </span>
               </Link>
             ))}

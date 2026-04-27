@@ -23,9 +23,14 @@ function classNames(...values: Array<string | false | null | undefined>): string
   return values.filter(Boolean).join(" ");
 }
 
+/** Single PR review view lives under /repos/:owner/:repo/prs/:number — treat as part of All Reviews, not Repositories. */
+function isPullRequestReviewRoute(pathname: string): boolean {
+  return /^\/repos\/[^/]+\/[^/]+\/prs\/[^/]+$/.test(pathname);
+}
+
 function pageTitle(pathname: string): string {
   if (pathname.startsWith("/reviews")) return "All Reviews";
-  if (pathname.startsWith("/repos/")) return "Review Details";
+  if (isPullRequestReviewRoute(pathname)) return "All Reviews";
   if (pathname.startsWith("/repos")) return "Repositories";
   if (pathname.startsWith("/settings")) return "Settings";
   return "Dashboard";
@@ -33,6 +38,14 @@ function pageTitle(pathname: string): string {
 
 function isActive(pathname: string, href: string): boolean {
   if (href === "/dashboard") return pathname === "/dashboard";
+  if (href === "/reviews") {
+    return pathname === "/reviews" || pathname.startsWith("/reviews/") || isPullRequestReviewRoute(pathname);
+  }
+  if (href === "/repos") {
+    if (isPullRequestReviewRoute(pathname)) return false;
+    return pathname === "/repos" || pathname.startsWith("/repos/");
+  }
+  if (href === "/settings") return pathname === "/settings" || pathname.startsWith("/settings/");
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 

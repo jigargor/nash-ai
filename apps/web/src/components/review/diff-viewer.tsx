@@ -32,10 +32,17 @@ export function DiffViewer({ findings, selectedFindingIndex, onSelectFinding }: 
             marginBottom: "0.5rem",
           }}
         >
-          <div style={{ color: "var(--text-muted)", fontFamily: "var(--font-geist-mono)" }}>
+          <div
+            style={{
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-geist-mono)",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+            }}
+          >
             {finding.file_path}:{finding.line_start}
           </div>
-          <div style={{ marginTop: "0.3rem" }}>{finding.message}</div>
+          <div style={{ marginTop: "0.3rem", overflowWrap: "anywhere", wordBreak: "break-word" }}>{finding.message}</div>
           {finding.suggestion ? (
             <pre
               style={{
@@ -45,6 +52,9 @@ export function DiffViewer({ findings, selectedFindingIndex, onSelectFinding }: 
                 background: "var(--background)",
                 overflowX: "auto",
                 border: "1px solid var(--border)",
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+                wordBreak: "break-word",
               }}
             >
               {finding.suggestion}

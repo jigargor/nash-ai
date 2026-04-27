@@ -97,8 +97,17 @@ export function FindingsPanel({
               <Badge variant={severityVariant(finding.severity)}>{finding.severity.toUpperCase()}</Badge>
               <strong>{finding.category}</strong>
             </div>
-            <div style={{ marginTop: "0.25rem" }}>{finding.message}</div>
-            <div style={{ marginTop: "0.25rem", color: "var(--text-muted)" }}>
+            <div style={{ marginTop: "0.25rem", overflowWrap: "anywhere", wordBreak: "break-word" }}>{finding.message}</div>
+            <div
+              style={{
+                marginTop: "0.25rem",
+                color: "var(--text-muted)",
+                overflowWrap: "anywhere",
+                wordBreak: "break-word",
+                fontFamily: "var(--font-geist-mono)",
+                fontSize: "0.82rem",
+              }}
+            >
               {finding.file_path}:{finding.line_start}
             </div>
             <div style={{ marginTop: "0.25rem", color: "var(--text-muted)" }}>
