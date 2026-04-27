@@ -469,13 +469,42 @@ select {
   margin: var(--space-6) 0;
 }
 
+.static-document-bio-wrap {
+  display: flex;
+  gap: var(--space-5);
+  align-items: flex-start;
+}
+
+.static-document-bio-thumb {
+  flex-shrink: 0;
+  width: 112px;
+  height: 112px;
+  object-fit: cover;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
 .static-document-bio {
+  flex: 1;
+  min-width: 0;
   color: var(--text-muted);
   font-style: italic;
 }
 
 .static-document-bio p:last-child {
   margin-bottom: 0;
+}
+
+@media (max-width: 520px) {
+  .static-document-bio-wrap {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .static-document-bio {
+    text-align: left;
+  }
 }
 
 .static-document-prose a {

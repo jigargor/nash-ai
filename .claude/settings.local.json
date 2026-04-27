@@ -16,7 +16,8 @@
       "Bash(python -m pytest tests/ -q --ignore=tests/test_agent_chunked_runtime.py)",
       "Bash(python -m pytest tests/test_webhooks_router.py -x -q)",
       "Bash(python -m pytest tests/test_llm_catalog_router.py tests/test_agent_provider_clients.py tests/test_github_auth.py -q)",
-      "Bash(python -m pytest tests/test_llm_catalog_router.py -v)"
+      "Bash(python -m pytest tests/test_llm_catalog_router.py -v)",
+      "Bash(git push *)"
     ]
   }
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 
 import { StaticDocument } from "@/components/layout/static-document";
 
@@ -38,21 +39,31 @@ export default function AboutPage() {
 
         <hr className="static-document-rule" />
 
-        <section className="static-document-bio" aria-label="Author note">
-          <p>
-            Hi, I&apos;m just a guy. I have some professional experience working as a full-stack engineer with a
-            background in clinical data systems and a deep curiosity about what AI can do when it&apos;s built
-            carefully. Nash AI started as a personal tool—I wanted to compare, contrast, and utilize interactions
-            between different models, multiple agents and so on. So I built it.
-          </p>
-          <p>
-            I spent six years building data pipelines and LLM-integrated systems in healthcare, took a deliberate
-            sabbatical to reorient, and came back building things I actually want to exist. Nash AI is one of them.
-          </p>
-          <p>
-            When I&apos;m not coding I&apos;m lifting, baking, hiking, or reading something that has nothing to do
-            with software.
-          </p>
+        <section className="static-document-bio-wrap" aria-label="Author note">
+          <Image
+            src="/me.png"
+            alt=""
+            width={112}
+            height={112}
+            className="static-document-bio-thumb"
+            sizes="112px"
+          />
+          <div className="static-document-bio">
+            <p>
+              Hi, I&apos;m just a guy. I have some professional experience working as a full-stack engineer with a
+              background in clinical data systems and a deep curiosity about what AI can do when it&apos;s built
+              carefully. Nash AI started as a personal tool—I wanted to compare, contrast, and utilize interactions
+              between different models, multiple agents and so on. So I built it.
+            </p>
+            <p>
+              I spent six years building data pipelines and LLM-integrated systems in healthcare, took a deliberate
+              sabbatical to reorient, and came back building things I actually want to exist. Nash AI is one of them.
+            </p>
+            <p>
+              When I&apos;m not coding I&apos;m lifting, baking, hiking, or reading something that has nothing to do
+              with software.
+            </p>
+          </div>
         </section>
       </StaticDocument>
     </main>

@@ -55,7 +55,7 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   images: {
     // Next.js 16+: local src with query strings must match localPatterns (omit `search` to allow any ?v=…).
-    localPatterns: [{ pathname: "/logo.png" }],
+    localPatterns: [{ pathname: "/logo.png" }, { pathname: "/me.png" }],
     // In dev, avoid long-lived /_next/image optimizer cache when iterating on public/logo.png.
     ...(isDev ? { minimumCacheTTL: 0 } : {}),
   },
