@@ -85,6 +85,10 @@ async def _validate_api_key(provider: str, api_key: str) -> None:
                         )
     except HTTPException:
         raise
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=422, detail="API key validation failed: provider did not respond in time"
+        )
     except Exception as exc:
         logger.warning("Key validation probe failed for provider %s: %s", provider, exc)
         raise HTTPException(
@@ -170,12 +174,13 @@ async def delete_current_user(
     """GDPR erasure: soft-delete the user. Cascade removes all provider keys via DB FK."""
     if x_user_github_id is None:
         raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
-    user = await _resolve_user(x_user_github_id)
     async with AsyncSessionLocal() as session:
-        db_user = await session.get(User, user.id)
-        if db_user is None:
+        row = (
+            await session.execute(select(User).where(User.github_id == x_user_github_id))
+        ).scalar_one_or_none()
+        if row is None or row.deleted_at is not None:
             raise HTTPException(status_code=404, detail="User not found")
-        db_user.deleted_at = datetime.now(timezone.utc)
+        row.deleted_at = datetime.now(timezone.utc)
         await session.commit()
     return {"detail": "User marked for deletion"}
 

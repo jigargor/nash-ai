@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
+    # When API_ACCESS_KEY is unset the entire API is open — intended for local dev only.
+    # Production deployments must set API_ACCESS_KEY; the check below enforces that.
+    # Staging/preview envs should also set API_ACCESS_KEY to prevent data leakage.
     if settings.environment.lower() == "production" and not settings.api_access_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured"

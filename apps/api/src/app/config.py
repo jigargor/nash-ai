@@ -106,6 +106,19 @@ class Settings(BaseSettings):
         text = str(v).strip().rstrip("/")
         return text or None
 
+    @field_validator("fernet_key", mode="after")
+    @classmethod
+    def validate_fernet_key(cls, v: str) -> str:
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(v.encode())
+        except Exception as exc:
+            raise ValueError(
+                f"FERNET_KEY is invalid (must be a 32-byte URL-safe base64 key): {exc}"
+            ) from exc
+        return v
+
     @model_validator(mode="after")
     def validate_production_database_tls(self) -> "Settings":
         if self.environment.lower() != "production":
