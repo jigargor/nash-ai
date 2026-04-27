@@ -10,6 +10,7 @@ from app.agent.provider_clients import (
 )
 from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.tools import TOOLS, execute_tool
+from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
 from app.observability import create_async_anthropic_client
 
 
@@ -34,10 +35,12 @@ async def _run_agent_anthropic(
     model_name: str,
 ) -> list[dict[str, Any]]:
     client = create_async_anthropic_client(get_provider_api_key("anthropic"))
+    adapter = get_provider_adapter("anthropic")
     messages: list[dict[str, Any]] = [{"role": "user", "content": initial_user_message}]
     turns = 0
     fetch_file_content_calls = 0
     started_at = monotonic()
+    anthropic_system: Any = adapter.render_anthropic_system(system_prompt, _cache_options(context))
 
     for _ in range(MAX_ITERATIONS):
         if _contains_empty_user_message(messages):
@@ -45,13 +48,7 @@ async def _run_agent_anthropic(
         response = await client.messages.create(
             model=model_name,
             max_tokens=4096,
-            system=[
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
+            system=anthropic_system,
             tools=TOOLS,  # type: ignore[arg-type]
             messages=messages,  # type: ignore[arg-type]
         )
@@ -59,10 +56,7 @@ async def _run_agent_anthropic(
         if turns == 1:
             context["first_model_call_latency_ms"] = int((monotonic() - started_at) * 1000)
 
-        usage = response.usage
-        context["input_tokens"] = context.get("input_tokens", 0) + usage.input_tokens
-        context["output_tokens"] = context.get("output_tokens", 0) + usage.output_tokens
-        context["tokens_used"] = context.get("tokens_used", 0) + usage.input_tokens + usage.output_tokens
+        record_usage(context, "anthropic", model_name, adapter.parse_usage(response.usage))
 
         messages.append({"role": "assistant", "content": response.content})
 
@@ -115,6 +109,7 @@ async def _run_agent_openai_compatible(
     provider: ModelProvider,
 ) -> list[dict[str, Any]]:
     client = create_openai_compatible_client(provider)
+    adapter = get_provider_adapter(provider)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": initial_user_message},
@@ -132,15 +127,18 @@ async def _run_agent_openai_compatible(
             temperature=0,
             messages=openai_messages,
             tools=openai_tools_any,
+            **adapter.chat_completion_extra_kwargs(
+                system_prompt=system_prompt,
+                model_name=model_name,
+                options=_cache_options(context),
+            ),
         )
         turns += 1
         if turns == 1:
             context["first_model_call_latency_ms"] = int((monotonic() - started_at) * 1000)
         usage = completion.usage
         if usage is not None:
-            context["input_tokens"] = context.get("input_tokens", 0) + int(usage.prompt_tokens or 0)
-            context["output_tokens"] = context.get("output_tokens", 0) + int(usage.completion_tokens or 0)
-            context["tokens_used"] = context.get("tokens_used", 0) + int(usage.total_tokens or 0)
+            record_usage(context, provider, model_name, adapter.parse_usage(usage))
         if not completion.choices:
             break
         message = completion.choices[0].message
@@ -212,3 +210,18 @@ def _contains_empty_user_message(messages: list[dict[str, Any]]) -> bool:
         if isinstance(content, list) and not content:
             return True
     return False
+
+
+def _cache_options(context: dict[str, Any]) -> CacheRequestOptions:
+    return CacheRequestOptions(
+        cache_key=_optional_str(context.get("llm_prompt_cache_key")),
+        ttl=_optional_str(context.get("anthropic_cache_ttl")),
+        retention=_optional_str(context.get("openai_prompt_cache_retention")),
+        cached_content_name=_optional_str(context.get("gemini_cached_content_name")),
+    )
+
+
+def _optional_str(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None

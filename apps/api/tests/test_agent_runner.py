@@ -18,6 +18,8 @@ from app.agent.runner import (
     _merge_debate_results,
     _mark_review_done,
     _repair_findings_from_files,
+    _review_config_for_fast_path_decision,
+    _run_fast_path_stage,
     _summarize_target_line_mismatch_subtypes,
     _validate_result,
     _validation_feedback,
@@ -25,6 +27,8 @@ from app.agent.runner import (
     cross_check_tool_evidence,
     extract_tool_call_history,
 )
+from app.agent.fast_path import FastPathDecision
+from app.llm.router import ModelResolution, ModelRoleRoutingConfig, ModelsRoutingConfig
 from app.agent.diff_parser import FileInDiff, NumberedLine
 from app.agent.schema import Finding, ReviewResult
 
@@ -226,6 +230,161 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
     assert "quality" in review.debug_artifacts
 
 
+@pytest.mark.anyio
+async def test_run_fast_path_stage_records_audit_and_debug_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolution = ModelResolution(
+        role="fast_path",
+        provider="openai",
+        model="gpt-5-mini",
+        tier="economy",
+        status="active",
+        catalog_version_hash="abc123",
+    )
+    audits: list[dict[str, object]] = []
+
+    def fake_resolve(*_args: object, **_kwargs: object) -> ModelResolution:
+        return resolution
+
+    async def fake_prepass(**kwargs: object) -> tuple[FastPathDecision, list[object], str, str]:
+        return (
+            FastPathDecision(
+                decision="skip_review",
+                risk_labels=["docs_only"],
+                reason="Only docs changed.",
+                confidence=95,
+                review_surface=["docs/README.md"],
+                requires_full_context=False,
+            ),
+            [],
+            "system",
+            "user",
+        )
+
+    async def fake_audit(**kwargs: object) -> None:
+        audits.append(kwargs)
+
+    monkeypatch.setattr("app.agent.runner._resolve_runtime_model", fake_resolve)
+    monkeypatch.setattr("app.agent.runner.run_fast_path_prepass", fake_prepass)
+    monkeypatch.setattr("app.agent.runner._record_model_audit", fake_audit)
+
+    context = {
+        "review_id": 123,
+        "installation_id": 1,
+        "run_id": "run",
+        "owner": "acme",
+        "repo": "repo",
+        "pr_number": 7,
+        "head_sha": "sha",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "tokens_used": 0,
+    }
+
+    decision, used_resolution = await _run_fast_path_stage(
+        context=context,
+        diff_text="diff --git a/docs/README.md b/docs/README.md\n+hello",
+        pr={"title": "Docs", "body": ""},
+        commits=[],
+        review_config=ReviewConfig(),
+        diff_tokens=20,
+    )
+
+    assert decision.decision == "skip_review"
+    assert used_resolution == resolution
+    assert context["debug_artifacts"]["fast_path_decision"]["decision"] == "skip_review"
+    assert audits[0]["stage"] == "fast_path"
+    assert audits[0]["decision"] == "skip_review"
+    assert audits[0]["extra_metadata"]["confidence"] == 95
+
+
+@pytest.mark.anyio
+async def test_run_fast_path_stage_falls_back_to_full_review_on_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolution = ModelResolution(
+        role="fast_path",
+        provider="openai",
+        model="gpt-5-mini",
+        tier="economy",
+        status="active",
+        catalog_version_hash="abc123",
+    )
+
+    def fake_resolve(*_args: object, **_kwargs: object) -> ModelResolution:
+        return resolution
+
+    async def fake_prepass(**_kwargs: object) -> tuple[FastPathDecision, list[object], str, str]:
+        raise RuntimeError("provider unavailable")
+
+    async def fake_audit(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.agent.runner._resolve_runtime_model", fake_resolve)
+    monkeypatch.setattr("app.agent.runner.run_fast_path_prepass", fake_prepass)
+    monkeypatch.setattr("app.agent.runner._record_model_audit", fake_audit)
+
+    context = {
+        "review_id": 123,
+        "installation_id": 1,
+        "run_id": "run",
+        "owner": "acme",
+        "repo": "repo",
+        "pr_number": 7,
+        "head_sha": "sha",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "tokens_used": 0,
+    }
+
+    decision, used_resolution = await _run_fast_path_stage(
+        context=context,
+        diff_text="diff --git a/src/app.py b/src/app.py\n+print('hi')",
+        pr={"title": "Code", "body": ""},
+        commits=[],
+        review_config=ReviewConfig(),
+        diff_tokens=20,
+    )
+
+    assert decision.decision == "full_review"
+    assert "fast_path_error" in decision.risk_labels
+    assert used_resolution == resolution
+    assert context["debug_artifacts"]["fast_path_decision"]["fallback_reason"] == "fast_path_error"
+
+
+def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> None:
+    config = ReviewConfig(models=ModelsRoutingConfig(roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}))
+    decision = FastPathDecision(
+        decision="light_review",
+        risk_labels=["low_risk"],
+        reason="Small low-risk change.",
+        confidence=90,
+        review_surface=["tests/test_app.py"],
+        requires_full_context=False,
+    )
+
+    effective = _review_config_for_fast_path_decision(config, decision)
+
+    assert effective.models.roles["primary_review"].tier == "economy"
+
+
+def test_light_review_keeps_explicit_primary_model_pin() -> None:
+    config = ReviewConfig(
+        model=ReviewModelConfig(provider="openai", name="gpt-5.5", explicit=True),
+        models=ModelsRoutingConfig(roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}),
+    )
+    decision = FastPathDecision(
+        decision="light_review",
+        risk_labels=["low_risk"],
+        reason="Small low-risk change.",
+        confidence=90,
+        review_surface=["tests/test_app.py"],
+        requires_full_context=False,
+    )
+
+    effective = _review_config_for_fast_path_decision(config, decision)
+
+    assert effective is config
+    assert effective.models.roles["primary_review"].tier == "balanced"
+
+
 def test_extract_tool_call_history_collects_tool_use_blocks() -> None:
     history = extract_tool_call_history(
         [
@@ -369,4 +528,7 @@ def test_chunking_config_hash_changes_when_chunking_knobs_change() -> None:
     base = ReviewConfig()
     changed = ReviewConfig()
     changed.chunking.max_chunks = base.chunking.max_chunks + 1
+    base_hash = _chunking_config_hash(base)
+    assert base_hash == _chunking_config_hash(base)
+    assert len(base_hash) == 64
     assert _chunking_config_hash(base) != _chunking_config_hash(changed)

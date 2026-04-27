@@ -34,6 +34,7 @@ _logger.warning(
 )
 
 from app.agent.runner import run_review  # noqa: E402
+from app.llm.maintenance import refresh_llm_catalog  # noqa: E402
 from app.telemetry.finding_outcomes import (  # noqa: E402
     classify_pending_outcomes_nightly,
     classify_pr_outcomes_for_closed_pr,
@@ -73,11 +74,11 @@ async def worker_startup(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [review_pr, classify_pr_outcomes, classify_pending_outcomes]
+    functions = [review_pr, classify_pr_outcomes, classify_pending_outcomes, refresh_llm_catalog]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = default_queue_name
     max_jobs = 5
     job_timeout = 300
     keep_result = 3600
     on_startup = worker_startup
-    cron_jobs = [cron(classify_pending_outcomes, hour=3, minute=0)]
+    cron_jobs = [cron(classify_pending_outcomes, hour=3, minute=0), cron(refresh_llm_catalog, hour=2, minute=30)]

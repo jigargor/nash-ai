@@ -7,6 +7,7 @@ from app.agent.review_config import (
     _parse_budgets,
     _parse_categories,
     _parse_chunking,
+    _parse_fast_path,
     _parse_max_mode,
     _parse_model_config,
     _parse_packaging,
@@ -27,6 +28,41 @@ def test_parse_model_config_accepts_custom_pricing_override() -> None:
     assert model.name == "claude-3-5-haiku-latest"
     assert str(model.input_per_1m_usd) == "1.5"
     assert str(model.output_per_1m_usd) == "6.5"
+    assert model.explicit is True
+
+
+def test_parse_fast_path_reads_thresholds_and_flags() -> None:
+    fast_path = _parse_fast_path(
+        {
+            "enabled": False,
+            "skip_min_confidence": 95,
+            "light_review_min_confidence": 82,
+            "max_diff_excerpt_tokens": 1200,
+            "allow_skip": False,
+        }
+    )
+
+    assert fast_path.enabled is False
+    assert fast_path.skip_min_confidence == 95
+    assert fast_path.light_review_min_confidence == 82
+    assert fast_path.max_diff_excerpt_tokens == 1200
+    assert fast_path.allow_skip is False
+
+
+def test_parse_model_config_accepts_legacy_direct_pricing_keys() -> None:
+    model = _parse_model_config(
+        {
+            "provider": "anthropic",
+            "name": "claude-sonnet-4-5",
+            "input_per_1m_usd": 2.5,
+            "cached_input_per_1m_usd": 0.25,
+            "output_per_1m_usd": 8.5,
+        }
+    )
+
+    assert str(model.input_per_1m_usd) == "2.5"
+    assert str(model.cached_input_per_1m_usd) == "0.25"
+    assert str(model.output_per_1m_usd) == "8.5"
 
 
 def test_parse_budgets_overrides_known_values() -> None:
@@ -182,6 +218,38 @@ def test_load_review_config_reads_chunking_block() -> None:
     assert config.chunking.target_chunk_tokens == 15000
     assert config.chunking.max_chunks == 6
     assert config.chunking.include_file_classes == ["reviewable", "config_only"]
+
+
+def test_load_review_config_reads_models_routing_block() -> None:
+    config = asyncio.run(
+        load_review_config(
+            FakeGitHubClient(
+                {
+                    ".codereview.yml": """
+                    models:
+                      policy: balanced
+                      provider_order:
+                        - openai
+                        - anthropic
+                      roles:
+                        fast_path:
+                          tier: economy
+                        challenger:
+                          tier: frontier
+                          require_provider_diversity: true
+                      allow_auto_fallback: true
+                      allow_default_model_promotion: false
+                    """
+                }
+            ),
+            "acme",
+            "demo",
+            "sha",
+        )
+    )
+    assert config.models.provider_order == ["openai", "anthropic"]
+    assert config.models.roles["fast_path"].tier == "economy"
+    assert config.models.roles["challenger"].require_provider_diversity is True
 
 
 def test_parse_model_config_provider_defaults_to_anthropic() -> None:

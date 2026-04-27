@@ -61,6 +61,18 @@ src/app/github/client.py
 src/app/github/comments.py
 src/app/github/smoke_check.py
 src/app/github/utils.py
+src/app/llm/__init__.py
+src/app/llm/maintenance.py
+src/app/llm/router.py
+src/app/llm/types.py
+src/app/llm/catalog/__init__.py
+src/app/llm/catalog/baseline.yaml
+src/app/llm/catalog/loader.py
+src/app/llm/providers/__init__.py
+src/app/llm/providers/anthropic.py
+src/app/llm/providers/base.py
+src/app/llm/providers/gemini.py
+src/app/llm/providers/openai.py
 src/app/queue/connection.py
 src/app/queue/recovery.py
 src/app/queue/worker.py
@@ -91,6 +103,8 @@ tests/test_github_auth.py
 tests/test_github_comments.py
 tests/test_github_live_auth.py
 tests/test_integration_review_flow.py
+tests/test_llm_catalog_router.py
+tests/test_llm_provider_adapters.py
 tests/test_queue_recovery.py
 tests/test_ratelimit.py
 tests/test_telemetry_audit.py

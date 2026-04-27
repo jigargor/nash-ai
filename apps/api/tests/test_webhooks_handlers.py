@@ -24,14 +24,24 @@ class _FakeRedis:
         return _FakeJob(job_id=f"job-{len(self.calls)}")
 
 
-def _payload(action: str = "opened") -> GitHubPullRequestWebhookPayload:
+def _payload(
+    action: str = "opened",
+    *,
+    title: str | None = None,
+    body: str | None = None,
+) -> GitHubPullRequestWebhookPayload:
     head_sha = (uuid4().hex + uuid4().hex)[:40]
+    pull_request: dict[str, object] = {"number": 99, "head": {"sha": head_sha}}
+    if title is not None:
+        pull_request["title"] = title
+    if body is not None:
+        pull_request["body"] = body
     return GitHubPullRequestWebhookPayload.model_validate(
         {
             "action": action,
             "installation": {"id": 555},
             "repository": {"full_name": "acme/repo", "owner": {"login": "acme", "type": "Organization"}},
-            "pull_request": {"number": 99, "head": {"sha": head_sha}},
+            "pull_request": pull_request,
         }
     )
 
@@ -125,6 +135,89 @@ async def test_queue_pull_request_review_skips_when_rate_limited(monkeypatch: py
         return 0
 
     monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _deny)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, payload)
+    assert not redis.calls
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_when_skip_tag_in_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _FakeRedis()
+    payload = _payload(title="chore: deps [skip-nash-review]")
+
+    async def _allow(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def _daily_usage(*_args: object, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, payload)
+
+    assert not redis.calls
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, payload.installation.id)
+        count = await session.scalar(
+            select(func.count(Review.id))
+            .where(Review.installation_id == payload.installation.id)
+            .where(Review.pr_number == payload.pull_request.number)
+            .where(Review.pr_head_sha == payload.pull_request.head.sha)
+        )
+    assert count == 0
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_when_skip_tag_in_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _FakeRedis()
+    payload = _payload(body="## Notes\n\n[skip-nash-review] while iterating\n")
+
+    async def _allow(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def _daily_usage(*_args: object, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, payload)
+    assert not redis.calls
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_force_tag_overrides_skip(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _FakeRedis()
+    payload = _payload(title="[skip-nash-review]", body="[force-nash-review]")
+
+    async def _allow(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def _daily_usage(*_args: object, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, payload)
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0] == "review_pr"
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skip_tag_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis = _FakeRedis()
+    payload = _payload(title="[Skip-Nash-Review]")
+
+    async def _allow(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def _daily_usage(*_args: object, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
     monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
 
     await queue_pull_request_review(redis, payload)

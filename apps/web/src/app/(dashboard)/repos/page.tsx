@@ -9,18 +9,7 @@ import { useInstallations } from "@/hooks/use-installations";
 import { useGenerateRepoTemplate } from "@/hooks/use-repo-template";
 import { useRepos } from "@/hooks/use-repos";
 import { CODEREVIEW_TEMPLATE_EXAMPLE } from "@/lib/api/repos";
-
-function downloadTextFile(filename: string, content: string): void {
-  const blob = new Blob([content], { type: "text/yaml;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  URL.revokeObjectURL(url);
-}
+import { downloadTextFile } from "@/lib/download-text-file";
 
 export default function RepositoriesPage() {
   const installations = useInstallations();
@@ -107,7 +96,7 @@ export default function RepositoriesPage() {
                       repo: repoName,
                       installationId: repo.installation_id,
                     });
-                    downloadTextFile(".codereview.yml", generated.config_yaml_text);
+                    await downloadTextFile(".codereview.yml", generated.config_yaml_text);
                     setStatusByRepo((prev) => ({
                       ...prev,
                       [repoKey]: `Generated with ${generated.provider}/${generated.model} and downloaded.`,
@@ -124,7 +113,7 @@ export default function RepositoriesPage() {
               <button
                 type="button"
                 className="button button-ghost"
-                onClick={() => downloadTextFile(".codereview.yml.example", CODEREVIEW_TEMPLATE_EXAMPLE)}
+                onClick={() => void downloadTextFile(".codereview.yml.example", CODEREVIEW_TEMPLATE_EXAMPLE)}
               >
                 Download example template
               </button>

@@ -50,6 +50,10 @@ export function generateRepoTemplate(owner: string, repo: string, installationId
 
 export const CODEREVIEW_TEMPLATE_EXAMPLE = `# .codereview.yml
 # Balanced defaults: good precision, reasonable cost, max_mode on.
+#
+# PR controls (title or description, case-insensitive):
+#   [skip-nash-review]  — do not enqueue an automated review for this PR
+#   [force-nash-review] — if both tags appear, review still runs
 
 confidence_threshold: 0.88
 severity_threshold: medium

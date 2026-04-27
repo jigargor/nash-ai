@@ -12,6 +12,9 @@ on:
       - "apps/api/**"
       - ".github/workflows/api-db-security.yml"
 
+permissions:
+  contents: read
+
 jobs:
   api-db-security:
     runs-on: ubuntu-latest

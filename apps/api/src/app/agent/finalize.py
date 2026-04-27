@@ -12,6 +12,7 @@ from app.agent.provider_clients import (
 from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.schema import ReviewResult
 from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
+from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
 from app.observability import create_async_anthropic_client
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ async def _finalize_anthropic(
     allow_retry: bool,
 ) -> ReviewResult:
     client = create_async_anthropic_client(get_provider_api_key("anthropic"))
+    adapter = get_provider_adapter("anthropic")
     final_prompt = "Now submit your final review using the submit_review tool."
     if validation_feedback:
         final_prompt = (
@@ -73,22 +75,13 @@ async def _finalize_anthropic(
     response = await client.messages.create(  # type: ignore[call-overload]
         model=model_name,
         max_tokens=8192,
-        system=[
-            {
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
+        system=adapter.render_anthropic_system(system_prompt, _cache_options(context)),
         tools=[FINAL_TOOL],
         tool_choice={"type": "tool", "name": "submit_review"},
         messages=messages + [{"role": "user", "content": final_prompt}],
     )
 
-    usage = response.usage
-    context["input_tokens"] = context.get("input_tokens", 0) + usage.input_tokens
-    context["output_tokens"] = context.get("output_tokens", 0) + usage.output_tokens
-    context["tokens_used"] = context.get("tokens_used", 0) + usage.input_tokens + usage.output_tokens
+    record_usage(context, "anthropic", model_name, adapter.parse_usage(response.usage))
 
     for block in response.content:
         if block.type == "tool_use" and block.name == "submit_review":
@@ -125,6 +118,7 @@ async def _finalize_openai_compatible(
     allow_retry: bool,
 ) -> ReviewResult:
     client = create_openai_compatible_client(provider)
+    adapter = get_provider_adapter(provider)
     final_prompt = "Now submit your final review using the submit_review tool."
     if validation_feedback:
         final_prompt = (
@@ -147,12 +141,15 @@ async def _finalize_openai_compatible(
         messages=openai_messages_any,
         tools=openai_tools_any,
         tool_choice=openai_tool_choice_any,
+        **adapter.chat_completion_extra_kwargs(
+            system_prompt=system_prompt,
+            model_name=model_name,
+            options=_cache_options(context),
+        ),
     )
     usage = response.usage
     if usage is not None:
-        context["input_tokens"] = context.get("input_tokens", 0) + int(usage.prompt_tokens or 0)
-        context["output_tokens"] = context.get("output_tokens", 0) + int(usage.completion_tokens or 0)
-        context["tokens_used"] = context.get("tokens_used", 0) + int(usage.total_tokens or 0)
+        record_usage(context, provider, model_name, adapter.parse_usage(usage))
     if not response.choices:
         raise RuntimeError("Model did not return submit_review output")
     message = response.choices[0].message
@@ -224,3 +221,18 @@ def _build_schema_feedback(exc: ValidationError) -> str:
         message = issue.get("msg", "Validation error")
         lines.append(f"- {location}: {message}")
     return "\n".join(lines)
+
+
+def _cache_options(context: dict[str, Any]) -> CacheRequestOptions:
+    return CacheRequestOptions(
+        cache_key=_optional_str(context.get("llm_prompt_cache_key")),
+        ttl=_optional_str(context.get("anthropic_cache_ttl")),
+        retention=_optional_str(context.get("openai_prompt_cache_retention")),
+        cached_content_name=_optional_str(context.get("gemini_cached_content_name")),
+    )
+
+
+def _optional_str(value: object) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None

@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
+    Boolean,
     ForeignKey,
     Identity,
     Index,
@@ -130,3 +131,37 @@ class FindingOutcome(Base):
     outcome_confidence: Mapped[str] = mapped_column(Text, nullable=False)
     detected_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
     signals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
+
+class LLMModelCatalogSnapshot(Base):
+    __tablename__ = "llm_model_catalog_snapshots"
+    __table_args__ = (
+        Index("llm_model_catalog_snapshots_version_hash", "version_hash", unique=True),
+        Index("llm_model_catalog_snapshots_promoted_at", "promoted_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    version_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    catalog_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source_hashes: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    generated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    promoted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class LLMModelHealth(Base):
+    __tablename__ = "llm_model_health"
+    __table_args__ = (
+        UniqueConstraint("provider", "model"),
+        Index("llm_model_health_provider_status", "provider", "provider_status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
+    circuit_open: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    failure_class: Mapped[str | None] = mapped_column(Text)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    last_success_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_checked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))

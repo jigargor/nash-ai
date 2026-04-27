@@ -13,6 +13,19 @@ from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullReq
 
 logger = logging.getLogger(__name__)
 
+SKIP_REVIEW_TAG = "[skip-nash-review]"
+FORCE_REVIEW_TAG = "[force-nash-review]"
+
+
+def _pr_text_has_force_review_tag(title: str | None, body: str | None) -> bool:
+    combined = f"{title or ''}\n{body or ''}".lower()
+    return FORCE_REVIEW_TAG in combined
+
+
+def _pr_text_has_skip_review_tag(title: str | None, body: str | None) -> bool:
+    combined = f"{title or ''}\n{body or ''}".lower()
+    return SKIP_REVIEW_TAG in combined
+
 
 async def sync_installation_from_webhook(payload: GitHubInstallationWebhookPayload) -> None:
     installation_id = payload.installation.id
@@ -66,6 +79,19 @@ async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestW
     owner, repo_name = repo_full_name.split("/")
     pr_number = payload.pull_request.number
     head_sha = payload.pull_request.head.sha
+    pr_title = payload.pull_request.title or ""
+    pr_body = payload.pull_request.body or ""
+
+    if not _pr_text_has_force_review_tag(pr_title, pr_body) and _pr_text_has_skip_review_tag(pr_title, pr_body):
+        logger.warning(
+            "Skipping review enqueue: PR title/body contains %s (override with %s) installation_id=%s repo=%s pr_number=%s",
+            SKIP_REVIEW_TAG,
+            FORCE_REVIEW_TAG,
+            installation_id,
+            repo_full_name,
+            pr_number,
+        )
+        return
 
     logger.warning(
         "PR webhook parsed installation_id=%s repo=%s pr_number=%s head_sha=%s",
