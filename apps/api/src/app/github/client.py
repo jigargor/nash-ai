@@ -29,7 +29,9 @@ class GitHubClient:
     async def get_pull_request(self, owner: str, repo: str, pr_number: int) -> JsonDict:
         return await self.get_json(f"/repos/{owner}/{repo}/pulls/{pr_number}")
 
-    async def get_pull_request_commits(self, owner: str, repo: str, pr_number: int) -> list[JsonDict]:
+    async def get_pull_request_commits(
+        self, owner: str, repo: str, pr_number: int
+    ) -> list[JsonDict]:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/commits",
@@ -69,7 +71,9 @@ class GitHubClient:
             return ""
         return base64.b64decode(raw).decode("utf-8", errors="replace")
 
-    async def search_code(self, owner: str, repo: str, pattern: str, path_glob: str | None = None) -> list[JsonDict]:
+    async def search_code(
+        self, owner: str, repo: str, pattern: str, path_glob: str | None = None
+    ) -> list[JsonDict]:
         query = f"{pattern} repo:{owner}/{repo}"
         if path_glob:
             query = f"{query} path:{path_glob}"
@@ -139,7 +143,9 @@ class GitHubClient:
             return []
         return [item for item in files if isinstance(item, dict)]
 
-    async def get_pull_review_comment_reactions(self, owner: str, repo: str, comment_id: int) -> list[JsonDict]:
+    async def get_pull_review_comment_reactions(
+        self, owner: str, repo: str, comment_id: int
+    ) -> list[JsonDict]:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/comments/{comment_id}/reactions",
@@ -165,7 +171,9 @@ class GitHubClient:
             )
         return normalized
 
-    async def get_pull_review_comment_replies(self, owner: str, repo: str, comment_id: int) -> list[JsonDict]:
+    async def get_pull_review_comment_replies(
+        self, owner: str, repo: str, comment_id: int
+    ) -> list[JsonDict]:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/comments/{comment_id}/replies",
@@ -191,7 +199,9 @@ class GitHubClient:
             )
         return normalized
 
-    async def is_pull_review_thread_resolved(self, owner: str, repo: str, pr_number: int, comment_id: int) -> bool:
+    async def is_pull_review_thread_resolved(
+        self, owner: str, repo: str, pr_number: int, comment_id: int
+    ) -> bool:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/threads",
@@ -209,7 +219,10 @@ class GitHubClient:
             comments = thread.get("comments")
             if not isinstance(comments, list):
                 continue
-            if any(isinstance(comment, dict) and comment.get("id") == comment_id for comment in comments):
+            if any(
+                isinstance(comment, dict) and comment.get("id") == comment_id
+                for comment in comments
+            ):
                 return bool(thread.get("resolved"))
         return False
 
@@ -255,7 +268,9 @@ class GitHubClient:
         if not isinstance(payload, list):
             return []
         bot_comments: list[JsonDict] = []
-        normalized_login = bot_login.strip().lower() if isinstance(bot_login, str) and bot_login.strip() else None
+        normalized_login = (
+            bot_login.strip().lower() if isinstance(bot_login, str) and bot_login.strip() else None
+        )
         for comment in payload:
             if not isinstance(comment, dict):
                 continue

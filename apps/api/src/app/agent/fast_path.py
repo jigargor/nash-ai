@@ -65,7 +65,9 @@ def fallback_full_review(reason: str, *, risk_labels: list[str] | None = None) -
     )
 
 
-def normalize_fast_path_decision(raw: object, config: FastPathConfig, classified: list[ClassifiedDiffFile]) -> FastPathDecision:
+def normalize_fast_path_decision(
+    raw: object, config: FastPathConfig, classified: list[ClassifiedDiffFile]
+) -> FastPathDecision:
     try:
         decision = FastPathDecision.model_validate(raw)
     except ValidationError:
@@ -100,7 +102,10 @@ def normalize_fast_path_decision(raw: object, config: FastPathConfig, classified
                 review_surface=decision.review_surface,
                 requires_full_context=True,
             )
-    if decision.decision == "light_review" and decision.confidence < config.light_review_min_confidence:
+    if (
+        decision.decision == "light_review"
+        and decision.confidence < config.light_review_min_confidence
+    ):
         return FastPathDecision(
             decision="full_review",
             risk_labels=sorted({*decision.risk_labels, "low_confidence"}),
@@ -134,7 +139,9 @@ async def run_fast_path_prepass(
     model_name: str,
     provider: ModelProvider,
 ) -> tuple[FastPathDecision, list[ClassifiedDiffFile], str, str]:
-    classified = classify_diff_files(files_in_diff, generated_paths=generated_paths, vendor_paths=vendor_paths)
+    classified = classify_diff_files(
+        files_in_diff, generated_paths=generated_paths, vendor_paths=vendor_paths
+    )
     system_prompt = _system_prompt()
     user_prompt = build_fast_path_prompt(
         classified,
@@ -150,7 +157,12 @@ async def run_fast_path_prepass(
         model_name=model_name,
         provider=provider,
     )
-    return normalize_fast_path_decision(raw_decision, config, classified), classified, system_prompt, user_prompt
+    return (
+        normalize_fast_path_decision(raw_decision, config, classified),
+        classified,
+        system_prompt,
+        user_prompt,
+    )
 
 
 def build_fast_path_prompt(
@@ -171,7 +183,9 @@ def build_fast_path_prompt(
         }
         for item in classified
     ]
-    commit_messages = [str((commit.get("commit") or {}).get("message", ""))[:240] for commit in commits[:10]]
+    commit_messages = [
+        str((commit.get("commit") or {}).get("message", ""))[:240] for commit in commits[:10]
+    ]
     payload = {
         "pull_request": {
             "title": str(pr.get("title", ""))[:300],
@@ -193,7 +207,11 @@ def build_fast_path_prompt(
 
 def is_high_risk_path(path: str) -> bool:
     lowered = path.lower()
-    parts = {part for part in lowered.replace("\\", "/").replace("-", "_").replace(".", "_").split("/") if part}
+    parts = {
+        part
+        for part in lowered.replace("\\", "/").replace("-", "_").replace(".", "_").split("/")
+        if part
+    }
     tokens: set[str] = set()
     for part in parts:
         tokens.update(piece for piece in part.split("_") if piece)

@@ -29,7 +29,9 @@ def _serialize_config(config: ReviewConfig) -> str:
     payload["model"]["input_per_1m_usd"] = str(config.model.input_per_1m_usd)
     payload["model"]["output_per_1m_usd"] = str(config.model.output_per_1m_usd)
     payload["model"]["cached_input_per_1m_usd"] = (
-        str(config.model.cached_input_per_1m_usd) if config.model.cached_input_per_1m_usd is not None else None
+        str(config.model.cached_input_per_1m_usd)
+        if config.model.cached_input_per_1m_usd is not None
+        else None
     )
     return json.dumps(payload)
 
@@ -69,7 +71,9 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         layered_context_enabled=bool(packaging_data.get("layered_context_enabled", True)),
         partial_review_mode_enabled=bool(packaging_data.get("partial_review_mode_enabled", True)),
         summarization_enabled=bool(packaging_data.get("summarization_enabled", False)),
-        partial_review_changed_lines_threshold=int(packaging_data.get("partial_review_changed_lines_threshold", 600)),
+        partial_review_changed_lines_threshold=int(
+            packaging_data.get("partial_review_changed_lines_threshold", 600)
+        ),
         max_summary_calls_per_review=int(packaging_data.get("max_summary_calls_per_review", 3)),
         generated_paths=[str(item) for item in list(packaging_data.get("generated_paths") or [])],
         vendor_paths=[str(item) for item in list(packaging_data.get("vendor_paths") or [])],
@@ -81,7 +85,9 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         target_chunk_tokens=int(chunking_data.get("target_chunk_tokens", 18_000)),
         max_chunks=int(chunking_data.get("max_chunks", 8)),
         min_files_per_chunk=int(chunking_data.get("min_files_per_chunk", 1)),
-        include_file_classes=[str(item) for item in list(chunking_data.get("include_file_classes") or [])]
+        include_file_classes=[
+            str(item) for item in list(chunking_data.get("include_file_classes") or [])
+        ]
         or ["reviewable", "config_only", "test_only"],
         max_total_prompt_tokens=int(chunking_data.get("max_total_prompt_tokens", 120_000)),
         max_latency_seconds=int(chunking_data.get("max_latency_seconds", 240)),
@@ -111,7 +117,10 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         )
     models = ModelsRoutingConfig(
         policy=cast(ModelTier, str(models_data.get("policy", "balanced"))),
-        provider_order=[str(item) for item in list(models_data.get("provider_order") or ["anthropic", "openai", "gemini"])],
+        provider_order=[
+            str(item)
+            for item in list(models_data.get("provider_order") or ["anthropic", "openai", "gemini"])
+        ],
         roles=roles,
         allow_auto_fallback=bool(models_data.get("allow_auto_fallback", True)),
         allow_default_model_promotion=bool(models_data.get("allow_default_model_promotion", False)),
@@ -147,7 +156,9 @@ async def get_cached_review_config(owner: str, repo: str, head_sha: str) -> Revi
         await redis.aclose()
 
 
-async def set_cached_review_config(owner: str, repo: str, head_sha: str, config: ReviewConfig) -> None:
+async def set_cached_review_config(
+    owner: str, repo: str, head_sha: str, config: ReviewConfig
+) -> None:
     key = _cache_key(owner, repo, head_sha)
     redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
     try:

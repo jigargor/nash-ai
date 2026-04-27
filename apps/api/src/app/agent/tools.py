@@ -44,7 +44,10 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "ecosystem": {"type": "string", "enum": ["npm", "PyPI", "Go", "Maven", "crates.io"]},
+                "ecosystem": {
+                    "type": "string",
+                    "enum": ["npm", "PyPI", "Go", "Maven", "crates.io"],
+                },
                 "package": {"type": "string"},
                 "version": {"type": "string"},
             },
@@ -78,7 +81,9 @@ async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str,
 
         if name == "fetch_file_content":
             path = _normalize_repo_path(tool_input["path"])
-            normalized_content = normalize_file_content(await gh.get_file_content(owner, repo, path, head_sha))
+            normalized_content = normalize_file_content(
+                await gh.get_file_content(owner, repo, path, head_sha)
+            )
             fetched_files = context.setdefault("fetched_files", {})
             if isinstance(fetched_files, dict):
                 fetched_files[path] = normalized_content

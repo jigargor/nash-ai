@@ -6,7 +6,9 @@ from app.agent import telemetry_audit
 
 
 @pytest.mark.anyio
-async def test_summarize_target_line_mismatch_telemetry_aggregates_subtypes(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_summarize_target_line_mismatch_telemetry_aggregates_subtypes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     rows = [
         (1, {"target_line_mismatch_subtypes": {"a": 2, "b": 1}}),
         (2, None),

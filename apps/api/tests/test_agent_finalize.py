@@ -125,20 +125,28 @@ def test_build_schema_feedback_includes_error_locations() -> None:
 
 
 @pytest.mark.anyio
-async def test_finalize_anthropic_recovers_after_retry_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_finalize_anthropic_recovers_after_retry_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bad_payload = {
         "summary": "Recovered summary.",
         "findings": [
             _minimal_finding(category="completeness"),
-            _minimal_finding(severity="high", evidence="inference", confidence=87, is_vendor_claim=True),
-            _minimal_finding(severity="high", evidence="diff_visible", is_vendor_claim=True, confidence=92),
+            _minimal_finding(
+                severity="high", evidence="inference", confidence=87, is_vendor_claim=True
+            ),
+            _minimal_finding(
+                severity="high", evidence="diff_visible", is_vendor_claim=True, confidence=92
+            ),
         ],
     }
 
     class _FakeAdapter:
         async def structured_output(self, *, request: object) -> StructuredOutputResult:  # noqa: ARG002
             usage = type("Usage", (), {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})()
-            return StructuredOutputResult(payload=bad_payload, raw_response={"fake": True}, usage=usage)
+            return StructuredOutputResult(
+                payload=bad_payload, raw_response={"fake": True}, usage=usage
+            )
 
     monkeypatch.setattr(finalize_module, "get_provider_adapter", lambda _provider: _FakeAdapter())
 
@@ -160,7 +168,9 @@ async def test_finalize_anthropic_recovers_after_retry_exhaustion(monkeypatch: p
 
 
 @pytest.mark.anyio
-async def test_finalize_anthropic_missing_submit_tool_returns_safe_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_finalize_anthropic_missing_submit_tool_returns_safe_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _FakeAdapter:
         async def structured_output(self, *, request: object) -> StructuredOutputResult:  # noqa: ARG002
             raise RuntimeError("submit_review tool missing")

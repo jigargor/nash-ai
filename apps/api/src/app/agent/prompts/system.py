@@ -17,7 +17,12 @@ FALLBACK_PROMPTS: dict[str, str] = {
 @lru_cache(maxsize=64)
 def _load_file(relative_path: str) -> str:
     try:
-        return resources.files("app.agent.prompts").joinpath(relative_path).read_text(encoding="utf-8").strip()
+        return (
+            resources.files("app.agent.prompts")
+            .joinpath(relative_path)
+            .read_text(encoding="utf-8")
+            .strip()
+        )
     except (FileNotFoundError, ModuleNotFoundError):
         try:
             return (PROMPTS_DIR / relative_path).read_text(encoding="utf-8").strip()
@@ -31,7 +36,11 @@ def _load_file(relative_path: str) -> str:
 @lru_cache(maxsize=1)
 def _load_verified_facts() -> list[dict[str, object]]:
     try:
-        raw_text = resources.files("app.agent.prompts").joinpath("verified_facts.yaml").read_text(encoding="utf-8")
+        raw_text = (
+            resources.files("app.agent.prompts")
+            .joinpath("verified_facts.yaml")
+            .read_text(encoding="utf-8")
+        )
     except (FileNotFoundError, ModuleNotFoundError):
         facts_path = PROMPTS_DIR / "verified_facts.yaml"
         if not facts_path.exists():

@@ -1,5 +1,6 @@
 "use client";
 
+import { ApiKeysPanel } from "@/components/settings/api-keys-panel";
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { useCurrentUser } from "@/hooks/use-current-user";
@@ -39,6 +40,8 @@ export default function SettingsPage() {
           </a>
         </div>
       </Panel>
+
+      <ApiKeysPanel />
 
       <Panel>
         <h2 style={{ marginTop: 0 }}>Rule Configuration</h2>

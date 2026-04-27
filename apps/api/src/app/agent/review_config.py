@@ -15,6 +15,7 @@ from app.llm.types import ModelProvider as ModelProvider, ModelTier
 class _GitHubFileReader(Protocol):
     async def get_file_content(self, owner: str, repo: str, path: str, ref: str) -> str: ...
 
+
 DEFAULT_CONFIDENCE_THRESHOLD = 85
 DEFAULT_MODEL_PROVIDER: ModelProvider = "anthropic"
 DEFAULT_MODEL_NAME = "claude-sonnet-4-5"
@@ -64,7 +65,9 @@ class ChunkingConfig:
     target_chunk_tokens: int = 18_000
     max_chunks: int = 8
     min_files_per_chunk: int = 1
-    include_file_classes: list[str] = field(default_factory=lambda: ["reviewable", "config_only", "test_only"])
+    include_file_classes: list[str] = field(
+        default_factory=lambda: ["reviewable", "config_only", "test_only"]
+    )
     max_total_prompt_tokens: int = 120_000
     max_latency_seconds: int = 240
     output_headroom_tokens: int = 4096
@@ -97,7 +100,9 @@ class ReviewConfig:
     fast_path: FastPathConfig = field(default_factory=FastPathConfig)
 
 
-async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: str) -> ReviewConfig:
+async def load_review_config(
+    gh: _GitHubFileReader, owner: str, repo: str, ref: str
+) -> ReviewConfig:
     raw_config = await safe_fetch_file(gh, owner, repo, ".codereview.yml", ref)
     if raw_config is None:
         return ReviewConfig()
@@ -116,7 +121,9 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
     categories = _parse_categories(parsed.get("categories"))
     ignore_paths = _normalize_path_patterns(parsed.get("ignore_paths"))
     review_drafts = bool(parsed.get("review_drafts", False))
-    max_findings_per_pr = _normalize_positive_int(parsed.get("max_findings_per_pr"), DEFAULT_MAX_FINDINGS_PER_PR)
+    max_findings_per_pr = _normalize_positive_int(
+        parsed.get("max_findings_per_pr"), DEFAULT_MAX_FINDINGS_PER_PR
+    )
     prompt_additions = parsed.get("prompt_additions")
     if prompt_additions is not None:
         prompt_additions = str(prompt_additions).strip() or None
@@ -173,7 +180,9 @@ def _parse_model_config(raw_value: object) -> ReviewModelConfig:
     provider = _normalize_provider(raw_provider)
     raw_name = raw_value.get("name")
     fallback_name = _default_model_name_for_provider(provider)
-    name = str(raw_name).strip() if isinstance(raw_name, str) and raw_name.strip() else fallback_name
+    name = (
+        str(raw_name).strip() if isinstance(raw_name, str) and raw_name.strip() else fallback_name
+    )
     default_input, default_cached_input, default_output = _catalog_pricing(provider, name)
     pricing = raw_value.get("pricing")
     if not isinstance(pricing, dict):
@@ -186,7 +195,9 @@ def _parse_model_config(raw_value: object) -> ReviewModelConfig:
                 name=name,
                 input_per_1m_usd=_normalize_decimal(direct_input, default_input),
                 output_per_1m_usd=_normalize_decimal(direct_output, default_output),
-                cached_input_per_1m_usd=_normalize_optional_decimal(direct_cached, default_cached_input),
+                cached_input_per_1m_usd=_normalize_optional_decimal(
+                    direct_cached, default_cached_input
+                ),
                 explicit=bool(raw_value.get("provider") or raw_value.get("name")),
             )
         return ReviewModelConfig(
@@ -199,7 +210,9 @@ def _parse_model_config(raw_value: object) -> ReviewModelConfig:
         )
     input_per_1m = _normalize_decimal(pricing.get("input_per_1m"), default_input)
     output_per_1m = _normalize_decimal(pricing.get("output_per_1m"), default_output)
-    cached_input_per_1m = _normalize_optional_decimal(pricing.get("cached_input_per_1m"), default_cached_input)
+    cached_input_per_1m = _normalize_optional_decimal(
+        pricing.get("cached_input_per_1m"), default_cached_input
+    )
     return ReviewModelConfig(
         provider=provider,
         name=name,
@@ -211,7 +224,9 @@ def _parse_model_config(raw_value: object) -> ReviewModelConfig:
 
 
 def _default_model_config() -> ReviewModelConfig:
-    default_input, default_cached_input, default_output = _catalog_pricing(DEFAULT_MODEL_PROVIDER, DEFAULT_MODEL_NAME)
+    default_input, default_cached_input, default_output = _catalog_pricing(
+        DEFAULT_MODEL_PROVIDER, DEFAULT_MODEL_NAME
+    )
     return ReviewModelConfig(
         provider=DEFAULT_MODEL_PROVIDER,
         name=DEFAULT_MODEL_NAME,
@@ -228,7 +243,9 @@ def _parse_max_mode(raw_value: object) -> MaxModeConfig:
     enabled = bool(raw_value.get("enabled", False))
     conflict_threshold = _normalize_percentage(raw_value.get("conflict_threshold"), default=35)
     high_risk_severity = _parse_severity_threshold(raw_value.get("high_risk_severity"))
-    challenger = _parse_model_ref(raw_value.get("challenger"), default_provider="openai", default_name="gpt-5.5")
+    challenger = _parse_model_ref(
+        raw_value.get("challenger"), default_provider="openai", default_name="gpt-5.5"
+    )
     tie_break = _parse_model_ref(
         raw_value.get("tie_break"),
         default_provider="gemini",
@@ -245,7 +262,9 @@ def _parse_max_mode(raw_value: object) -> MaxModeConfig:
     )
 
 
-def _parse_model_ref(raw_value: object, *, default_provider: ModelProvider, default_name: str) -> tuple[ModelProvider, str]:
+def _parse_model_ref(
+    raw_value: object, *, default_provider: ModelProvider, default_name: str
+) -> tuple[ModelProvider, str]:
     if not isinstance(raw_value, dict):
         return default_provider, default_name
     provider = _normalize_provider(raw_value.get("provider"), default=default_provider)
@@ -254,7 +273,9 @@ def _parse_model_ref(raw_value: object, *, default_provider: ModelProvider, defa
     return provider, name
 
 
-def _normalize_provider(raw_value: object, *, default: ModelProvider = DEFAULT_MODEL_PROVIDER) -> ModelProvider:
+def _normalize_provider(
+    raw_value: object, *, default: ModelProvider = DEFAULT_MODEL_PROVIDER
+) -> ModelProvider:
     if not isinstance(raw_value, str):
         return default
     normalized = raw_value.strip().lower()
@@ -268,7 +289,8 @@ def _default_model_name_for_provider(provider: ModelProvider) -> str:
     candidates = [
         record
         for record in catalog.models_for_provider(provider)
-        if record.status in {"active", "legacy", "unknown"} and record.tier in {"balanced", "frontier"}
+        if record.status in {"active", "legacy", "unknown"}
+        and record.tier in {"balanced", "frontier"}
     ]
     if not candidates:
         return DEFAULT_MODEL_NAME
@@ -276,13 +298,25 @@ def _default_model_name_for_provider(provider: ModelProvider) -> str:
     return candidates[0].model
 
 
-def _catalog_pricing(provider: ModelProvider, model_name: str) -> tuple[Decimal, Decimal | None, Decimal]:
+def _catalog_pricing(
+    provider: ModelProvider, model_name: str
+) -> tuple[Decimal, Decimal | None, Decimal]:
     record = load_baseline_catalog().find_model(provider, model_name)
     fallback_record = load_baseline_catalog().find_model(DEFAULT_MODEL_PROVIDER, DEFAULT_MODEL_NAME)
-    pricing = record.pricing if record is not None else fallback_record.pricing if fallback_record is not None else None
-    input_price = pricing.input_per_1m if pricing and pricing.input_per_1m is not None else Decimal("3.00")
+    pricing = (
+        record.pricing
+        if record is not None
+        else fallback_record.pricing
+        if fallback_record is not None
+        else None
+    )
+    input_price = (
+        pricing.input_per_1m if pricing and pricing.input_per_1m is not None else Decimal("3.00")
+    )
     cached_input_price = pricing.cached_input_per_1m if pricing else None
-    output_price = pricing.output_per_1m if pricing and pricing.output_per_1m is not None else Decimal("15.00")
+    output_price = (
+        pricing.output_per_1m if pricing and pricing.output_per_1m is not None else Decimal("15.00")
+    )
     return input_price, cached_input_price, output_price
 
 
@@ -317,12 +351,16 @@ def _parse_models(raw_value: object) -> ModelsRoutingConfig:
             provider_raw = role_value.get("provider")
             provider = _normalize_provider(provider_raw) if isinstance(provider_raw, str) else None
             model_raw = role_value.get("model")
-            model = str(model_raw).strip() if isinstance(model_raw, str) and model_raw.strip() else None
+            model = (
+                str(model_raw).strip() if isinstance(model_raw, str) and model_raw.strip() else None
+            )
             roles[role] = ModelRoleRoutingConfig(
                 tier=_parse_model_tier(role_value.get("tier"), default=policy),
                 provider=provider,
                 model=model,
-                require_provider_diversity=bool(role_value.get("require_provider_diversity", False)),
+                require_provider_diversity=bool(
+                    role_value.get("require_provider_diversity", False)
+                ),
                 require_tool_calling=bool(role_value.get("require_tool_calling", True)),
                 require_structured_output=bool(role_value.get("require_structured_output", True)),
                 require_prompt_caching=bool(role_value.get("require_prompt_caching", False)),
@@ -354,7 +392,9 @@ def _parse_packaging(parsed: Mapping[str, Any]) -> ContextPackagingConfig:
             parsed.get("partial_review_changed_lines_threshold"),
             600,
         ),
-        max_summary_calls_per_review=_normalize_positive_int(parsed.get("max_summary_calls_per_review"), 3),
+        max_summary_calls_per_review=_normalize_positive_int(
+            parsed.get("max_summary_calls_per_review"), 3
+        ),
         generated_paths=_normalize_path_patterns(parsed.get("generated_paths")),
         vendor_paths=_normalize_path_patterns(parsed.get("vendor_paths")),
     )
@@ -373,14 +413,20 @@ def _parse_chunking(raw_value: object) -> ChunkingConfig:
         include_file_classes = ["reviewable", "config_only", "test_only"]
     return ChunkingConfig(
         enabled=bool(raw_value.get("enabled", True)),
-        proactive_threshold_tokens=_normalize_positive_int(raw_value.get("proactive_threshold_tokens"), 35_000),
+        proactive_threshold_tokens=_normalize_positive_int(
+            raw_value.get("proactive_threshold_tokens"), 35_000
+        ),
         target_chunk_tokens=_normalize_positive_int(raw_value.get("target_chunk_tokens"), 18_000),
         max_chunks=_normalize_positive_int(raw_value.get("max_chunks"), 8),
         min_files_per_chunk=_normalize_positive_int(raw_value.get("min_files_per_chunk"), 1),
         include_file_classes=include_file_classes,
-        max_total_prompt_tokens=_normalize_positive_int(raw_value.get("max_total_prompt_tokens"), 120_000),
+        max_total_prompt_tokens=_normalize_positive_int(
+            raw_value.get("max_total_prompt_tokens"), 120_000
+        ),
         max_latency_seconds=_normalize_positive_int(raw_value.get("max_latency_seconds"), 240),
-        output_headroom_tokens=_normalize_positive_int(raw_value.get("output_headroom_tokens"), 4096),
+        output_headroom_tokens=_normalize_positive_int(
+            raw_value.get("output_headroom_tokens"), 4096
+        ),
     )
 
 
@@ -389,14 +435,18 @@ def _parse_fast_path(raw_value: object) -> FastPathConfig:
         return FastPathConfig()
     return FastPathConfig(
         enabled=bool(raw_value.get("enabled", True)),
-        skip_min_confidence=_normalize_bounded_int(raw_value.get("skip_min_confidence"), 90, minimum=0, maximum=100),
+        skip_min_confidence=_normalize_bounded_int(
+            raw_value.get("skip_min_confidence"), 90, minimum=0, maximum=100
+        ),
         light_review_min_confidence=_normalize_bounded_int(
             raw_value.get("light_review_min_confidence"),
             80,
             minimum=0,
             maximum=100,
         ),
-        max_diff_excerpt_tokens=_normalize_positive_int(raw_value.get("max_diff_excerpt_tokens"), 3000),
+        max_diff_excerpt_tokens=_normalize_positive_int(
+            raw_value.get("max_diff_excerpt_tokens"), 3000
+        ),
         allow_skip=bool(raw_value.get("allow_skip", True)),
     )
 

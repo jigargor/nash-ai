@@ -72,10 +72,16 @@ def classify_diff_files(
 ) -> list[ClassifiedDiffFile]:
     classified: list[ClassifiedDiffFile] = []
     for file_in_diff in sorted(diff_files, key=lambda item: item.path):
-        changed_lines = sum(1 for line in file_in_diff.numbered_lines if line.kind == "add" and line.new_line_no is not None)
+        changed_lines = sum(
+            1
+            for line in file_in_diff.numbered_lines
+            if line.kind == "add" and line.new_line_no is not None
+        )
         diff_text = _render_minimal_diff(file_in_diff)
         estimated_diff_tokens = count_tokens(diff_text)
-        file_class = _classify_file(file_in_diff.path, file_in_diff.is_deleted, generated_paths, vendor_paths)
+        file_class = _classify_file(
+            file_in_diff.path, file_in_diff.is_deleted, generated_paths, vendor_paths
+        )
         touched_package = _package_hint(file_in_diff.path)
         dependency_hint = _dependency_hint(file_in_diff.path)
         classified.append(
@@ -107,8 +113,12 @@ def plan_chunks(
         generated_paths=generated_paths,
         vendor_paths=vendor_paths,
     )
-    skipped = tuple(file for file in classified if file.file_class not in planner_config.include_file_classes)
-    review_surface = [file for file in classified if file.file_class in planner_config.include_file_classes]
+    skipped = tuple(
+        file for file in classified if file.file_class not in planner_config.include_file_classes
+    )
+    review_surface = [
+        file for file in classified if file.file_class in planner_config.include_file_classes
+    ]
     if not review_surface:
         return ChunkPlan(
             chunks=(),
@@ -163,7 +173,9 @@ def plan_chunks(
 
     total_prompt = sum(chunk.estimated_prompt_tokens for chunk in chunks)
     total_output = sum(chunk.estimated_output_tokens for chunk in chunks)
-    dependency_hints = tuple(sorted({hint for file in classified if (hint := file.dependency_hint) is not None}))
+    dependency_hints = tuple(
+        sorted({hint for file in classified if (hint := file.dependency_hint) is not None})
+    )
     touched_packages = tuple(sorted({file.touched_package for file in classified}))
     manifest = tuple(file.path for file in classified)
     coverage_note = _coverage_note(
@@ -185,7 +197,9 @@ def plan_chunks(
     )
 
 
-def _classify_file(path: str, is_deleted: bool, generated_paths: list[str], vendor_paths: list[str]) -> FileClass:
+def _classify_file(
+    path: str, is_deleted: bool, generated_paths: list[str], vendor_paths: list[str]
+) -> FileClass:
     if is_deleted:
         return "deleted_only"
     lowered = path.lower()
@@ -225,18 +239,33 @@ def _is_binary_path(path: str) -> bool:
 
 
 def _is_lockfile(name: str) -> bool:
-    return name in {"pnpm-lock.yaml", "package-lock.json", "yarn.lock", "poetry.lock", "uv.lock", "cargo.lock"}
+    return name in {
+        "pnpm-lock.yaml",
+        "package-lock.json",
+        "yarn.lock",
+        "poetry.lock",
+        "uv.lock",
+        "cargo.lock",
+    }
 
 
 def _is_test_path(path: str) -> bool:
-    return "/tests/" in path or "/test/" in path or path.endswith("_test.py") or path.endswith(".spec.ts")
+    return (
+        "/tests/" in path
+        or "/test/" in path
+        or path.endswith("_test.py")
+        or path.endswith(".spec.ts")
+    )
 
 
 def _is_config_path(path: str) -> bool:
     config_exts = (".yml", ".yaml", ".toml", ".ini", ".cfg")
     if path.endswith(config_exts):
         return True
-    return any(token in path for token in ("dockerfile", ".env", "pyproject.toml", "package.json", "tsconfig"))
+    return any(
+        token in path
+        for token in ("dockerfile", ".env", "pyproject.toml", "package.json", "tsconfig")
+    )
 
 
 def _matches_any(path: str, patterns: list[str]) -> bool:
@@ -290,7 +319,9 @@ def _feature_token(path: str) -> str:
     return stem
 
 
-def _shared_prompt_tokens(classified: list[ClassifiedDiffFile], *, pr_title: str, pr_body: str) -> int:
+def _shared_prompt_tokens(
+    classified: list[ClassifiedDiffFile], *, pr_title: str, pr_body: str
+) -> int:
     manifest_lines = [file.path for file in classified]
     shared_payload = "\n".join(
         [

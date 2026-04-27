@@ -40,7 +40,10 @@ def _payload(
         {
             "action": action,
             "installation": {"id": 555},
-            "repository": {"full_name": "acme/repo", "owner": {"login": "acme", "type": "Organization"}},
+            "repository": {
+                "full_name": "acme/repo",
+                "owner": {"login": "acme", "type": "Organization"},
+            },
             "pull_request": pull_request,
         }
     )
@@ -94,9 +97,12 @@ async def test_sync_installation_from_webhook_tracks_uninstall_and_reinstall() -
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_skips_duplicate_active_review(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_queue_pull_request_review_skips_duplicate_active_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     redis = _FakeRedis()
     payload = _payload()
+
     async def _allow(*_args, **_kwargs) -> bool:
         return True
 
@@ -124,7 +130,9 @@ async def test_queue_pull_request_review_skips_duplicate_active_review(monkeypat
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_skips_when_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_queue_pull_request_review_skips_when_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     redis = _FakeRedis()
     payload = _payload()
 
@@ -142,7 +150,9 @@ async def test_queue_pull_request_review_skips_when_rate_limited(monkeypatch: py
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_skips_when_skip_tag_in_title(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_queue_pull_request_review_skips_when_skip_tag_in_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     redis = _FakeRedis()
     payload = _payload(title="chore: deps [skip-nash-review]")
 
@@ -170,7 +180,9 @@ async def test_queue_pull_request_review_skips_when_skip_tag_in_title(monkeypatc
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_skips_when_skip_tag_in_body(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_queue_pull_request_review_skips_when_skip_tag_in_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     redis = _FakeRedis()
     payload = _payload(body="## Notes\n\n[skip-nash-review] while iterating\n")
 
@@ -188,7 +200,9 @@ async def test_queue_pull_request_review_skips_when_skip_tag_in_body(monkeypatch
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_force_tag_overrides_skip(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_queue_pull_request_review_force_tag_overrides_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     redis = _FakeRedis()
     payload = _payload(title="[skip-nash-review]", body="[force-nash-review]")
 
@@ -207,7 +221,9 @@ async def test_queue_pull_request_review_force_tag_overrides_skip(monkeypatch: p
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_skip_tag_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_queue_pull_request_review_skip_tag_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     redis = _FakeRedis()
     payload = _payload(title="[Skip-Nash-Review]")
 

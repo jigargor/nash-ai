@@ -10,7 +10,13 @@ from app.config import settings
 GEMINI_OPENAI_COMPAT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 
-def get_provider_api_key(provider: ModelProvider) -> str:
+def get_provider_api_key(
+    provider: ModelProvider,
+    *,
+    user_key_override: str | None = None,
+) -> str:
+    if user_key_override:
+        return user_key_override
     if provider == "anthropic":
         if settings.anthropic_api_key:
             return settings.anthropic_api_key
@@ -26,7 +32,11 @@ def get_provider_api_key(provider: ModelProvider) -> str:
     raise RuntimeError(f"Unsupported LLM provider: {provider}")
 
 
-def create_openai_compatible_client(provider: ModelProvider) -> "AsyncOpenAI":
+def create_openai_compatible_client(
+    provider: ModelProvider,
+    *,
+    user_key_override: str | None = None,
+) -> "AsyncOpenAI":
     try:
         from openai import AsyncOpenAI
     except ModuleNotFoundError as exc:
@@ -34,7 +44,7 @@ def create_openai_compatible_client(provider: ModelProvider) -> "AsyncOpenAI":
             "openai package is required for OpenAI/Gemini model providers. "
             "Run `uv sync` (or `uv add openai`) in apps/api."
         ) from exc
-    api_key = get_provider_api_key(provider)
+    api_key = get_provider_api_key(provider, user_key_override=user_key_override)
     if provider == "gemini":
         return AsyncOpenAI(api_key=api_key, base_url=GEMINI_OPENAI_COMPAT_BASE_URL)
     if provider != "openai":

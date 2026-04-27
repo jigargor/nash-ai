@@ -3,7 +3,9 @@ from pathlib import Path
 
 
 def test_build_system_prompt_loads_reviewer_assets() -> None:
-    prompt = build_system_prompt(frameworks=[], diff="diff --git a/x b/x\n+print('ok')", repo_additions=None)
+    prompt = build_system_prompt(
+        frameworks=[], diff="diff --git a/x b/x\n+print('ok')", repo_additions=None
+    )
     assert "You are a senior code reviewer" in prompt
 
 
@@ -16,7 +18,9 @@ def test_load_file_falls_back_to_filesystem_when_importlib_resource_missing(monk
     assert "You are a senior code reviewer" in content
 
 
-def test_load_file_uses_embedded_fallback_when_package_and_filesystem_assets_missing(monkeypatch) -> None:
+def test_load_file_uses_embedded_fallback_when_package_and_filesystem_assets_missing(
+    monkeypatch,
+) -> None:
     def _raise_resources(*_args, **_kwargs):
         raise ModuleNotFoundError("simulated missing package resource")
 

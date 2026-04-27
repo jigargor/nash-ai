@@ -5,6 +5,7 @@ import pytest
 
 from app.github import auth
 
+
 def test_create_jwt_uses_expected_claims(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -68,7 +69,11 @@ def test_get_installation_token_posts_expected_request(monkeypatch: pytest.Monke
             return None
 
         async def post(
-            self, url: str, headers: dict[str, str] | None = None, json: dict | None = None, **_: object
+            self,
+            url: str,
+            headers: dict[str, str] | None = None,
+            json: dict | None = None,
+            **_: object,
         ) -> FakeResponse:
             captured["url"] = url
             captured["headers"] = headers or {}
@@ -95,7 +100,9 @@ def test_load_private_key_prefers_env_value(monkeypatch: pytest.MonkeyPatch) -> 
     assert auth._load_private_key() == "line1\nline2"
 
 
-def test_load_private_key_falls_back_to_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_load_private_key_falls_back_to_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     private_key_path = tmp_path / "private-key.pem"
     private_key_path.write_text("pem-file-value")
     monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM", None)
@@ -104,7 +111,9 @@ def test_load_private_key_falls_back_to_path(monkeypatch: pytest.MonkeyPatch, tm
     assert auth._load_private_key() == "pem-file-value"
 
 
-def test_load_private_key_raises_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_load_private_key_raises_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     missing_path = tmp_path / "missing.pem"
     monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM", None)
     monkeypatch.setattr(auth.settings, "APP_PRIVATE_KEY_PEM_path", missing_path)

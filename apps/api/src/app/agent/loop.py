@@ -23,8 +23,12 @@ async def run_agent(
     provider: ModelProvider = "anthropic",
 ) -> list[dict[str, Any]]:
     if provider in {"openai", "gemini"}:
-        return await _run_agent_openai_compatible(system_prompt, initial_user_message, context, model_name=model_name, provider=provider)
-    return await _run_agent_anthropic(system_prompt, initial_user_message, context, model_name=model_name)
+        return await _run_agent_openai_compatible(
+            system_prompt, initial_user_message, context, model_name=model_name, provider=provider
+        )
+    return await _run_agent_anthropic(
+        system_prompt, initial_user_message, context, model_name=model_name
+    )
 
 
 async def _run_agent_anthropic(
@@ -34,7 +38,10 @@ async def _run_agent_anthropic(
     *,
     model_name: str,
 ) -> list[dict[str, Any]]:
-    client = create_async_anthropic_client(get_provider_api_key("anthropic"))
+    user_key_override: str | None = context.get("user_provider_keys", {}).get("anthropic")
+    client = create_async_anthropic_client(
+        get_provider_api_key("anthropic", user_key_override=user_key_override)
+    )
     adapter = get_provider_adapter("anthropic")
     messages: list[dict[str, Any]] = [{"role": "user", "content": initial_user_message}]
     turns = 0
@@ -108,7 +115,8 @@ async def _run_agent_openai_compatible(
     model_name: str,
     provider: ModelProvider,
 ) -> list[dict[str, Any]]:
-    client = create_openai_compatible_client(provider)
+    user_key_override = context.get("user_provider_keys", {}).get(provider)
+    client = create_openai_compatible_client(provider, user_key_override=user_key_override)
     adapter = get_provider_adapter(provider)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -158,7 +166,9 @@ async def _run_agent_openai_compatible(
                         "type": "function",
                         "function": {
                             "name": function_name,
-                            "arguments": function_arguments if isinstance(function_arguments, str) else "{}",
+                            "arguments": function_arguments
+                            if isinstance(function_arguments, str)
+                            else "{}",
                         },
                     }
                 )
@@ -177,7 +187,9 @@ async def _run_agent_openai_compatible(
                     continue
                 if function_name == "fetch_file_content":
                     fetch_file_content_calls += 1
-                parsed_input = parse_openai_tool_arguments(function_arguments if isinstance(function_arguments, str) else "{}")
+                parsed_input = parse_openai_tool_arguments(
+                    function_arguments if isinstance(function_arguments, str) else "{}"
+                )
                 result = await execute_tool(function_name, parsed_input, context)
                 normalized = result if str(result).strip() else "Tool returned empty output."
                 messages.append(

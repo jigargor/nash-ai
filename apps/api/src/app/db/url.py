@@ -11,7 +11,11 @@ def is_railway_managed_postgres_host(hostname: str | None) -> bool:
     if not hostname:
         return False
     host = hostname.lower()
-    return host.endswith(".railway.app") or host.endswith(".rlwy.net") or host.endswith(".railway.internal")
+    return (
+        host.endswith(".railway.app")
+        or host.endswith(".rlwy.net")
+        or host.endswith(".railway.internal")
+    )
 
 
 def normalize_asyncpg_database_url(database_url: str) -> str:

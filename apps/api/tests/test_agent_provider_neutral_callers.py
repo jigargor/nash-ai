@@ -43,7 +43,9 @@ async def test_run_editor_returns_identical_payload_across_providers(
         ],
         "decisions": [{"original_index": 0, "action": "keep", "reason": "valid"}],
     }
-    monkeypatch.setattr(editor_module, "get_provider_adapter", lambda _provider: _FakeAdapter(payload))
+    monkeypatch.setattr(
+        editor_module, "get_provider_adapter", lambda _provider: _FakeAdapter(payload)
+    )
     draft = ReviewResult.model_validate({"summary": "Draft", "findings": payload["findings"]})
     out = await editor_module.run_editor(
         draft=draft,
@@ -73,14 +75,18 @@ async def test_run_fast_path_prepass_returns_identical_payload_across_providers(
         "review_surface": ["src/app.py"],
         "requires_full_context": False,
     }
-    monkeypatch.setattr(fast_path_module, "get_provider_adapter", lambda _provider: _FakeAdapter(payload))
+    monkeypatch.setattr(
+        fast_path_module, "get_provider_adapter", lambda _provider: _FakeAdapter(payload)
+    )
     files = [
         FileInDiff(
             path="src/app.py",
             language="Python",
             is_new=False,
             is_deleted=False,
-            numbered_lines=[NumberedLine(new_line_no=1, old_line_no=1, kind="add", content="print('x')")],
+            numbered_lines=[
+                NumberedLine(new_line_no=1, old_line_no=1, kind="add", content="print('x')")
+            ],
             context_window=[],
         )
     ]

@@ -10,14 +10,19 @@ from app.db.session import AsyncSessionLocal, set_installation_context
 def chunk_repo_segments(chunk_plan: ChunkPlan, chunk: PlannedChunk) -> list[str]:
     files = [entry.path for entry in chunk.files]
     chunk_packages = sorted({entry.touched_package for entry in chunk.files})
-    chunk_dep_hints = sorted({hint for entry in chunk.files if (hint := entry.dependency_hint) is not None})
+    chunk_dep_hints = sorted(
+        {hint for entry in chunk.files if (hint := entry.dependency_hint) is not None}
+    )
     return [
         "Full changed-file manifest:\n" + "\n".join(chunk_plan.full_manifest),
-        "Touched packages: " + (", ".join(chunk_plan.touched_packages) if chunk_plan.touched_packages else "none"),
-        "Dependency hints: " + (", ".join(chunk_plan.dependency_hints) if chunk_plan.dependency_hints else "none"),
+        "Touched packages: "
+        + (", ".join(chunk_plan.touched_packages) if chunk_plan.touched_packages else "none"),
+        "Dependency hints: "
+        + (", ".join(chunk_plan.dependency_hints) if chunk_plan.dependency_hints else "none"),
         f"Active chunk files ({len(files)}):\n" + "\n".join(files),
         "Active chunk package scope: " + (", ".join(chunk_packages) if chunk_packages else "none"),
-        "Active chunk dependency hints: " + (", ".join(chunk_dep_hints) if chunk_dep_hints else "none"),
+        "Active chunk dependency hints: "
+        + (", ".join(chunk_dep_hints) if chunk_dep_hints else "none"),
     ]
 
 
@@ -59,7 +64,9 @@ async def load_chunk_state(context: dict[str, Any]) -> dict[str, dict[str, objec
         return cast(dict[str, dict[str, object]], state)
 
 
-def merge_chunk_state_with_plan(existing: dict[str, dict[str, object]], plan: ChunkPlan) -> dict[str, dict[str, object]]:
+def merge_chunk_state_with_plan(
+    existing: dict[str, dict[str, object]], plan: ChunkPlan
+) -> dict[str, dict[str, object]]:
     merged = dict(existing)
     for chunk in plan.chunks:
         if chunk.chunk_id not in merged:
@@ -73,7 +80,9 @@ def chunk_status(state: dict[str, dict[str, object]], chunk_id: str) -> str:
     return str(status) if isinstance(status, str) else "pending"
 
 
-async def persist_chunk_state(context: dict[str, Any], chunk_state: dict[str, dict[str, object]]) -> None:
+async def persist_chunk_state(
+    context: dict[str, Any], chunk_state: dict[str, dict[str, object]]
+) -> None:
     installation_id = cast(int, context["installation_id"])
     review_id = cast(int, context["review_id"])
     async with AsyncSessionLocal() as session:

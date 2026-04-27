@@ -104,7 +104,9 @@ async def build_context_bundle(
         "Project context: prioritize correctness/security findings, use exact file/line anchors, "
         "and fetch file content before suggesting edits if uncertain."
     )
-    project_segment = _make_segment(layer="project", source_id="project-policy", fidelity="high", text=project_text)
+    project_segment = _make_segment(
+        layer="project", source_id="project-policy", fidelity="high", text=project_text
+    )
     if project_segment.token_count <= active_budgets.system_prompt:
         package.project.append(project_segment)
         token_usage["project"] += project_segment.token_count
@@ -137,11 +139,15 @@ async def build_context_bundle(
             fetched_files[file_in_diff.path] = source
             file_lines = source.splitlines()
             file_in_diff.context_window = _build_context_window(file_in_diff, source)
-            is_generated = _is_generated_file(file_in_diff.path, source, active_packaging.generated_paths)
+            is_generated = _is_generated_file(
+                file_in_diff.path, source, active_packaging.generated_paths
+            )
             is_lockfile = _is_lockfile(file_in_diff.path)
             hunks = _build_hunks(file_in_diff.numbered_lines)
             for hunk_index, hunk in enumerate(hunks, start=1):
-                score = _score_hunk(file_in_diff, hunk, is_generated=is_generated, is_lockfile=is_lockfile)
+                score = _score_hunk(
+                    file_in_diff, hunk, is_generated=is_generated, is_lockfile=is_lockfile
+                )
                 hunk_text = _render_hunk(file_in_diff.path, file_in_diff.language, hunk_index, hunk)
                 hunk_segment = _make_segment(
                     layer="review",
@@ -153,7 +159,10 @@ async def build_context_bundle(
                     line_end=_hunk_end_line(hunk),
                     score=score,
                 )
-                if token_usage["review_diff_hunks"] + hunk_segment.token_count > active_budgets.diff_hunks:
+                if (
+                    token_usage["review_diff_hunks"] + hunk_segment.token_count
+                    > active_budgets.diff_hunks
+                ):
                     dropped_segments.append(hunk_segment.source_id)
                     continue
                 package.review.append(hunk_segment)
@@ -161,8 +170,14 @@ async def build_context_bundle(
 
                 if is_generated or is_lockfile:
                     continue
-                window_size = DOC_CONTEXT_WINDOW_LINES if _is_docs_file(file_in_diff.path, file_in_diff.language) else CONTEXT_WINDOW_LINES
-                context_text = _render_surrounding_context(file_lines, hunk, window_size=window_size)
+                window_size = (
+                    DOC_CONTEXT_WINDOW_LINES
+                    if _is_docs_file(file_in_diff.path, file_in_diff.language)
+                    else CONTEXT_WINDOW_LINES
+                )
+                context_text = _render_surrounding_context(
+                    file_lines, hunk, window_size=window_size
+                )
                 if not context_text:
                     continue
                 context_segment = _make_segment(
@@ -175,7 +190,10 @@ async def build_context_bundle(
                     line_end=_hunk_end_line(hunk),
                     score=score,
                 )
-                if token_usage["review_surrounding"] + context_segment.token_count <= active_budgets.surrounding_context:
+                if (
+                    token_usage["review_surrounding"] + context_segment.token_count
+                    <= active_budgets.surrounding_context
+                ):
                     package.review.append(context_segment)
                     token_usage["review_surrounding"] += context_segment.token_count
                     continue
@@ -200,13 +218,18 @@ async def build_context_bundle(
                 summary_calls += 1
                 package.summarization_used = True
                 package.summarization_calls = summary_calls
-                if token_usage["review_surrounding"] + summary_segment.token_count <= active_budgets.surrounding_context:
+                if (
+                    token_usage["review_surrounding"] + summary_segment.token_count
+                    <= active_budgets.surrounding_context
+                ):
                     package.review.append(summary_segment)
                     token_usage["review_surrounding"] += summary_segment.token_count
                 else:
                     dropped_segments.append(summary_segment.source_id)
 
-        required_in_file = sorted({line for path, line in required_anchor_lines if path == file_in_diff.path})
+        required_in_file = sorted(
+            {line for path, line in required_anchor_lines if path == file_in_diff.path}
+        )
         for line_no in required_in_file:
             line_content = _line_content_for_anchor(file_in_diff, line_no, file_lines)
             if line_content is None:
@@ -254,7 +277,9 @@ async def build_context_bundle(
         summarization_calls=package.summarization_calls,
         partial_review_mode=package.partial_review_mode,
     )
-    return ContextBundle(rendered=rendered, fetched_files=fetched_files, package=package, telemetry=telemetry)
+    return ContextBundle(
+        rendered=rendered, fetched_files=fetched_files, package=package, telemetry=telemetry
+    )
 
 
 async def _try_fetch_file(
@@ -399,7 +424,11 @@ def _hunk_end_line(hunk: list[NumberedLine]) -> int:
 
 
 def _render_hunk(path: str, language: str, hunk_index: int, hunk: list[NumberedLine]) -> str:
-    lines = [f"## File: {path} ({language})", "", f"Hunk {hunk_index} (around line {_hunk_anchor_line(hunk)}):"]
+    lines = [
+        f"## File: {path} ({language})",
+        "",
+        f"Hunk {hunk_index} (around line {_hunk_anchor_line(hunk)}):",
+    ]
     for numbered_line in hunk:
         line_no = str(numbered_line.new_line_no) if numbered_line.new_line_no is not None else "-"
         marker = {"add": "+", "del": "-", "ctx": "ctx"}[numbered_line.kind]
@@ -407,7 +436,9 @@ def _render_hunk(path: str, language: str, hunk_index: int, hunk: list[NumberedL
     return "\n".join(lines)
 
 
-def _render_surrounding_context(file_lines: list[str], hunk: list[NumberedLine], *, window_size: int) -> str:
+def _render_surrounding_context(
+    file_lines: list[str], hunk: list[NumberedLine], *, window_size: int
+) -> str:
     anchor = _hunk_anchor_line(hunk)
     end = _hunk_end_line(hunk)
     start_line = max(1, anchor - window_size)
@@ -420,7 +451,9 @@ def _render_surrounding_context(file_lines: list[str], hunk: list[NumberedLine],
     return "\n".join(out)
 
 
-def _score_hunk(file_in_diff: FileInDiff, hunk: list[NumberedLine], *, is_generated: bool, is_lockfile: bool) -> float:
+def _score_hunk(
+    file_in_diff: FileInDiff, hunk: list[NumberedLine], *, is_generated: bool, is_lockfile: bool
+) -> float:
     changed_lines = sum(1 for line in hunk if line.kind == "add")
     language_weight = {
         "Python": 1.0,
@@ -453,7 +486,14 @@ def _score_hunk(file_in_diff: FileInDiff, hunk: list[NumberedLine], *, is_genera
     generated_penalty = 3.0 if is_generated else 0.0
     lockfile_penalty = 2.0 if is_lockfile else 0.0
     oversize_penalty = max(0, len(hunk) - 40) * 0.03
-    return (2.0 * changed_lines) + (1.5 * language_weight) + path_weight - generated_penalty - lockfile_penalty - oversize_penalty
+    return (
+        (2.0 * changed_lines)
+        + (1.5 * language_weight)
+        + path_weight
+        - generated_penalty
+        - lockfile_penalty
+        - oversize_penalty
+    )
 
 
 def _is_generated_file(path: str, source: str, configured_patterns: list[str]) -> bool:
@@ -519,13 +559,19 @@ def _make_segment(
     )
 
 
-def _pick_files_for_review(files_in_diff: list[FileInDiff], packaging: ContextPackagingConfig) -> list[FileInDiff]:
+def _pick_files_for_review(
+    files_in_diff: list[FileInDiff], packaging: ContextPackagingConfig
+) -> list[FileInDiff]:
     ranked: list[tuple[float, FileInDiff, int]] = []
     total_changed_non_generated = 0
     for file_in_diff in files_in_diff:
         if _is_vendored(file_in_diff.path, packaging.vendor_paths):
             continue
-        changed_count = sum(1 for line in file_in_diff.numbered_lines if line.kind == "add" and line.new_line_no is not None)
+        changed_count = sum(
+            1
+            for line in file_in_diff.numbered_lines
+            if line.kind == "add" and line.new_line_no is not None
+        )
         if changed_count == 0:
             continue
         is_generated = _is_generated_file(file_in_diff.path, "", packaging.generated_paths)
@@ -534,7 +580,10 @@ def _pick_files_for_review(files_in_diff: list[FileInDiff], packaging: ContextPa
         score = 2.0 * changed_count + (0.8 if "test" not in file_in_diff.path.lower() else -0.3)
         ranked.append((score, file_in_diff, changed_count))
 
-    if not packaging.partial_review_mode_enabled or total_changed_non_generated <= packaging.partial_review_changed_lines_threshold:
+    if (
+        not packaging.partial_review_mode_enabled
+        or total_changed_non_generated <= packaging.partial_review_changed_lines_threshold
+    ):
         return [item[1] for item in sorted(ranked, key=lambda entry: entry[0], reverse=True)]
 
     selected: list[FileInDiff] = []
@@ -552,7 +601,12 @@ def _partial_review_note(
     included_files: list[FileInDiff],
     packaging: ContextPackagingConfig,
 ) -> str | None:
-    all_changed = sum(1 for file in all_files for line in file.numbered_lines if line.kind == "add" and line.new_line_no is not None)
+    all_changed = sum(
+        1
+        for file in all_files
+        for line in file.numbered_lines
+        if line.kind == "add" and line.new_line_no is not None
+    )
     included_changed = sum(
         1
         for file in included_files
@@ -592,7 +646,11 @@ def _summarize_context_segment(path: str, context_text: str) -> str:
     if digest in SUMMARY_CACHE:
         return SUMMARY_CACHE[digest]
     lines = [line.strip() for line in context_text.splitlines() if line.strip()]
-    signatures = [line for line in lines if line.startswith(("def ", "async def ", "class ", "function ", "export "))]
+    signatures = [
+        line
+        for line in lines
+        if line.startswith(("def ", "async def ", "class ", "function ", "export "))
+    ]
     summary = [
         f"### Structured summary for {path}",
         f"- total_lines: {len(lines)}",
@@ -608,6 +666,8 @@ def _summarize_context_segment(path: str, context_text: str) -> str:
     return rendered
 
 
-def _ignored_anchor_files(all_files: list[FileInDiff], included_files: list[FileInDiff]) -> list[str]:
+def _ignored_anchor_files(
+    all_files: list[FileInDiff], included_files: list[FileInDiff]
+) -> list[str]:
     included = {file.path for file in included_files}
     return sorted(file.path for file in all_files if file.path not in included)

@@ -9,4 +9,3 @@ def normalize_file_content(content: str) -> str:
 def normalize_for_match(content: str) -> str:
     """Normalize line text for robust matching in repair/telemetry paths."""
     return unicodedata.normalize("NFC", content).lstrip("\ufeff").replace("\t", "    ").rstrip()
-

@@ -38,7 +38,9 @@ class StructuredOutputResult:
 class ProviderAdapter(Protocol):
     provider: ModelProvider
 
-    async def complete(self, *, model_name: str, messages: list[dict[str, Any]], system_prompt: str | None = None) -> Any: ...
+    async def complete(
+        self, *, model_name: str, messages: list[dict[str, Any]], system_prompt: str | None = None
+    ) -> Any: ...
 
     async def tool_loop(
         self,
@@ -55,7 +57,9 @@ class ProviderAdapter(Protocol):
         request: StructuredOutputRequest,
     ) -> StructuredOutputResult: ...
 
-    def render_anthropic_system(self, system_prompt: str, options: CacheRequestOptions | None = None) -> list[dict[str, Any]]: ...
+    def render_anthropic_system(
+        self, system_prompt: str, options: CacheRequestOptions | None = None
+    ) -> list[dict[str, Any]]: ...
 
     def chat_completion_extra_kwargs(
         self,
@@ -73,8 +77,12 @@ class ProviderAdapter(Protocol):
 class BaseProviderAdapter:
     provider: ModelProvider = "unknown"
 
-    async def complete(self, *, model_name: str, messages: list[dict[str, Any]], system_prompt: str | None = None) -> Any:
-        raise NotImplementedError("Provider adapters expose complete through concrete runtime modules")
+    async def complete(
+        self, *, model_name: str, messages: list[dict[str, Any]], system_prompt: str | None = None
+    ) -> Any:
+        raise NotImplementedError(
+            "Provider adapters expose complete through concrete runtime modules"
+        )
 
     async def tool_loop(
         self,
@@ -91,9 +99,13 @@ class BaseProviderAdapter:
         *,
         request: StructuredOutputRequest,
     ) -> StructuredOutputResult:
-        raise NotImplementedError("Provider adapters expose structured_output through app.agent.finalize")
+        raise NotImplementedError(
+            "Provider adapters expose structured_output through app.agent.finalize"
+        )
 
-    def render_anthropic_system(self, system_prompt: str, options: CacheRequestOptions | None = None) -> list[dict[str, Any]]:
+    def render_anthropic_system(
+        self, system_prompt: str, options: CacheRequestOptions | None = None
+    ) -> list[dict[str, Any]]:
         return [{"type": "text", "text": system_prompt}]
 
     def chat_completion_extra_kwargs(
@@ -107,11 +119,15 @@ class BaseProviderAdapter:
 
     def parse_usage(self, usage: object) -> LLMUsage:
         input_tokens = _read_int(usage, "input_tokens", "prompt_tokens", "prompt_token_count")
-        output_tokens = _read_int(usage, "output_tokens", "completion_tokens", "candidates_token_count")
+        output_tokens = _read_int(
+            usage, "output_tokens", "completion_tokens", "candidates_token_count"
+        )
         total_tokens = _read_int(usage, "total_tokens", "total_token_count")
         cached_tokens = _read_nested_int(usage, ("prompt_tokens_details", "cached_tokens"))
         if cached_tokens == 0:
-            cached_tokens = _read_int(usage, "cached_content_token_count", "cache_read_input_tokens")
+            cached_tokens = _read_int(
+                usage, "cached_content_token_count", "cache_read_input_tokens"
+            )
         cache_creation_tokens = _read_int(usage, "cache_creation_input_tokens")
         return LLMUsage(
             input_tokens=input_tokens,
@@ -172,7 +188,11 @@ def _usage_to_dict(usage: object) -> dict[str, Any]:
     model_dump = getattr(usage, "model_dump", None)
     if callable(model_dump):
         dumped = model_dump()
-        return {str(key): _jsonable(value) for key, value in dumped.items()} if isinstance(dumped, dict) else {}
+        return (
+            {str(key): _jsonable(value) for key, value in dumped.items()}
+            if isinstance(dumped, dict)
+            else {}
+        )
     out: dict[str, Any] = {}
     for name in (
         "input_tokens",

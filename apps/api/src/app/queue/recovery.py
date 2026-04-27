@@ -10,7 +10,9 @@ logger = logging.getLogger(__name__)
 STALE_RUNNING_REVIEW_MAX_AGE_MINUTES = 10
 
 
-async def recover_stale_running_reviews(max_age_minutes: int = STALE_RUNNING_REVIEW_MAX_AGE_MINUTES) -> int:
+async def recover_stale_running_reviews(
+    max_age_minutes: int = STALE_RUNNING_REVIEW_MAX_AGE_MINUTES,
+) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
     recovered = 0
 
@@ -43,5 +45,9 @@ async def recover_stale_running_reviews(max_age_minutes: int = STALE_RUNNING_REV
         await session.commit()
 
     if recovered:
-        logger.warning("Recovered stale running reviews count=%s max_age_minutes=%s", recovered, max_age_minutes)
+        logger.warning(
+            "Recovered stale running reviews count=%s max_age_minutes=%s",
+            recovered,
+            max_age_minutes,
+        )
     return recovered

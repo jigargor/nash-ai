@@ -28,8 +28,47 @@ class User(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
     github_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     login: Mapped[str] = mapped_column(Text, nullable=False)
-    token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)  # Fernet-encrypted OAuth token
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    token_enc: Mapped[bytes | None] = mapped_column(
+        LargeBinary
+    )  # Fernet-encrypted OAuth token (reserved)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class UserProviderKey(Base):
+    __tablename__ = "user_provider_keys"
+    __table_args__ = (UniqueConstraint("user_id", "provider"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)  # "anthropic" | "openai" | "gemini"
+    key_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)  # Fernet-encrypted
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class UserKeyAuditLog(Base):
+    __tablename__ = "user_key_audit_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)  # "created" | "updated" | "deleted"
+    performed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
 
 
 class Installation(Base):
@@ -39,7 +78,9 @@ class Installation(Base):
     installation_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     account_login: Mapped[str] = mapped_column(Text, nullable=False)
     account_type: Mapped[str] = mapped_column(Text, nullable=False)
-    installed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    installed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
     suspended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
 
@@ -57,7 +98,9 @@ class RepoConfig(Base):
     config_yaml: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     ai_generated_yaml: Mapped[str | None] = mapped_column(Text)
     ai_generated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
 
 
 class Review(Base):
@@ -84,9 +127,14 @@ class Review(Base):
     debug_artifacts: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     tokens_used: Mapped[int | None] = mapped_column(Integer)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
+    triggered_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=True
+    )
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
 
 
 class ReviewModelAudit(Base):
@@ -111,8 +159,13 @@ class ReviewModelAudit(Base):
     accepted_findings_count: Mapped[int | None] = mapped_column(Integer)
     conflict_score: Mapped[int | None] = mapped_column(Integer)
     decision: Mapped[str | None] = mapped_column(Text)
-    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    stage_duration_ms: Mapped[int | None] = mapped_column(Integer)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
 
 
 class FindingOutcome(Base):
@@ -129,8 +182,12 @@ class FindingOutcome(Base):
     github_comment_id: Mapped[int | None] = mapped_column(BigInteger)
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
     outcome_confidence: Mapped[str] = mapped_column(Text, nullable=False)
-    detected_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
-    signals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    detected_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    signals: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
 
 class LLMModelCatalogSnapshot(Base):
@@ -143,8 +200,12 @@ class LLMModelCatalogSnapshot(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
     version_hash: Mapped[str] = mapped_column(Text, nullable=False)
     catalog_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    source_hashes: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    generated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
+    source_hashes: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
     promoted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
 
@@ -159,9 +220,57 @@ class LLMModelHealth(Base):
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(Text, nullable=False)
     provider_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
-    circuit_open: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    circuit_open: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     failure_class: Mapped[str | None] = mapped_column(Text)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     last_success_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     last_checked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
-    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+
+class BenchmarkRun(Base):
+    __tablename__ = "benchmark_runs"
+    __table_args__ = (Index("benchmark_runs_started_at", "started_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
+    model_config_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    dataset_path: Mapped[str] = mapped_column(Text, nullable=False)
+    triggered_by: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'running'"))
+    totals_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class BenchmarkResult(Base):
+    __tablename__ = "benchmark_results"
+    __table_args__ = (Index("benchmark_results_run_id", "run_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    run_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("benchmark_runs.id"), nullable=False)
+    case_id: Mapped[str] = mapped_column(Text, nullable=False)
+    review_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("reviews.id"), nullable=True
+    )
+    expected_findings: Mapped[int] = mapped_column(Integer, nullable=False)
+    predicted_findings: Mapped[int] = mapped_column(Integer, nullable=False)
+    true_positives: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    false_positives: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    false_negatives: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
+    cost_per_tp_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
+    stage_timings_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )

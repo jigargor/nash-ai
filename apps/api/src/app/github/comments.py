@@ -43,7 +43,11 @@ async def post_review(
 ) -> dict[str, object]:
     comments = [build_review_comment_payload(finding) for finding in result.findings]
 
-    event = "REQUEST_CHANGES" if any(finding.severity == "critical" for finding in result.findings) else "COMMENT"
+    event = (
+        "REQUEST_CHANGES"
+        if any(finding.severity == "critical" for finding in result.findings)
+        else "COMMENT"
+    )
 
     payload = {
         "commit_id": head_sha,

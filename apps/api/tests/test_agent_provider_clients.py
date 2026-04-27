@@ -56,7 +56,9 @@ def test_create_openai_compatible_client_selects_base_url_for_gemini(
     assert gemini_client.kwargs["base_url"] == provider_clients.GEMINI_OPENAI_COMPAT_BASE_URL
 
 
-def test_create_openai_compatible_client_raises_when_openai_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_openai_compatible_client_raises_when_openai_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "openai_api_key", "openai-key")
     monkeypatch.delitem(__import__("sys").modules, "openai", raising=False)
     original_import = builtins.__import__
