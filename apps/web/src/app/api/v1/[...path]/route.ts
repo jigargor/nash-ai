@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
+import { createDashboardUserToken } from "@/lib/auth/dashboard-token";
 import { parseSessionToken } from "@/lib/auth/session";
 import { hydrateApiProxyEnvFromAncestors } from "@/lib/monorepo-env";
 
@@ -80,8 +81,14 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   const accept = request.headers.get("accept");
   if (contentType) headers.set("Content-Type", contentType);
   if (accept) headers.set("Accept", accept);
+  let dashboardUserToken: string;
+  try {
+    dashboardUserToken = createDashboardUserToken(session.user);
+  } catch {
+    return NextResponse.json({ detail: "Dashboard user token auth is not configured." }, { status: 503 });
+  }
   headers.set("X-Api-Key", apiAccessKey);
-  headers.set("X-User-Github-Id", String(session.user.id));
+  headers.set("X-Dashboard-User-Token", dashboardUserToken);
 
   try {
     return await fetch(targetUrl, {

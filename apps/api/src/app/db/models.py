@@ -85,6 +85,30 @@ class Installation(Base):
     suspended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
 
+class InstallationUser(Base):
+    __tablename__ = "installation_users"
+    __table_args__ = (
+        UniqueConstraint("installation_id", "user_id"),
+        Index("installation_users_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("installations.installation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'member'"))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+
+
 class RepoConfig(Base):
     __tablename__ = "repo_configs"
     __table_args__ = (UniqueConstraint("installation_id", "repo_full_name"),)

@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     log_webhook_payloads: bool = False
     admin_retry_api_key: str | None = None
     api_access_key: str | None = None
+    dashboard_user_jwt_secret: str | None = None
+    dashboard_user_jwt_audience: str = "dashboard-api"
+    dashboard_user_jwt_issuer: str = "nash-web-dashboard"
     enable_reviews: bool = True
     reviews_per_hour_limit: int = 30
     daily_token_budget_per_installation: int = 10_000_000

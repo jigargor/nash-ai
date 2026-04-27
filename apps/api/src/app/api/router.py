@@ -26,8 +26,9 @@ from app.agent.review_config import (
     _parse_packaging,
     _parse_severity_threshold,
 )
+from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.config import settings
-from app.db.models import Installation, RepoConfig, Review, ReviewModelAudit
+from app.db.models import Installation, InstallationUser, RepoConfig, Review, ReviewModelAudit, User
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
 from app.github.utils import safe_fetch_file, split_repo_full_name as _split_repo_full_name
@@ -55,7 +56,10 @@ def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
         )
 
 
-router = APIRouter(prefix="/api/v1", dependencies=[Depends(_verify_api_access)])
+router = APIRouter(
+    prefix="/api/v1",
+    dependencies=[Depends(_verify_api_access), Depends(get_current_dashboard_user)],
+)
 
 
 class RepoAccumulator(TypedDict):
@@ -207,14 +211,38 @@ async def _generate_yaml_with_model(
 async def _list_installation_rows(
     session: AsyncSession,
     *,
+    installation_ids: set[int] | None = None,
     active_only: bool = True,
     limit: int = 100,
 ) -> list[Installation]:
+    if installation_ids is not None and not installation_ids:
+        return []
     stmt = select(Installation).order_by(Installation.installed_at.desc()).limit(limit)
+    if installation_ids is not None:
+        stmt = stmt.where(Installation.installation_id.in_(installation_ids))
     if active_only:
         stmt = stmt.where(Installation.suspended_at.is_(None))
     rows = await session.scalars(stmt)
     return list(rows)
+
+
+async def _allowed_installation_ids(
+    session: AsyncSession, current_user: CurrentDashboardUser
+) -> set[int]:
+    rows = (
+        await session.execute(
+            select(InstallationUser.installation_id)
+            .join(User, User.id == InstallationUser.user_id)
+            .where(User.github_id == current_user.github_id)
+            .where(User.deleted_at.is_(None))
+        )
+    ).scalars()
+    return {int(installation_id) for installation_id in rows}
+
+
+def _require_installation_access(allowed_installation_ids: set[int], installation_id: int) -> None:
+    if installation_id not in allowed_installation_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Installation not found")
 
 
 def _findings_count_from_review_row(review: Review) -> int:
@@ -273,9 +301,16 @@ def _review_list_item(review: Review) -> dict[str, object]:
 async def list_installations(
     active_only: bool = Query(default=True),
     limit: int = Query(default=50, ge=1, le=100),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[dict[str, object]]:
     async with AsyncSessionLocal() as session:
-        installations = await _list_installation_rows(session, active_only=active_only, limit=limit)
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
+        installations = await _list_installation_rows(
+            session,
+            installation_ids=allowed_installation_ids,
+            active_only=active_only,
+            limit=limit,
+        )
         return [
             {
                 "installation_id": int(item.installation_id),
@@ -295,13 +330,19 @@ async def list_repos(
     installation_id: int | None = Query(default=None, ge=1),
     active_only: bool = Query(default=True),
     limit: int = Query(default=100, ge=1, le=500),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[dict[str, object]]:
     async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
         if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
             installation_ids = [installation_id]
         else:
             installations = await _list_installation_rows(
-                session, active_only=active_only, limit=100
+                session,
+                installation_ids=allowed_installation_ids,
+                active_only=active_only,
+                limit=100,
             )
             installation_ids = [int(item.installation_id) for item in installations]
 
@@ -384,9 +425,14 @@ async def get_repo_codereview_config(
     owner: str,
     repo: str,
     installation_id: int = Query(..., ge=1),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
     owner = _validate_repo_segment(owner, "repository owner")
     repo = _validate_repo_segment(repo, "repository name")
+    async with AsyncSessionLocal() as session:
+        _require_installation_access(
+            await _allowed_installation_ids(session, current_user), installation_id
+        )
     gh = await GitHubClient.for_installation(installation_id)
     raw = await safe_fetch_file(gh, owner, repo, ".codereview.yml", "HEAD")
     config_json: dict[str, object] | None = None
@@ -405,6 +451,7 @@ async def generate_repo_codereview_template(
     owner: str,
     repo: str,
     installation_id: int = Query(..., ge=1),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
     if not settings.has_llm_api_key_configured():
         raise HTTPException(
@@ -414,6 +461,10 @@ async def generate_repo_codereview_template(
     owner_normalized = _validate_repo_segment(owner, "repository owner")
     repo_normalized = _validate_repo_segment(repo, "repository name")
     repo_full_name = f"{owner_normalized}/{repo_normalized}"
+    async with AsyncSessionLocal() as access_session:
+        _require_installation_access(
+            await _allowed_installation_ids(access_session, current_user), installation_id
+        )
 
     gh = await GitHubClient.for_installation(installation_id)
     ref = await _resolve_repo_head_sha(gh, owner_normalized, repo_normalized)
@@ -509,9 +560,12 @@ async def generate_repo_codereview_template(
 async def list_reviews(
     installation_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[dict[str, object]]:
     async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
         if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
             await set_installation_context(session, installation_id)
             reviews = await session.scalars(
                 select(Review)
@@ -521,7 +575,12 @@ async def list_reviews(
             )
             return [_review_list_item(review) for review in reviews]
 
-        installations = await _list_installation_rows(session, active_only=True, limit=100)
+        installations = await _list_installation_rows(
+            session,
+            installation_ids=allowed_installation_ids,
+            active_only=True,
+            limit=100,
+        )
         all_reviews: list[Review] = []
         for installation in installations:
             await set_installation_context(session, int(installation.installation_id))
@@ -539,13 +598,19 @@ async def list_reviews(
 
 @router.get("/reviews/{review_id}")
 async def get_review(
-    review_id: int, installation_id: int | None = Query(default=None, ge=1)
+    review_id: int,
+    installation_id: int | None = Query(default=None, ge=1),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
         if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
             await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if int(review.installation_id) not in allowed_installation_ids:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
         if installation_id is None:
             installation_id = int(review.installation_id)
@@ -582,12 +647,17 @@ async def get_review(
 async def get_review_outcomes(
     review_id: int,
     installation_id: int | None = Query(default=None, ge=1),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
         if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
             await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if int(review.installation_id) not in allowed_installation_ids:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
         if installation_id is None:
             installation_id = int(review.installation_id)
@@ -609,12 +679,17 @@ async def get_review_outcomes(
 async def get_review_model_audits(
     review_id: int,
     installation_id: int | None = Query(default=None, ge=1),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
         if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
             await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if int(review.installation_id) not in allowed_installation_ids:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
         if installation_id is None:
             installation_id = int(review.installation_id)
@@ -666,7 +741,13 @@ async def get_review_model_audits(
 async def get_outcome_summary(
     installation_id: int | None = Query(default=None, ge=1),
     repo_full_name: str | None = Query(default=None),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
+    if installation_id is not None:
+        async with AsyncSessionLocal() as session:
+            _require_installation_access(
+                await _allowed_installation_ids(session, current_user), installation_id
+            )
     summary = await summarize_finding_outcomes(
         installation_id=installation_id,
         repo_full_name=repo_full_name,
@@ -683,13 +764,17 @@ async def rerun_review(
     request: Request,
     review_id: int,
     installation_id: int | None = Query(default=None, ge=1),
-    x_user_github_id: int | None = Header(default=None),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
         if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
             await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if int(review.installation_id) not in allowed_installation_ids:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
         if installation_id is None:
             installation_id = int(review.installation_id)
@@ -715,13 +800,18 @@ async def rerun_review(
             repo,
             int(review.pr_number),
             review.pr_head_sha,
-            user_github_id=x_user_github_id,
+            user_github_id=current_user.github_id,
         )
         review.status = "queued"
         review.started_at = None
         review.completed_at = None
-        if x_user_github_id is not None:
-            review.triggered_by_user_id = x_user_github_id
+        trigger_user_id = await session.scalar(
+            select(User.id)
+            .where(User.github_id == current_user.github_id)
+            .where(User.deleted_at.is_(None))
+            .limit(1)
+        )
+        review.triggered_by_user_id = int(trigger_user_id) if trigger_user_id is not None else None
         await session.commit()
 
     return {"ok": True, "review_id": review_id, "job_id": job.job_id if job else None}
@@ -732,12 +822,17 @@ async def dismiss_finding(
     review_id: int,
     finding_index: int,
     installation_id: int | None = Query(default=None, ge=1),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
         if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
             await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
         if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if int(review.installation_id) not in allowed_installation_ids:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
         if installation_id is None:
             installation_id = int(review.installation_id)
@@ -762,15 +857,27 @@ async def dismiss_finding(
 async def stream_review_events(
     review_id: int,
     installation_id: int | None = Query(default=None, ge=1),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> StreamingResponse:
+    async with AsyncSessionLocal() as access_session:
+        allowed_installation_ids = await _allowed_installation_ids(access_session, current_user)
+
     async def event_generator() -> AsyncIterator[str]:
         previous_status: str | None = None
         for _ in range(120):
             async with AsyncSessionLocal() as session:
                 if installation_id is not None:
+                    if installation_id not in allowed_installation_ids:
+                        yield (
+                            f"data: {json.dumps({'type': 'error', 'message': 'Review not found'})}\n\n"
+                        )
+                        return
                     await set_installation_context(session, installation_id)
                 review = await session.get(Review, review_id)
                 if review is None:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Review not found'})}\n\n"
+                    return
+                if int(review.installation_id) not in allowed_installation_ids:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'Review not found'})}\n\n"
                     return
                 if installation_id is None:

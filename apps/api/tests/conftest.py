@@ -11,15 +11,17 @@ from uuid import uuid4
 
 import asyncpg
 import httpx
+import jwt
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from app.api import router as api_router
 from app.config import settings
-from app.db.models import Installation, Review
+from app.db.models import Installation, InstallationUser, Review, User
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
 
 
@@ -47,16 +49,55 @@ def _random_installation_id() -> int:
     return int(str(uuid4().int)[:9])
 
 
+_TEST_DASHBOARD_USER_GITHUB_ID = 999_001
+_TEST_DASHBOARD_USER_LOGIN = "test-dashboard-user"
+
+
+def _dashboard_user_token() -> str:
+    secret = (
+        os.getenv("DASHBOARD_USER_JWT_SECRET")
+        or settings.dashboard_user_jwt_secret
+        or "test-dashboard-user-secret"
+    )
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    return str(
+        jwt.encode(
+            {
+                "sub": str(_TEST_DASHBOARD_USER_GITHUB_ID),
+                "login": _TEST_DASHBOARD_USER_LOGIN,
+                "aud": settings.dashboard_user_jwt_audience,
+                "iss": settings.dashboard_user_jwt_issuer,
+                "iat": now_ts,
+                "exp": now_ts + 300,
+            },
+            secret,
+            algorithm="HS256",
+        )
+    )
+
+
 def _auth_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
     if settings.api_access_key:
-        return {"X-Api-Key": settings.api_access_key}
-    return {}
+        headers["X-Api-Key"] = settings.api_access_key
+    headers["X-Dashboard-User-Token"] = _dashboard_user_token()
+    return headers
 
 
 async def _insert_installation(installation_id: int, *, suspended: bool = False) -> None:
     await engine.dispose()
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
+        user = (
+            await session.execute(select(User).where(User.github_id == _TEST_DASHBOARD_USER_GITHUB_ID))
+        ).scalar_one_or_none()
+        if user is None:
+            user = User(
+                github_id=_TEST_DASHBOARD_USER_GITHUB_ID,
+                login=_TEST_DASHBOARD_USER_LOGIN,
+            )
+            session.add(user)
+            await session.flush()
         session.add(
             Installation(
                 installation_id=installation_id,
@@ -65,6 +106,16 @@ async def _insert_installation(installation_id: int, *, suspended: bool = False)
                 suspended_at=datetime.now(timezone.utc) if suspended else None,
             )
         )
+        existing_link = (
+            await session.execute(
+                select(InstallationUser).where(
+                    InstallationUser.installation_id == installation_id,
+                    InstallationUser.user_id == user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_link is None:
+            session.add(InstallationUser(installation_id=installation_id, user_id=user.id, role="member"))
         await session.commit()
 
 
@@ -179,6 +230,9 @@ def migrated_test_database(test_database_url: str) -> None:
     os.environ.setdefault("GITHUB_CLIENT_SECRET", "test-client-secret")
     os.environ.setdefault("FERNET_KEY", "4nYA5RU2f22W4DvwW8Hpt4W6YKfYwQMUqlGQv6ygfA4=")
     os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
+    os.environ.setdefault("DASHBOARD_USER_JWT_SECRET", "test-dashboard-user-secret")
+    os.environ.setdefault("DASHBOARD_USER_JWT_AUDIENCE", "dashboard-api")
+    os.environ.setdefault("DASHBOARD_USER_JWT_ISSUER", "nash-web-dashboard")
 
     apps_api_dir = Path(__file__).resolve().parents[1]
     alembic_config = Config(str(apps_api_dir / "alembic.ini"))

@@ -49,7 +49,13 @@ export function hydrateGithubOAuthEnvFromAncestors(): void {
 }
 
 export function hydrateApiProxyEnvFromAncestors(): void {
-  hydrateEnvFromAncestors(["API_ACCESS_KEY", "API_URL"]);
+  hydrateEnvFromAncestors([
+    "API_ACCESS_KEY",
+    "API_URL",
+    "DASHBOARD_USER_JWT_SECRET",
+    "DASHBOARD_USER_JWT_AUDIENCE",
+    "DASHBOARD_USER_JWT_ISSUER",
+  ]);
 }
 
 export function hydrateEnvFromAncestors(keys: readonly string[]): void {

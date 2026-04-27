@@ -2,8 +2,9 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { AUTH_COOKIE_NAME, AUTH_COOKIE_TTL_SECONDS, AUTH_STATE_COOKIE_NAME } from "@/lib/auth/constants";
-import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/monorepo-env";
-import { exchangeCodeForToken, getGitHubUser } from "@/lib/auth/github";
+import { createDashboardUserToken } from "@/lib/auth/dashboard-token";
+import { hydrateApiProxyEnvFromAncestors, hydrateGithubOAuthEnvFromAncestors } from "@/lib/monorepo-env";
+import { exchangeCodeForToken, getGitHubUser, listGitHubUserInstallations } from "@/lib/auth/github";
 import { createSessionToken } from "@/lib/auth/session";
 
 function appOrigin(requestUrl: string): string {
@@ -17,6 +18,7 @@ function callbackUrl(requestUrl: string): string {
 
 export async function GET(request: Request): Promise<NextResponse> {
   hydrateGithubOAuthEnvFromAncestors();
+  hydrateApiProxyEnvFromAncestors();
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -27,8 +29,12 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   try {
     const token = await exchangeCodeForToken(code, callbackUrl(request.url));
-    const user = await getGitHubUser(token.access_token);
+    const [user, installations] = await Promise.all([
+      getGitHubUser(token.access_token),
+      listGitHubUserInstallations(token.access_token).catch(() => []),
+    ]);
     const sessionToken = await createSessionToken({ id: user.id, login: user.login });
+    const dashboardUserToken = createDashboardUserToken({ id: user.id, login: user.login });
 
     // Upsert user record in the database — fire-and-forget, must not block login
     const apiBase = process.env.API_URL ?? "http://localhost:8000";
@@ -37,9 +43,27 @@ export async function GET(request: Request): Promise<NextResponse> {
       headers: {
         "Content-Type": "application/json",
         "X-Api-Key": process.env.API_ACCESS_KEY ?? "",
+        "X-Dashboard-User-Token": dashboardUserToken,
       },
-      body: JSON.stringify({ github_id: user.id, login: user.login }),
+      body: JSON.stringify({ login: user.login }),
     }).catch((err: unknown) => console.error("[auth/callback] user upsert failed (non-fatal)", err));
+    fetch(`${apiBase}/api/v1/users/me/installations-sync`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-Key": process.env.API_ACCESS_KEY ?? "",
+        "X-Dashboard-User-Token": dashboardUserToken,
+      },
+      body: JSON.stringify({
+        installations: installations.map((installation) => ({
+          installation_id: installation.id,
+          account_login: installation.account?.login ?? `installation-${installation.id}`,
+          account_type: installation.account?.type ?? "Unknown",
+        })),
+      }),
+    }).catch((err: unknown) =>
+      console.error("[auth/callback] installation sync failed (non-fatal)", err),
+    );
 
     const response = NextResponse.redirect(new URL("/dashboard", request.url));
     response.cookies.set(AUTH_COOKIE_NAME, sessionToken, {

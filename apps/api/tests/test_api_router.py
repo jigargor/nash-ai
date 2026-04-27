@@ -35,6 +35,13 @@ def test_app() -> FastAPI:
     return application
 
 
+@pytest.fixture(autouse=True)
+def _configure_dashboard_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "dashboard_user_jwt_secret", "test-dashboard-user-secret")
+    monkeypatch.setattr(settings, "dashboard_user_jwt_audience", "dashboard-api")
+    monkeypatch.setattr(settings, "dashboard_user_jwt_issuer", "nash-web-dashboard")
+
+
 @pytest.fixture
 async def client(test_app: FastAPI) -> httpx.AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=test_app)
@@ -213,6 +220,9 @@ async def test_telemetry_outcomes_summary_uses_public_summarizer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return {777}
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
 
     async def _fake_summary(
         *, installation_id: int | None = None, repo_full_name: str | None = None
@@ -387,6 +397,47 @@ async def test_get_review_installation_mismatch_returns_400(
 
 
 @pytest.mark.anyio
+async def test_get_review_for_unlinked_installation_returns_404(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    unlinked_installation_id = _random_installation_id()
+
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, unlinked_installation_id)
+        session.add(
+            api_router.Installation(
+                installation_id=unlinked_installation_id,
+                account_login=f"acme-{unlinked_installation_id}",
+                account_type="Organization",
+            )
+        )
+        await session.flush()
+        review = Review(
+            installation_id=unlinked_installation_id,
+            repo_full_name="acme/unlinked-repo",
+            pr_number=88,
+            pr_head_sha="b" * 40,
+            status="done",
+            model_provider="anthropic",
+            model="claude-sonnet-4-5",
+            findings={"findings": []},
+            debug_artifacts={},
+            tokens_used=1,
+            cost_usd=0.01,
+        )
+        session.add(review)
+        await session.flush()
+        review_id = int(review.id)
+        await session.commit()
+
+    resp = await client.get(f"/api/v1/reviews/{review_id}", headers=_auth_headers())
+    assert resp.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_validate_repo_segment_rejects_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -422,6 +473,9 @@ async def test_stream_review_events_returns_not_found_event(
         async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
             return None
 
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return {999999}
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
     monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _MissingSessionContext())
 
     response = await client.get("/api/v1/reviews/999999/stream", headers=_auth_headers())
@@ -670,6 +724,35 @@ async def test_list_installations_active_only_false_includes_suspended(
     assert any(item["active"] is False for item in resp.json() if item["installation_id"] == suspended_id)
 
 
+@pytest.mark.anyio
+async def test_list_installations_excludes_unlinked_installation(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    linked_id = _random_installation_id()
+    unlinked_id = _random_installation_id()
+    await _insert_installation(linked_id)
+
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, unlinked_id)
+        session.add(
+            api_router.Installation(
+                installation_id=unlinked_id,
+                account_login=f"acme-{unlinked_id}",
+                account_type="Organization",
+            )
+        )
+        await session.commit()
+
+    resp = await client.get("/api/v1/installations", headers=_auth_headers())
+    assert resp.status_code == 200
+    ids = {item["installation_id"] for item in resp.json()}
+    assert linked_id in ids
+    assert unlinked_id not in ids
+
+
 # ---------------------------------------------------------------------------
 # list_repos — RepoConfig loop coverage (lines 346-357)
 # ---------------------------------------------------------------------------
@@ -781,6 +864,9 @@ async def test_stream_review_emits_status_change(
     async def _fake_set_ctx(*_a: object, **_k: object) -> None:
         pass
 
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return {installation_id}
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
     monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
 
