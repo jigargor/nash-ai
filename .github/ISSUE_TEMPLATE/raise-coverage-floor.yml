@@ -1,0 +1,61 @@
+name: Raise Coverage Floor
+description: Track work needed to raise temporary backend coverage floor.
+title: "coverage: raise backend CI floor from 55% to target"
+labels: ["quality", "tests", "tech-debt"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Backend coverage floor is temporarily set to **55%**. Use this issue to track the work needed to raise it safely.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Required test additions
+      description: Complete all before raising the CI threshold.
+      options:
+        - label: Add tests for repo template generation success path
+          required: true
+        - label: Add tests for one-per-repo generation rate limiting / concurrency behavior
+          required: true
+        - label: Add tests for max-mode challenger/tie-break branching logic
+          required: true
+        - label: Add tests for model audit persistence and readback paths
+          required: true
+        - label: Add tests for outcome scoring/telemetry breakdown regressions
+          required: true
+  - type: input
+    id: current-threshold
+    attributes:
+      label: Current CI coverage threshold
+      value: "55%"
+    validations:
+      required: true
+  - type: input
+    id: target-threshold
+    attributes:
+      label: Target CI coverage threshold
+      placeholder: "e.g. 60% or 65%"
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation evidence
+      description: Paste relevant CI links, coverage reports, and command output.
+      placeholder: |
+        - CI run:
+        - Coverage summary:
+        - Commands run:
+    validations:
+      required: true
+  - type: checkboxes
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      options:
+        - label: `.github/workflows/quality-gates.yml` coverage floor updated to target
+          required: true
+        - label: README coverage note updated to reflect new threshold
+          required: true
+        - label: All quality gates pass on PR
+          required: true
