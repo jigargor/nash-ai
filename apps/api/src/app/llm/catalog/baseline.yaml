@@ -54,6 +54,28 @@ models:
       pricing_url: https://www.anthropic.com/pricing
       caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
   - provider: anthropic
+    model: claude-sonnet-4-6
+    family: claude
+    tier: balanced
+    status: active
+    replacement_candidates: []
+    shutdown_at: null
+    score: 95
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: explicit_breakpoint
+      max_context_tokens: 200000
+    pricing:
+      input_per_1m: 3.00
+      cached_input_per_1m: 0.30
+      output_per_1m: 15.00
+    sources:
+      models_url: https://docs.anthropic.com/en/docs/about-claude/models/overview
+      deprecations_url: https://docs.anthropic.com/en/docs/about-claude/model-deprecations
+      pricing_url: https://www.anthropic.com/pricing
+      caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+  - provider: anthropic
     model: claude-3-5-haiku-latest
     family: claude
     tier: economy
