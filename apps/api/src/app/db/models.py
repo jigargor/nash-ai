@@ -54,6 +54,8 @@ class RepoConfig(Base):
     )
     repo_full_name: Mapped[str] = mapped_column(Text, nullable=False)
     config_yaml: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    ai_generated_yaml: Mapped[str | None] = mapped_column(Text)
+    ai_generated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
