@@ -685,3 +685,197 @@ async def test_get_repo_codereview_config_found(
     body = resp.json()
     assert body["found"] is True
     assert body["config_json"]["confidence_threshold"] == 90
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for the new helper functions added in the UI update commit
+# ---------------------------------------------------------------------------
+
+
+def test_findings_count_from_review_row_returns_count() -> None:
+    review = SimpleNamespace(findings={"findings": [{"severity": "high"}, {"severity": "low"}]})
+    assert api_router._findings_count_from_review_row(review) == 2  # type: ignore[attr-defined]
+
+
+def test_findings_count_from_review_row_none_findings() -> None:
+    review = SimpleNamespace(findings=None)
+    assert api_router._findings_count_from_review_row(review) == 0  # type: ignore[attr-defined]
+
+
+def test_findings_count_from_review_row_non_list() -> None:
+    review = SimpleNamespace(findings={"findings": "not-a-list"})
+    assert api_router._findings_count_from_review_row(review) == 0  # type: ignore[attr-defined]
+
+
+def test_as_int_or_none_from_int() -> None:
+    assert api_router._as_int_or_none(42) == 42  # type: ignore[attr-defined]
+
+
+def test_as_int_or_none_from_float_integer() -> None:
+    assert api_router._as_int_or_none(3.0) == 3  # type: ignore[attr-defined]
+
+
+def test_as_int_or_none_from_float_fractional() -> None:
+    assert api_router._as_int_or_none(3.5) is None  # type: ignore[attr-defined]
+
+
+def test_as_int_or_none_from_bool() -> None:
+    assert api_router._as_int_or_none(True) is None  # type: ignore[attr-defined]
+
+
+def test_as_int_or_none_from_string() -> None:
+    assert api_router._as_int_or_none("42") is None  # type: ignore[attr-defined]
+
+
+def test_diff_stats_from_debug_artifacts_returns_stats() -> None:
+    review = SimpleNamespace(debug_artifacts={
+        "fast_path_decision": {"changed_file_count": 5, "changed_line_count": 120}
+    })
+    files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
+    assert files == 5
+    assert lines == 120
+
+
+def test_diff_stats_from_debug_artifacts_none_artifacts() -> None:
+    review = SimpleNamespace(debug_artifacts=None)
+    files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
+    assert files is None and lines is None
+
+
+def test_diff_stats_from_debug_artifacts_missing_fast_path() -> None:
+    review = SimpleNamespace(debug_artifacts={})
+    files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
+    assert files is None and lines is None
+
+
+# ---------------------------------------------------------------------------
+# Endpoint tests — auto-discover installation_id path (installation_id=None)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_review_without_installation_id(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id)
+
+    # No installation_id in query — endpoint auto-discovers from the review row
+    resp = await client.get(f"/api/v1/reviews/{review_id}", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert resp.json()["id"] == review_id
+
+
+@pytest.mark.anyio
+async def test_get_review_outcomes_without_installation_id(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id)
+
+    resp = await client.get(f"/api/v1/reviews/{review_id}/outcomes", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert resp.json()["review_id"] == review_id
+
+
+@pytest.mark.anyio
+async def test_get_review_model_audits_without_installation_id(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id)
+
+    resp = await client.get(
+        f"/api/v1/reviews/{review_id}/model-audits", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    assert resp.json()["review_id"] == review_id
+
+
+@pytest.mark.anyio
+async def test_rerun_without_installation_id(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-anthropic-key")
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="failed")
+
+    resp = await client.post(
+        f"/api/v1/reviews/{review_id}/rerun",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.anyio
+async def test_dismiss_without_installation_id(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, findings={"findings": [{}]})
+
+    resp = await client.post(
+        f"/api/v1/reviews/{review_id}/findings/0/dismiss",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+@pytest.mark.anyio
+async def test_list_reviews_with_installation_id_finds_review(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(
+        installation_id,
+        repo_full_name="acme/list-cov-repo",
+        findings={"findings": [{"severity": "high"}]},
+    )
+
+    resp = await client.get(
+        f"/api/v1/reviews?installation_id={installation_id}", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    items = resp.json()
+    found = next((r for r in items if r["id"] == review_id), None)
+    assert found is not None
+    assert found["findings_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_stream_review_returns_done_event(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="done")
+
+    resp = await client.get(
+        f"/api/v1/reviews/{review_id}/stream?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert "complete" in resp.text or "started" in resp.text
