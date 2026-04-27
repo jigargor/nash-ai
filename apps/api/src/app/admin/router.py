@@ -1,7 +1,9 @@
+import dataclasses
 import hmac
 import logging
 import time
 
+from app.agent.snapshot import load_snapshot
 from app.config import settings
 from app.db.models import Review
 from app.queue.connection import require_app_redis
@@ -162,3 +164,23 @@ async def get_review_debug(
             "debug_artifacts": review.debug_artifacts,
             "completed_at": review.completed_at.isoformat() if review.completed_at else None,
         }
+
+
+@router.get("/reviews/{review_id}/snapshot")
+async def get_review_snapshot(
+    review_id: int,
+    x_admin_api_key: str | None = Header(default=None),
+) -> dict[str, object]:
+    # Same env-gate as the debug endpoint — 404 in production, not 403.
+    if settings.environment.lower() == "production":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    _require_admin_key(x_admin_api_key)
+
+    snapshot = await load_snapshot(review_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No snapshot found for this review. Snapshots are captured only for non-chunked reviews after context assembly.",
+        )
+
+    return dataclasses.asdict(snapshot)

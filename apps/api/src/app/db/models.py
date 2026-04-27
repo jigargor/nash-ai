@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Numeric,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
@@ -250,6 +251,29 @@ class BenchmarkRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'running'"))
     totals_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class ReviewContextSnapshot(Base):
+    """Gzip-compressed JSON snapshot of everything fed to the LLM for a review.
+
+    One row per review; captured fire-and-forget so failure never aborts a live review.
+    Use evals/export_snapshot.py to export a row as an eval dataset directory.
+    """
+
+    __tablename__ = "review_context_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    review_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("reviews.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    captured_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    schema_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("1"))
+    snapshot_gz: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
 class BenchmarkResult(Base):

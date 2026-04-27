@@ -1,0 +1,11 @@
+{
+  "comment": "Per-module coverage thresholds. Raise as coverage improves; never lower without justification in the PR.",
+  "modules": [
+    {"prefix": "src/app/agent/",     "min": 70, "label": "review pipeline"},
+    {"prefix": "src/app/api/",       "min": 75, "label": "HTTP handlers"},
+    {"prefix": "src/app/telemetry/", "min": 65, "label": "telemetry"},
+    {"prefix": "src/app/llm/",       "min": 60, "label": "LLM routing"},
+    {"prefix": "src/app/webhooks/",  "min": 65, "label": "webhooks"},
+    {"prefix": "src/app/github/",    "min": 55, "label": "GitHub client"}
+  ]
+}
