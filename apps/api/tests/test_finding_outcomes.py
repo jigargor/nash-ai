@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 
+import app.telemetry.finding_outcomes as finding_outcomes_module
 from app.db.models import FindingOutcome, Installation, Review
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
 from app.telemetry.finding_outcomes import (
@@ -17,6 +18,7 @@ from app.telemetry.finding_outcomes import (
     _safe_commit_list,
     _safe_reaction_list,
     _safe_reply_list,
+    classify_pending_outcomes_nightly,
     classify_finding_outcome,
     classify_review_outcomes,
     commits_scoped_narrowly,
@@ -174,6 +176,48 @@ async def test_summarize_finding_outcomes_excludes_pending_and_computes_useful_r
 
 
 @pytest.mark.anyio
+async def test_summarize_finding_outcomes_without_installation_sets_scoped_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installation_id = _random_installation_id()
+    repo_full_name = f"acme/repo-{installation_id}"
+    await _seed_installation(installation_id)
+    review_id = await _seed_review(
+        installation_id,
+        repo_full_name=repo_full_name,
+        findings=[{"severity": "high", "category": "security", "evidence": "diff_visible"}],
+    )
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            FindingOutcome(
+                review_id=review_id,
+                finding_index=0,
+                github_comment_id=103,
+                outcome=Outcome.APPLIED_DIRECTLY.value,
+                outcome_confidence="high",
+                signals={},
+            )
+        )
+        await session.commit()
+
+    seen_installation_contexts: list[int] = []
+    original_set_installation_context = finding_outcomes_module.set_installation_context
+
+    async def spy_set_installation_context(session: object, scoped_installation_id: int) -> None:
+        seen_installation_contexts.append(scoped_installation_id)
+        await original_set_installation_context(session, scoped_installation_id)
+
+    monkeypatch.setattr(
+        finding_outcomes_module, "set_installation_context", spy_set_installation_context
+    )
+    summary = await summarize_finding_outcomes(repo_full_name=repo_full_name)
+    assert summary["total_classified"] == 1
+    assert installation_id in seen_installation_contexts
+
+
+@pytest.mark.anyio
 async def test_list_review_finding_outcomes_returns_sorted_rows() -> None:
     installation_id = _random_installation_id()
     await _seed_installation(installation_id)
@@ -246,6 +290,83 @@ async def test_classify_review_outcomes_writes_pending_for_open_pr_recent_review
     rows = await list_review_finding_outcomes(review_id, installation_id)
     assert len(rows) == 1
     assert rows[0]["outcome"] == Outcome.PENDING.value
+
+
+@pytest.mark.anyio
+async def test_classify_pending_outcomes_nightly_sets_scoped_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installation_id = _random_installation_id()
+    repo_full_name = f"acme/repo-{installation_id}"
+    await _seed_installation(installation_id)
+    review_id = await _seed_review(
+        installation_id,
+        repo_full_name=repo_full_name,
+        findings=[
+            {
+                "file_path": "src/main.py",
+                "line_start": 8,
+                "line_end": 8,
+                "target_line_content": "print('hi')",
+                "suggestion": None,
+            }
+        ],
+    )
+
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        review = await session.scalar(select(Review).where(Review.id == review_id))
+        assert review is not None
+        review.created_at = datetime.now(timezone.utc) - timedelta(days=20)
+        session.add(
+            FindingOutcome(
+                review_id=review_id,
+                finding_index=0,
+                github_comment_id=5001,
+                outcome=Outcome.PENDING.value,
+                outcome_confidence="high",
+                signals={},
+            )
+        )
+        await session.commit()
+
+    seen_installation_contexts: list[int] = []
+    original_set_installation_context = finding_outcomes_module.set_installation_context
+    classify_calls: list[int] = []
+
+    class _NightlyGitHubClient:
+        async def get_pull_request(
+            self, _owner: str, _repo: str, _pr_number: int
+        ) -> dict[str, object]:
+            return {"state": "closed", "merged": True}
+
+    async def spy_set_installation_context(session: object, scoped_installation_id: int) -> None:
+        seen_installation_contexts.append(scoped_installation_id)
+        await original_set_installation_context(session, scoped_installation_id)
+
+    async def fake_classify_review_outcomes(**kwargs: object) -> None:
+        review = kwargs.get("review")
+        review_id_value = getattr(review, "id", None)
+        if isinstance(review_id_value, int):
+            classify_calls.append(review_id_value)
+
+    async def fake_for_installation(_installation_id: int) -> _NightlyGitHubClient:
+        return _NightlyGitHubClient()
+
+    monkeypatch.setattr(
+        finding_outcomes_module, "set_installation_context", spy_set_installation_context
+    )
+    monkeypatch.setattr(
+        finding_outcomes_module, "classify_review_outcomes", fake_classify_review_outcomes
+    )
+    monkeypatch.setattr(
+        finding_outcomes_module.GitHubClient, "for_installation", fake_for_installation
+    )
+
+    await classify_pending_outcomes_nightly(max_open_days=14)
+    assert installation_id in seen_installation_contexts
+    assert review_id in classify_calls
 
 
 @pytest.mark.anyio

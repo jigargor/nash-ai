@@ -64,7 +64,7 @@ from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.config import settings
 from app.crypto import decrypt_secret
 from app.db.models import Review, ReviewModelAudit, User, UserProviderKey
-from app.db.session import AsyncSessionLocal, set_installation_context
+from app.db.session import AsyncSessionLocal, set_installation_context, set_user_context
 from app.github.client import GitHubClient
 from app.github.comments import post_review
 from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
@@ -335,6 +335,7 @@ async def _load_user_provider_keys(github_id: int) -> dict[str, str]:
     from sqlalchemy import select as sa_select
 
     async with AsyncSessionLocal() as session:
+        await set_user_context(session, github_id)
         user = (
             await session.execute(sa_select(User).where(User.github_id == github_id))
         ).scalar_one_or_none()
@@ -1021,6 +1022,7 @@ async def _mark_review_done(
         from sqlalchemy import select as sa_select
 
         async with AsyncSessionLocal() as key_session:
+            await set_user_context(key_session, user_github_id)
             user = (
                 await key_session.execute(sa_select(User).where(User.github_id == user_github_id))
             ).scalar_one_or_none()
