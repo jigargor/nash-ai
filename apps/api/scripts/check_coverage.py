@@ -19,7 +19,9 @@ def main() -> None:
     report_path = Path(sys.argv[1])
     thresholds_path = Path(sys.argv[2])
 
-    files: dict = json.loads(report_path.read_text(encoding="utf-8"))["files"]
+    raw_files: dict = json.loads(report_path.read_text(encoding="utf-8"))["files"]
+    # Normalise path separators so the script works on Windows (backslashes) and Linux.
+    files = {k.replace("\\", "/"): v for k, v in raw_files.items()}
     modules: list[dict] = json.loads(thresholds_path.read_text(encoding="utf-8"))["modules"]
 
     failures: list[str] = []
