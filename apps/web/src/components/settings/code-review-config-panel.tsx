@@ -13,8 +13,6 @@ const DOCS_EXAMPLE_URL = "https://github.com/jigargor/nash-ai/blob/main/.coderev
 // Collapsible tree renderer
 // ---------------------------------------------------------------------------
 
-type ConfigValue = string | number | boolean | null | ConfigValue[] | Record<string, ConfigValue>;
-
 function formatScalar(value: unknown): string {
   if (value === null || value === undefined) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
@@ -39,7 +37,6 @@ function ConfigNode({ label, value, depth, defaultOpen = false }: NodeProps) {
   const [open, setOpen] = useState(defaultOpen);
   const expandable = isExpandable(value);
   const isArr = Array.isArray(value);
-  const isObj = !isArr && typeof value === "object" && value !== null;
 
   const indent = depth * 16;
   const isTopLevel = depth === 0;
