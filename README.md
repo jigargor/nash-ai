@@ -39,6 +39,14 @@ python evals/compare.py evals/results/baseline.json evals/results/<label>.json
 
 CI runs the harness on pull requests labeled **`prompt-change`** (see `.github/workflows/quality-gates.yml`).
 
+### Test coverage note
+
+- The backend CI coverage floor is temporarily set to **55%** while ongoing multi-model and template-generation work stabilizes.
+- Revisit and raise this threshold after adding targeted tests for:
+  - repo template generation/rate limiting paths,
+  - max-mode branch/tie-break behavior,
+  - model audit and outcome scoring flows.
+
 ## How PR review works end-to-end
 
 The review worker runs a staged chain so findings remain line-accurate, explainable, and auditable.

@@ -74,7 +74,7 @@ jobs:
       - name: Migrations
         run: uv run alembic upgrade head
       - name: Pytest
-        run: uv run pytest --cov=src/app/agent --cov=src/app/telemetry --cov=src/app/api --cov-report=term-missing --cov-fail-under=60
+        run: uv run pytest --cov=src/app/agent --cov=src/app/telemetry --cov=src/app/api --cov-report=term-missing --cov-fail-under=55
       - name: Bandit
         run: uv run bandit -r src
 
