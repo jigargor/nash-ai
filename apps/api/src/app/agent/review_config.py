@@ -7,27 +7,22 @@ from pydantic import ValidationError
 
 from app.agent.schema import ContextBudgets
 from app.github.utils import safe_fetch_file
+from app.llm.catalog.loader import load_baseline_catalog
+from app.llm.router import ModelRoleRoutingConfig, ModelsRoutingConfig
+from app.llm.types import ModelProvider, ModelTier
 
 
 class _GitHubFileReader(Protocol):
     async def get_file_content(self, owner: str, repo: str, path: str, ref: str) -> str: ...
 
 DEFAULT_CONFIDENCE_THRESHOLD = 85
-ModelProvider = Literal["anthropic", "openai", "gemini"]
 DEFAULT_MODEL_PROVIDER: ModelProvider = "anthropic"
 DEFAULT_MODEL_NAME = "claude-sonnet-4-5"
 DEFAULT_SEVERITY_THRESHOLD = "low"
 DEFAULT_MAX_FINDINGS_PER_PR = 50
 ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
 ALLOWED_CATEGORIES = {"security", "performance", "correctness", "style", "maintainability"}
-DEFAULT_MODEL_PRICING_USD_PER_1M: dict[tuple[ModelProvider, str], tuple[Decimal, Decimal]] = {
-    ("anthropic", "claude-sonnet-4-5"): (Decimal("3.00"), Decimal("15.00")),
-    ("anthropic", "claude-3-7-sonnet-latest"): (Decimal("3.00"), Decimal("15.00")),
-    ("anthropic", "claude-3-5-haiku-latest"): (Decimal("0.80"), Decimal("4.00")),
-    ("openai", "gpt-5.5"): (Decimal("3.00"), Decimal("12.00")),
-    ("gemini", "gemini-2.5-pro"): (Decimal("1.25"), Decimal("5.00")),
-}
-ALLOWED_MODEL_PROVIDERS: set[ModelProvider] = {"anthropic", "openai", "gemini"}
+ALLOWED_MODEL_PROVIDERS: set[ModelProvider] = load_baseline_catalog().provider_ids()
 
 
 @dataclass
@@ -36,6 +31,8 @@ class ReviewModelConfig:
     name: str = DEFAULT_MODEL_NAME
     input_per_1m_usd: Decimal = Decimal("3.00")
     output_per_1m_usd: Decimal = Decimal("15.00")
+    cached_input_per_1m_usd: Decimal | None = None
+    explicit: bool = False
 
 
 @dataclass
@@ -87,6 +84,7 @@ class ReviewConfig:
     budgets: ContextBudgets = field(default_factory=ContextBudgets)
     packaging: ContextPackagingConfig = field(default_factory=ContextPackagingConfig)
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
+    models: ModelsRoutingConfig = field(default_factory=ModelsRoutingConfig)
 
 
 async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: str) -> ReviewConfig:
@@ -114,6 +112,7 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
         prompt_additions = str(prompt_additions).strip() or None
     model_config = _parse_model_config(parsed.get("model"))
     max_mode = _parse_max_mode(parsed.get("max_mode"))
+    models = _parse_models(parsed.get("models"))
     budgets = _parse_budgets(parsed.get("budgets"))
     packaging = _parse_packaging(parsed)
     chunking = _parse_chunking(parsed.get("chunking"))
@@ -127,6 +126,7 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
         prompt_additions=prompt_additions,
         model=model_config,
         max_mode=max_mode,
+        models=models,
         budgets=budgets,
         packaging=packaging,
         chunking=chunking,
@@ -162,35 +162,51 @@ def _parse_model_config(raw_value: object) -> ReviewModelConfig:
     raw_name = raw_value.get("name")
     fallback_name = _default_model_name_for_provider(provider)
     name = str(raw_name).strip() if isinstance(raw_name, str) and raw_name.strip() else fallback_name
-    default_input, default_output = DEFAULT_MODEL_PRICING_USD_PER_1M.get(
-        (provider, name),
-        DEFAULT_MODEL_PRICING_USD_PER_1M[(DEFAULT_MODEL_PROVIDER, DEFAULT_MODEL_NAME)],
-    )
+    default_input, default_cached_input, default_output = _catalog_pricing(provider, name)
     pricing = raw_value.get("pricing")
     if not isinstance(pricing, dict):
+        direct_input = raw_value.get("input_per_1m_usd")
+        direct_output = raw_value.get("output_per_1m_usd")
+        direct_cached = raw_value.get("cached_input_per_1m_usd")
+        if direct_input is not None or direct_output is not None or direct_cached is not None:
+            return ReviewModelConfig(
+                provider=provider,
+                name=name,
+                input_per_1m_usd=_normalize_decimal(direct_input, default_input),
+                output_per_1m_usd=_normalize_decimal(direct_output, default_output),
+                cached_input_per_1m_usd=_normalize_optional_decimal(direct_cached, default_cached_input),
+                explicit=bool(raw_value.get("provider") or raw_value.get("name")),
+            )
         return ReviewModelConfig(
             provider=provider,
             name=name,
             input_per_1m_usd=default_input,
             output_per_1m_usd=default_output,
+            cached_input_per_1m_usd=default_cached_input,
+            explicit=bool(raw_value.get("provider") or raw_value.get("name")),
         )
     input_per_1m = _normalize_decimal(pricing.get("input_per_1m"), default_input)
     output_per_1m = _normalize_decimal(pricing.get("output_per_1m"), default_output)
+    cached_input_per_1m = _normalize_optional_decimal(pricing.get("cached_input_per_1m"), default_cached_input)
     return ReviewModelConfig(
         provider=provider,
         name=name,
         input_per_1m_usd=input_per_1m,
         output_per_1m_usd=output_per_1m,
+        cached_input_per_1m_usd=cached_input_per_1m,
+        explicit=True,
     )
 
 
 def _default_model_config() -> ReviewModelConfig:
-    default_input, default_output = DEFAULT_MODEL_PRICING_USD_PER_1M[(DEFAULT_MODEL_PROVIDER, DEFAULT_MODEL_NAME)]
+    default_input, default_cached_input, default_output = _catalog_pricing(DEFAULT_MODEL_PROVIDER, DEFAULT_MODEL_NAME)
     return ReviewModelConfig(
         provider=DEFAULT_MODEL_PROVIDER,
         name=DEFAULT_MODEL_NAME,
         input_per_1m_usd=default_input,
         output_per_1m_usd=default_output,
+        cached_input_per_1m_usd=default_cached_input,
+        explicit=False,
     )
 
 
@@ -236,11 +252,26 @@ def _normalize_provider(raw_value: object, *, default: ModelProvider = DEFAULT_M
 
 
 def _default_model_name_for_provider(provider: ModelProvider) -> str:
-    if provider == "openai":
-        return "gpt-5.5"
-    if provider == "gemini":
-        return "gemini-2.5-pro"
-    return DEFAULT_MODEL_NAME
+    catalog = load_baseline_catalog()
+    candidates = [
+        record
+        for record in catalog.models_for_provider(provider)
+        if record.status in {"active", "legacy", "unknown"} and record.tier in {"balanced", "frontier"}
+    ]
+    if not candidates:
+        return DEFAULT_MODEL_NAME
+    candidates.sort(key=lambda record: record.score, reverse=True)
+    return candidates[0].model
+
+
+def _catalog_pricing(provider: ModelProvider, model_name: str) -> tuple[Decimal, Decimal | None, Decimal]:
+    record = load_baseline_catalog().find_model(provider, model_name)
+    fallback_record = load_baseline_catalog().find_model(DEFAULT_MODEL_PROVIDER, DEFAULT_MODEL_NAME)
+    pricing = record.pricing if record is not None else fallback_record.pricing if fallback_record is not None else None
+    input_price = pricing.input_per_1m if pricing and pricing.input_per_1m is not None else Decimal("3.00")
+    cached_input_price = pricing.cached_input_per_1m if pricing else None
+    output_price = pricing.output_per_1m if pricing and pricing.output_per_1m is not None else Decimal("15.00")
+    return input_price, cached_input_price, output_price
 
 
 def _parse_budgets(raw_value: object) -> ContextBudgets:
@@ -250,6 +281,56 @@ def _parse_budgets(raw_value: object) -> ContextBudgets:
         return ContextBudgets.model_validate(raw_value)
     except ValidationError:
         return ContextBudgets()
+
+
+def _parse_models(raw_value: object) -> ModelsRoutingConfig:
+    if not isinstance(raw_value, Mapping):
+        return ModelsRoutingConfig()
+    policy = _parse_model_tier(raw_value.get("policy"), default="balanced")
+    provider_order_raw = raw_value.get("provider_order")
+    provider_order = (
+        [_normalize_provider(item) for item in provider_order_raw if isinstance(item, str)]
+        if isinstance(provider_order_raw, list)
+        else []
+    )
+    if not provider_order:
+        provider_order = ["anthropic", "openai", "gemini"]
+
+    roles_raw = raw_value.get("roles")
+    roles: dict[str, ModelRoleRoutingConfig] = {}
+    if isinstance(roles_raw, Mapping):
+        for role, role_value in roles_raw.items():
+            if not isinstance(role, str) or not isinstance(role_value, Mapping):
+                continue
+            provider_raw = role_value.get("provider")
+            provider = _normalize_provider(provider_raw) if isinstance(provider_raw, str) else None
+            model_raw = role_value.get("model")
+            model = str(model_raw).strip() if isinstance(model_raw, str) and model_raw.strip() else None
+            roles[role] = ModelRoleRoutingConfig(
+                tier=_parse_model_tier(role_value.get("tier"), default=policy),
+                provider=provider,
+                model=model,
+                require_provider_diversity=bool(role_value.get("require_provider_diversity", False)),
+                require_tool_calling=bool(role_value.get("require_tool_calling", True)),
+                require_structured_output=bool(role_value.get("require_structured_output", True)),
+                require_prompt_caching=bool(role_value.get("require_prompt_caching", False)),
+            )
+    return ModelsRoutingConfig(
+        policy=policy,
+        provider_order=provider_order,
+        roles=roles,
+        allow_auto_fallback=bool(raw_value.get("allow_auto_fallback", True)),
+        allow_default_model_promotion=bool(raw_value.get("allow_default_model_promotion", False)),
+    )
+
+
+def _parse_model_tier(raw_value: object, *, default: ModelTier) -> ModelTier:
+    if not isinstance(raw_value, str):
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"frontier", "balanced", "economy", "fallback"}:
+        return cast(ModelTier, normalized)
+    return default
 
 
 def _parse_packaging(parsed: Mapping[str, Any]) -> ContextPackagingConfig:
@@ -346,6 +427,18 @@ def _normalize_path_patterns(raw_value: object) -> list[str]:
 
 
 def _normalize_decimal(raw_value: object, default: Decimal) -> Decimal:
+    try:
+        value = Decimal(str(raw_value))
+    except (InvalidOperation, ValueError):
+        return default
+    if value <= 0:
+        return default
+    return value
+
+
+def _normalize_optional_decimal(raw_value: object, default: Decimal | None) -> Decimal | None:
+    if raw_value is None:
+        return default
     try:
         value = Decimal(str(raw_value))
     except (InvalidOperation, ValueError):

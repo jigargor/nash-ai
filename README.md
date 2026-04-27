@@ -223,7 +223,11 @@ Typical keys:
 | `prompt_additions` | Extra repo-specific instructions appended to the system prompt. |
 | `model.provider` | Model provider (`anthropic`, `openai`, `gemini`). |
 | `model.name` | Provider-specific model id (e.g. `claude-sonnet-4-5`, `gpt-5.5`, `gemini-2.5-pro`). |
-| `model.pricing` | Optional `input_per_1m` / `output_per_1m` (USD per 1M tokens) for cost estimation when defaults don’t match your billing. |
+| `model.pricing` | Optional `input_per_1m` / `cached_input_per_1m` / `output_per_1m` (USD per 1M tokens) for cost estimation when defaults don’t match your billing. |
+| `models.policy` | Semantic model tier policy (`frontier`, `balanced`, `economy`, `fallback`) used when no explicit model pin is set. |
+| `models.provider_order` | Provider preference order for role-based routing (for example `anthropic`, `openai`, `gemini`). |
+| `models.roles` | Optional per-role tier/provider/model routing for `fast_path`, `primary_review`, `chunk_review`, `synthesis`, `editor`, `challenger`, `tie_break`, and `config_generator`. |
+| `models.allow_auto_fallback` | If `true`, retired/unavailable explicit pins can route to a compatible fallback and record the fallback reason. |
 | `max_mode.enabled` | Enables primary+challenger review mode. |
 | `max_mode.challenger` | Challenger provider/model used to validate primary findings. |
 | `max_mode.tie_break` | Tie-break provider/model used only on conflicts/high-risk findings. |
@@ -245,7 +249,7 @@ Typical keys:
 | `chunking.max_latency_seconds` | Hard latency budget for the full chunked run. |
 | `chunking.output_headroom_tokens` | Reserved output headroom per chunk/synthesis call. |
 
-Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. For large PRs, the system uses a **two-stage chunked flow**: stage 1 analyzes bounded chunks with PR-wide manifest awareness, then stage 2 synthesizes cross-chunk integration risks before posting one consolidated review. `.codereview.yml` is cached per `(owner, repo, sha)` in Redis for one hour. `tokens_used` / `cost_usd` on each `reviews` row reflect the selected model’s pricing when configured. When `max_mode` is enabled, the pipeline records per-stage audit rows for primary/challenger/tie-break decisions.
+Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. For large PRs, the system uses a **two-stage chunked flow**: stage 1 analyzes bounded chunks with PR-wide manifest awareness, then stage 2 synthesizes cross-chunk integration risks before posting one consolidated review. `.codereview.yml` is cached per `(owner, repo, sha)` in Redis for one hour. `tokens_used` / `cost_usd` on each `reviews` row reflect the resolved model catalog pricing, including cached-input pricing when reported by the provider. When `max_mode` is enabled, the pipeline records per-stage audit rows for primary/challenger/tie-break decisions, including the resolved role, tier, provider, model, catalog hash, cache strategy, and fallback reason.
 
 ### 11. Production deployment
 

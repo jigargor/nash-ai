@@ -11,6 +11,8 @@ from app.agent.review_config import ChunkingConfig, ContextPackagingConfig
 from app.agent.review_config import MaxModeConfig, ModelProvider, ReviewConfig, ReviewModelConfig
 from app.agent.schema import ContextBudgets
 from app.config import settings
+from app.llm.router import ModelRoleRoutingConfig, ModelsRoutingConfig
+from app.llm.types import ModelTier
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,9 @@ def _serialize_config(config: ReviewConfig) -> str:
     payload["budgets"] = config.budgets.model_dump(mode="json")
     payload["model"]["input_per_1m_usd"] = str(config.model.input_per_1m_usd)
     payload["model"]["output_per_1m_usd"] = str(config.model.output_per_1m_usd)
+    payload["model"]["cached_input_per_1m_usd"] = (
+        str(config.model.cached_input_per_1m_usd) if config.model.cached_input_per_1m_usd is not None else None
+    )
     return json.dumps(payload)
 
 
@@ -38,6 +43,12 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         name=str(model_data.get("name", "")),
         input_per_1m_usd=Decimal(str(model_data.get("input_per_1m_usd", "3.00"))),
         output_per_1m_usd=Decimal(str(model_data.get("output_per_1m_usd", "15.00"))),
+        cached_input_per_1m_usd=(
+            Decimal(str(model_data["cached_input_per_1m_usd"]))
+            if model_data.get("cached_input_per_1m_usd") is not None
+            else None
+        ),
+        explicit=bool(model_data.get("explicit", False)),
     )
     max_mode_data = dict(data.get("max_mode") or {})
     challenger_provider = cast(ModelProvider, str(max_mode_data.get("challenger_provider", "openai")))
@@ -76,11 +87,33 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         max_latency_seconds=int(chunking_data.get("max_latency_seconds", 240)),
         output_headroom_tokens=int(chunking_data.get("output_headroom_tokens", 4096)),
     )
+    models_data = dict(data.get("models") or {})
+    roles: dict[str, ModelRoleRoutingConfig] = {}
+    roles_data = dict(models_data.get("roles") or {})
+    for role_name, role_data_raw in roles_data.items():
+        role_data = dict(role_data_raw or {})
+        roles[str(role_name)] = ModelRoleRoutingConfig(
+            tier=role_data.get("tier"),
+            provider=role_data.get("provider"),
+            model=role_data.get("model"),
+            require_provider_diversity=bool(role_data.get("require_provider_diversity", False)),
+            require_tool_calling=bool(role_data.get("require_tool_calling", True)),
+            require_structured_output=bool(role_data.get("require_structured_output", True)),
+            require_prompt_caching=bool(role_data.get("require_prompt_caching", False)),
+        )
+    models = ModelsRoutingConfig(
+        policy=cast(ModelTier, str(models_data.get("policy", "balanced"))),
+        provider_order=[str(item) for item in list(models_data.get("provider_order") or ["anthropic", "openai", "gemini"])],
+        roles=roles,
+        allow_auto_fallback=bool(models_data.get("allow_auto_fallback", True)),
+        allow_default_model_promotion=bool(models_data.get("allow_default_model_promotion", False)),
+    )
     data["model"] = model
     data["max_mode"] = max_mode
     data["budgets"] = budgets
     data["packaging"] = packaging
     data["chunking"] = chunking
+    data["models"] = models
     return ReviewConfig(**data)
 
 

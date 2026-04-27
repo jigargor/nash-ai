@@ -31,6 +31,7 @@ from app.db.models import Installation, RepoConfig, Review, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
 from app.github.utils import split_repo_full_name as _split_repo_full_name
+from app.llm.router import resolve_model_for_role
 from app.observability import create_async_anthropic_client
 from app.queue.connection import require_app_redis
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
@@ -347,16 +348,9 @@ async def generate_repo_codereview_template(
     ref = await _resolve_repo_head_sha(gh, owner_normalized, repo_normalized)
     repo_profile = await profile_repo(gh, owner_normalized, repo_normalized, ref)
 
-    provider: ModelProvider
-    if settings.anthropic_api_key:
-        provider = "anthropic"
-        model_name = settings.anthropic_default_model
-    elif settings.openai_api_key:
-        provider = "openai"
-        model_name = settings.openai_default_model
-    else:
-        provider = "gemini"
-        model_name = settings.gemini_default_model
+    resolution = resolve_model_for_role(ReviewConfig(), "config_generator")
+    provider = resolution.provider
+    model_name = resolution.model
 
     raw_yaml = await _generate_yaml_with_model(
         owner=owner_normalized,

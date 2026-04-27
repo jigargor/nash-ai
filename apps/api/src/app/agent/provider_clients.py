@@ -19,9 +19,11 @@ def get_provider_api_key(provider: ModelProvider) -> str:
         if settings.openai_api_key:
             return settings.openai_api_key
         raise RuntimeError("OPENAI_API_KEY is not configured")
-    if settings.gemini_api_key:
-        return settings.gemini_api_key
-    raise RuntimeError("GEMINI_API_KEY is not configured")
+    if provider == "gemini":
+        if settings.gemini_api_key:
+            return settings.gemini_api_key
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    raise RuntimeError(f"Unsupported LLM provider: {provider}")
 
 
 def create_openai_compatible_client(provider: ModelProvider) -> "AsyncOpenAI":
@@ -35,6 +37,8 @@ def create_openai_compatible_client(provider: ModelProvider) -> "AsyncOpenAI":
     api_key = get_provider_api_key(provider)
     if provider == "gemini":
         return AsyncOpenAI(api_key=api_key, base_url=GEMINI_OPENAI_COMPAT_BASE_URL)
+    if provider != "openai":
+        raise RuntimeError(f"Provider {provider} does not use the OpenAI-compatible client")
     return AsyncOpenAI(api_key=api_key)
 
 

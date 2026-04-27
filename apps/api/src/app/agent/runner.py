@@ -50,6 +50,7 @@ from app.db.models import Review, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
 from app.github.comments import post_review
+from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
 from app.observability import record_review_trace
 from app.ratelimit import check_and_consume_daily_token_budget, current_daily_token_usage
 from app.telemetry.finding_outcomes import seed_pending_finding_outcomes
@@ -162,6 +163,37 @@ async def _assemble_context(
     return files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt
 
 
+def _resolve_runtime_model(
+    context: dict[str, Any],
+    review_config: ReviewConfig,
+    role: ReviewModelRole,
+    *,
+    context_tokens: int = 0,
+    previous_provider: str | None = None,
+) -> ModelResolution:
+    resolution = resolve_model_for_role(
+        review_config,
+        role,
+        context_tokens=context_tokens,
+        previous_provider=previous_provider,
+    )
+    context.setdefault("llm_model_resolutions", {})
+    resolutions = context.get("llm_model_resolutions")
+    if isinstance(resolutions, dict):
+        resolutions[role] = resolution.as_metadata()
+    if role in {"primary_review", "chunk_review"}:
+        context["runtime_model_provider"] = resolution.provider
+        context["runtime_model"] = resolution.model
+        context["runtime_input_per_1m_usd"] = str(resolution.input_per_1m_usd) if resolution.input_per_1m_usd is not None else None
+        context["runtime_cached_input_per_1m_usd"] = (
+            str(resolution.cached_input_per_1m_usd) if resolution.cached_input_per_1m_usd is not None else None
+        )
+        context["runtime_output_per_1m_usd"] = str(resolution.output_per_1m_usd) if resolution.output_per_1m_usd is not None else None
+    context.setdefault("anthropic_cache_ttl", "5m")
+    context.setdefault("openai_prompt_cache_retention", "in_memory")
+    return resolution
+
+
 async def run_review(
     review_id: int,
     installation_id: int,
@@ -215,6 +247,12 @@ async def run_review(
                 started_at=started_at,
             )
             prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+            editor_resolution = _resolve_runtime_model(
+                context,
+                review_config,
+                "editor",
+                previous_provider=str(context.get("runtime_model_provider", "")) or None,
+            )
             edited_result = await run_editor(
                 draft=final_result,
                 pr_context={
@@ -224,8 +262,9 @@ async def run_review(
                 },
                 prior_reviews=prior_reviews,
                 code_acknowledgments=[],
-                model_name=review_config.model.name,
-                provider=review_config.model.provider,
+                model_name=editor_resolution.model,
+                provider=editor_resolution.provider,
+                context=context,
             )
             final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
             final_result = _apply_review_config_filters(final_result, review_config)
@@ -248,29 +287,36 @@ async def run_review(
         files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt = await _assemble_context(
             gh, context, diff_text, review_config
         )
+        primary_resolution = _resolve_runtime_model(
+            context,
+            review_config,
+            "primary_review",
+            context_tokens=count_tokens(system_prompt) + count_tokens(user_prompt),
+        )
         token_snapshot = _token_snapshot(context)
         messages = await run_agent(
             system_prompt,
             user_prompt,
             context,
-            model_name=review_config.model.name,
-            provider=review_config.model.provider,
+            model_name=primary_resolution.model,
+            provider=primary_resolution.provider,
         )
         result = await finalize_review(
             system_prompt,
             messages,
             context,
-            model_name=review_config.model.name,
-            provider=review_config.model.provider,
+            model_name=primary_resolution.model,
+            provider=primary_resolution.provider,
         )
         await _record_model_audit(
             context=context,
             stage="primary",
-            provider=review_config.model.provider,
-            model=review_config.model.name,
+            provider=primary_resolution.provider,
+            model=primary_resolution.model,
             token_before=token_snapshot,
             findings_count=len(result.findings),
             decision="generated",
+            model_resolution=primary_resolution,
         )
         tools_called_per_file = extract_tool_usage_by_file(messages)
         tool_call_history = extract_tool_call_history(messages)
@@ -323,8 +369,8 @@ async def run_review(
                     system_prompt,
                     [{"role": "user", "content": repair_prompt}],
                     context,
-                    model_name=review_config.model.name,
-                    provider=review_config.model.provider,
+                    model_name=primary_resolution.model,
+                    provider=primary_resolution.provider,
                     allow_retry=False,
                 )
                 repaired.findings = _repair_findings_from_files(
@@ -359,8 +405,8 @@ async def run_review(
                     messages,
                     context,
                     validation_feedback=feedback,
-                    model_name=review_config.model.name,
-                    provider=review_config.model.provider,
+                    model_name=primary_resolution.model,
+                    provider=primary_resolution.provider,
                 )
                 retried.findings = _repair_findings_from_files(
                     retried.findings,
@@ -387,6 +433,13 @@ async def run_review(
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
         debate_conflict_score: int | None = None
         if review_config.max_mode.enabled:
+            challenger_resolution = _resolve_runtime_model(
+                context,
+                review_config,
+                "challenger",
+                context_tokens=count_tokens(system_prompt) + count_tokens(_build_challenger_prompt(draft_result, final_summary_hint=result.summary)),
+                previous_provider=primary_resolution.provider,
+            )
             challenger_prompt = _build_challenger_prompt(draft_result, final_summary_hint=result.summary)
             challenger_messages = [{"role": "user", "content": challenger_prompt}]
             challenger_snapshot = _token_snapshot(context)
@@ -394,45 +447,54 @@ async def run_review(
                 system_prompt,
                 challenger_messages,
                 context,
-                model_name=review_config.max_mode.challenger_model,
-                provider=review_config.max_mode.challenger_provider,
+                model_name=challenger_resolution.model,
+                provider=challenger_resolution.provider,
                 allow_retry=False,
             )
             debate_conflict_score = _calculate_conflict_score(draft_result.findings, challenger_result.findings)
             await _record_model_audit(
                 context=context,
                 stage="challenger",
-                provider=review_config.max_mode.challenger_provider,
-                model=review_config.max_mode.challenger_model,
+                provider=challenger_resolution.provider,
+                model=challenger_resolution.model,
                 token_before=challenger_snapshot,
                 findings_count=len(challenger_result.findings),
                 conflict_score=debate_conflict_score,
                 decision="challenged",
+                model_resolution=challenger_resolution,
             )
             tie_break_result: ReviewResult | None = None
             should_tie_break = debate_conflict_score >= review_config.max_mode.conflict_threshold or _has_high_risk_findings(
                 draft_result.findings, review_config.max_mode.high_risk_severity
             )
             if should_tie_break:
+                tie_break_resolution = _resolve_runtime_model(
+                    context,
+                    review_config,
+                    "tie_break",
+                    context_tokens=count_tokens(system_prompt) + count_tokens(_build_tie_break_prompt(draft_result, challenger_result)),
+                    previous_provider=challenger_resolution.provider,
+                )
                 tie_break_prompt = _build_tie_break_prompt(draft_result, challenger_result)
                 tie_break_snapshot = _token_snapshot(context)
                 tie_break_result = await finalize_review(
                     system_prompt,
                     [{"role": "user", "content": tie_break_prompt}],
                     context,
-                    model_name=review_config.max_mode.tie_break_model,
-                    provider=review_config.max_mode.tie_break_provider,
+                    model_name=tie_break_resolution.model,
+                    provider=tie_break_resolution.provider,
                     allow_retry=False,
                 )
                 await _record_model_audit(
                     context=context,
                     stage="tie_break",
-                    provider=review_config.max_mode.tie_break_provider,
-                    model=review_config.max_mode.tie_break_model,
+                    provider=tie_break_resolution.provider,
+                    model=tie_break_resolution.model,
                     token_before=tie_break_snapshot,
                     findings_count=len(tie_break_result.findings),
                     conflict_score=debate_conflict_score,
                     decision="tie_break",
+                    model_resolution=tie_break_resolution,
                 )
             draft_result = _merge_debate_results(
                 primary=draft_result,
@@ -441,6 +503,13 @@ async def run_review(
             )
         code_acknowledgments = extract_todo_fixme_markers(fetched_map)
         prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+        editor_resolution = _resolve_runtime_model(
+            context,
+            review_config,
+            "editor",
+            previous_provider=primary_resolution.provider,
+        )
+        editor_snapshot = _token_snapshot(context)
         edited_result = await run_editor(
             draft=draft_result,
             pr_context={
@@ -450,21 +519,34 @@ async def run_review(
             },
             prior_reviews=prior_reviews,
             code_acknowledgments=code_acknowledgments,
-            model_name=review_config.model.name,
-            provider=review_config.model.provider,
+            model_name=editor_resolution.model,
+            provider=editor_resolution.provider,
+            context=context,
+        )
+        await _record_model_audit(
+            context=context,
+            stage="editor",
+            provider=editor_resolution.provider,
+            model=editor_resolution.model,
+            token_before=editor_snapshot,
+            findings_count=len(draft_result.findings),
+            accepted_findings_count=len(edited_result.findings),
+            decision="edited",
+            model_resolution=editor_resolution,
         )
         final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
         final_result = _apply_review_config_filters(final_result, review_config)
         await _record_model_audit(
             context=context,
             stage="final_post",
-            provider=review_config.model.provider,
-            model=review_config.model.name,
+            provider=primary_resolution.provider,
+            model=primary_resolution.model,
             token_before=_token_snapshot(context),
             findings_count=len(draft_result.findings),
             accepted_findings_count=len(final_result.findings),
             conflict_score=debate_conflict_score,
             decision="posted",
+            model_resolution=primary_resolution,
         )
         _attach_debug_artifacts(
             context=context,
@@ -542,13 +624,22 @@ async def _mark_review_done(
     status: str,
     review_config: ReviewConfig | None = None,
 ) -> None:
-    input_price = review_config.model.input_per_1m_usd if review_config else Decimal("3.00")
-    output_price = review_config.model.output_per_1m_usd if review_config else Decimal("15.00")
+    input_price = _decimal_from_context(context.get("runtime_input_per_1m_usd")) or (
+        review_config.model.input_per_1m_usd if review_config else Decimal("3.00")
+    )
+    cached_input_price = _decimal_from_context(context.get("runtime_cached_input_per_1m_usd")) or (
+        review_config.model.cached_input_per_1m_usd if review_config else None
+    )
+    output_price = _decimal_from_context(context.get("runtime_output_per_1m_usd")) or (
+        review_config.model.output_per_1m_usd if review_config else Decimal("15.00")
+    )
     cost = _estimate_cost_usd(
         context.get("input_tokens", 0),
         context.get("output_tokens", 0),
         input_per_1m_usd=input_price,
         output_per_1m_usd=output_price,
+        cached_input_tokens=_cached_input_tokens(context),
+        cached_input_per_1m_usd=cached_input_price,
     )
     installation_id = cast(int, context["installation_id"])
     await _record_token_budget_usage(installation_id, int(context.get("tokens_used", 0)))
@@ -559,8 +650,8 @@ async def _mark_review_done(
             return
         review.status = status
         if review_config is not None:
-            review.model_provider = review_config.model.provider
-            review.model = review_config.model.name
+            review.model_provider = str(context.get("runtime_model_provider") or review_config.model.provider)
+            review.model = str(context.get("runtime_model") or review_config.model.name)
         review.findings = session_data.model_dump(mode="json")
         current_artifacts = dict(review.debug_artifacts or {})
         incoming_artifacts = context.get("debug_artifacts")
@@ -579,10 +670,34 @@ def _estimate_cost_usd(
     *,
     input_per_1m_usd: Decimal,
     output_per_1m_usd: Decimal,
+    cached_input_tokens: int = 0,
+    cached_input_per_1m_usd: Decimal | None = None,
 ) -> Decimal:
-    input_cost = Decimal(input_tokens) / Decimal(1_000_000) * input_per_1m_usd
+    cached_tokens = min(max(cached_input_tokens, 0), max(input_tokens, 0))
+    uncached_tokens = max(input_tokens - cached_tokens, 0)
+    input_cost = Decimal(uncached_tokens) / Decimal(1_000_000) * input_per_1m_usd
+    if cached_tokens and cached_input_per_1m_usd is not None:
+        input_cost += Decimal(cached_tokens) / Decimal(1_000_000) * cached_input_per_1m_usd
+    else:
+        input_cost += Decimal(cached_tokens) / Decimal(1_000_000) * input_per_1m_usd
     output_cost = Decimal(output_tokens) / Decimal(1_000_000) * output_per_1m_usd
     return (input_cost + output_cost).quantize(Decimal("0.000001"))
+
+
+def _cached_input_tokens(context: dict[str, Any]) -> int:
+    entries = context.get("llm_usage", [])
+    if not isinstance(entries, list):
+        return 0
+    return sum(int(entry.get("cached_input_tokens", 0) or 0) for entry in entries if isinstance(entry, dict))
+
+
+def _decimal_from_context(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
 
 
 async def _record_token_budget_usage(installation_id: int, tokens_used: int) -> None:
@@ -737,6 +852,12 @@ async def _run_chunked_review(
             pr_number,
             f"{context_bundle.rendered}\n\nChunk coverage note: {chunk_plan.coverage_note}",
         )
+        chunk_resolution = _resolve_runtime_model(
+            context,
+            review_config,
+            "chunk_review",
+            context_tokens=count_tokens(system_prompt) + count_tokens(user_prompt),
+        )
         projected_prompt_cost = count_tokens(system_prompt) + count_tokens(user_prompt) + review_config.chunking.output_headroom_tokens
         if (int(context.get("tokens_used", 0)) + projected_prompt_cost) > review_config.chunking.max_total_prompt_tokens:
             prompt_budget_exhausted = True
@@ -749,15 +870,15 @@ async def _run_chunked_review(
                 system_prompt,
                 user_prompt,
                 context,
-                model_name=review_config.model.name,
-                provider=review_config.model.provider,
+                model_name=chunk_resolution.model,
+                provider=chunk_resolution.provider,
             )
             chunk_result = await finalize_review(
                 system_prompt,
                 messages,
                 context,
-                model_name=review_config.model.name,
-                provider=review_config.model.provider,
+                model_name=chunk_resolution.model,
+                provider=chunk_resolution.provider,
             )
             chunk_result.findings = _repair_findings_from_files(
                 chunk_result.findings,
@@ -823,6 +944,8 @@ async def _run_chunked_review(
             "is_partial": chunk_plan.is_partial,
             "coverage_note": chunk_plan.coverage_note,
         },
+        "llm_model_resolutions": context.get("llm_model_resolutions", {}),
+        "llm_usage": context.get("llm_usage", []),
     }
     return ReviewResult(
         findings=merged,
@@ -878,12 +1001,18 @@ async def _run_cross_chunk_synthesis(
         ]
     )
     system_prompt = build_system_prompt(frameworks, "", review_config.prompt_additions)
+    synthesis_resolution = _resolve_runtime_model(
+        context,
+        review_config,
+        "synthesis",
+        context_tokens=count_tokens(system_prompt) + count_tokens(synthesis_prompt),
+    )
     return await finalize_review(
         system_prompt,
         [{"role": "user", "content": synthesis_prompt}],
         context,
-        model_name=review_config.model.name,
-        provider=review_config.model.provider,
+        model_name=synthesis_resolution.model,
+        provider=synthesis_resolution.provider,
         allow_retry=False,
     )
 
@@ -1286,6 +1415,8 @@ def _attach_debug_artifacts(
         "target_line_mismatch_subtypes": mismatch_subtypes,
         "context_telemetry": context_telemetry.as_dict(),
         "agent_metrics": context.get("agent_metrics", {}),
+        "llm_model_resolutions": context.get("llm_model_resolutions", {}),
+        "llm_usage": context.get("llm_usage", []),
         "prompt_version": PROMPT_VERSION,
         "debate_conflict_score": debate_conflict_score,
     }
@@ -1296,6 +1427,25 @@ def _token_snapshot(context: dict[str, Any]) -> dict[str, int]:
         "input_tokens": int(context.get("input_tokens", 0)),
         "output_tokens": int(context.get("output_tokens", 0)),
         "tokens_used": int(context.get("tokens_used", 0)),
+    }
+
+
+def _llm_usage_since(context: dict[str, Any], token_before: dict[str, int]) -> dict[str, object]:
+    entries = context.get("llm_usage", [])
+    cached_input_tokens = 0
+    cache_creation_input_tokens = 0
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            cached_input_tokens += int(entry.get("cached_input_tokens", 0) or 0)
+            cache_creation_input_tokens += int(entry.get("cache_creation_input_tokens", 0) or 0)
+    return {
+        "input_delta": max(0, int(context.get("input_tokens", 0)) - token_before["input_tokens"]),
+        "output_delta": max(0, int(context.get("output_tokens", 0)) - token_before["output_tokens"]),
+        "total_delta": max(0, int(context.get("tokens_used", 0)) - token_before["tokens_used"]),
+        "cached_input_tokens_seen": cached_input_tokens,
+        "cache_creation_input_tokens_seen": cache_creation_input_tokens,
     }
 
 
@@ -1310,6 +1460,7 @@ async def _record_model_audit(
     conflict_score: int | None = None,
     decision: str | None = None,
     accepted_findings_count: int | None = None,
+    model_resolution: ModelResolution | None = None,
 ) -> None:
     installation_id = cast(int, context["installation_id"])
     review_id = cast(int, context["review_id"])
@@ -1319,6 +1470,11 @@ async def _record_model_audit(
     input_delta = max(0, input_tokens_after - token_before["input_tokens"])
     output_delta = max(0, output_tokens_after - token_before["output_tokens"])
     total_delta = max(0, total_tokens_after - token_before["tokens_used"])
+    metadata: dict[str, Any] = {
+        "llm_usage": _llm_usage_since(context, token_before),
+    }
+    if model_resolution is not None:
+        metadata["model_resolution"] = model_resolution.as_metadata()
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
         session.add(
@@ -1337,6 +1493,7 @@ async def _record_model_audit(
                 accepted_findings_count=accepted_findings_count,
                 conflict_score=conflict_score,
                 decision=decision,
+                metadata_json=metadata,
             )
         )
         await session.commit()

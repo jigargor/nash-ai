@@ -3,6 +3,7 @@ from decimal import Decimal
 from app.agent.config_cache import _deserialize_config, _serialize_config
 from app.agent.review_config import ContextPackagingConfig, ReviewConfig, ReviewModelConfig
 from app.agent.schema import ContextBudgets
+from app.llm.router import ModelRoleRoutingConfig, ModelsRoutingConfig
 
 
 def test_serialize_config_handles_context_budgets() -> None:
@@ -38,3 +39,18 @@ def test_deserialize_config_restores_budgets_and_packaging_types() -> None:
     assert rehydrated.budgets.diff_hunks == 2222
     assert isinstance(rehydrated.packaging, ContextPackagingConfig)
     assert rehydrated.packaging.generated_paths == ["dist/**"]
+
+
+def test_deserialize_config_restores_model_routing_types() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            provider_order=["openai", "anthropic"],
+            roles={"fast_path": ModelRoleRoutingConfig(tier="economy")},
+        )
+    )
+
+    rehydrated = _deserialize_config(_serialize_config(config))
+
+    assert isinstance(rehydrated.models, ModelsRoutingConfig)
+    assert rehydrated.models.provider_order == ["openai", "anthropic"]
+    assert rehydrated.models.roles["fast_path"].tier == "economy"
