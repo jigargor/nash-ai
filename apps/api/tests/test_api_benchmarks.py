@@ -8,14 +8,23 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import select
 
 from app.api import benchmarks as benchmarks_module
 from app.api.benchmarks import router as benchmarks_router, telemetry_router, _verify_api_access
 from app.config import settings
-from app.db.models import BenchmarkResult, BenchmarkRun, FindingOutcome, Installation, Review
+from app.db.models import (
+    BenchmarkResult,
+    BenchmarkRun,
+    FindingOutcome,
+    Installation,
+    InstallationUser,
+    Review,
+    User,
+)
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
 
-from conftest import _auth_headers  # shared across api test files
+from conftest import _TEST_DASHBOARD_USER_GITHUB_ID, _auth_headers  # shared across api test files
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +41,18 @@ async def reset_db_pool() -> None:
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def configure_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "admin_retry_api_key", "bench-admin-key")
+
+
+@pytest.fixture(autouse=True)
+def configure_dashboard_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "dashboard_user_jwt_secret", "test-dashboard-user-secret")
+    monkeypatch.setattr(settings, "dashboard_user_jwt_audience", "dashboard-api")
+    monkeypatch.setattr(settings, "dashboard_user_jwt_issuer", "nash-web-dashboard")
+
+
 @pytest.fixture
 def test_app() -> FastAPI:
     application = FastAPI()
@@ -45,6 +66,12 @@ async def client(test_app: FastAPI) -> httpx.AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=test_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
+
+
+def _admin_auth_headers() -> dict[str, str]:
+    headers = _auth_headers()
+    headers["X-Admin-Api-Key"] = "bench-admin-key"
+    return headers
 
 
 async def _seed_benchmark_run(name: str = "test-run") -> int:
@@ -98,6 +125,20 @@ async def _seed_installation_and_review() -> tuple[int, int]:
             )
         )
         await session.flush()
+        user = (
+            await session.execute(select(User).where(User.github_id == _TEST_DASHBOARD_USER_GITHUB_ID))
+        ).scalar_one_or_none()
+        if user is None:
+            user = User(github_id=_TEST_DASHBOARD_USER_GITHUB_ID, login="bench-test-user")
+            session.add(user)
+            await session.flush()
+        session.add(
+            InstallationUser(
+                installation_id=installation_id,
+                user_id=user.id,
+                role="member",
+            )
+        )
         review = Review(
             installation_id=installation_id,
             repo_full_name="acme/bench-repo",
@@ -157,7 +198,7 @@ async def test_list_benchmark_runs_empty(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
-    resp = await client.get("/api/v1/benchmarks/runs", headers=_auth_headers())
+    resp = await client.get("/api/v1/admin/benchmarks/runs", headers=_admin_auth_headers())
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
@@ -169,7 +210,7 @@ async def test_list_benchmark_runs_returns_runs(
     monkeypatch.setattr(settings, "api_access_key", None)
     run_id = await _seed_benchmark_run("my-bench")
 
-    resp = await client.get("/api/v1/benchmarks/runs", headers=_auth_headers())
+    resp = await client.get("/api/v1/admin/benchmarks/runs", headers=_admin_auth_headers())
     assert resp.status_code == 200
     ids = [r["id"] for r in resp.json()]
     assert run_id in ids
@@ -185,7 +226,7 @@ async def test_get_benchmark_run_not_found(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
-    resp = await client.get("/api/v1/benchmarks/runs/99999999", headers=_auth_headers())
+    resp = await client.get("/api/v1/admin/benchmarks/runs/99999999", headers=_admin_auth_headers())
     assert resp.status_code == 404
 
 
@@ -197,7 +238,7 @@ async def test_get_benchmark_run_with_results(
     run_id = await _seed_benchmark_run("full-run")
     await _seed_benchmark_result(run_id)
 
-    resp = await client.get(f"/api/v1/benchmarks/runs/{run_id}", headers=_auth_headers())
+    resp = await client.get(f"/api/v1/admin/benchmarks/runs/{run_id}", headers=_admin_auth_headers())
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == run_id
@@ -230,7 +271,7 @@ async def test_get_benchmark_run_precision_recall_none_when_no_tp(
         session.add(result)
         await session.commit()
 
-    resp = await client.get(f"/api/v1/benchmarks/runs/{run_id}", headers=_auth_headers())
+    resp = await client.get(f"/api/v1/admin/benchmarks/runs/{run_id}", headers=_admin_auth_headers())
     assert resp.status_code == 200
     case = resp.json()["cases"][0]
     assert case["precision"] == pytest.approx(0.0)  # 0/(0+1) = 0.0
@@ -248,7 +289,7 @@ async def test_compare_benchmark_runs_not_found(
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
     resp = await client.get(
-        "/api/v1/benchmarks/compare?run_a=99998&run_b=99999", headers=_auth_headers()
+        "/api/v1/admin/benchmarks/compare?run_a=99998&run_b=99999", headers=_admin_auth_headers()
     )
     assert resp.status_code == 404
 
@@ -271,7 +312,8 @@ async def test_compare_benchmark_runs_returns_delta(
         await session.commit()
 
     resp = await client.get(
-        f"/api/v1/benchmarks/compare?run_a={run_a}&run_b={run_b}", headers=_auth_headers()
+        f"/api/v1/admin/benchmarks/compare?run_a={run_a}&run_b={run_b}",
+        headers=_admin_auth_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -291,7 +333,8 @@ async def test_compare_benchmark_runs_delta_none_for_missing_totals(
     # Leave totals_json as None
 
     resp = await client.get(
-        f"/api/v1/benchmarks/compare?run_a={run_a}&run_b={run_b}", headers=_auth_headers()
+        f"/api/v1/admin/benchmarks/compare?run_a={run_a}&run_b={run_b}",
+        headers=_admin_auth_headers(),
     )
     assert resp.status_code == 200
     assert resp.json()["delta"]["precision"] is None
@@ -307,10 +350,8 @@ async def test_cost_per_finding_empty(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
-    # Filter by a non-existent installation_id so accumulated test data doesn't bleed in
-    empty_installation_id = _rand_id()
     resp = await client.get(
-        f"/api/v1/telemetry/cost-per-finding?installation_id={empty_installation_id}",
+        "/api/v1/telemetry/cost-per-finding?model=model-that-does-not-exist",
         headers=_auth_headers(),
     )
     assert resp.status_code == 200
@@ -349,6 +390,28 @@ async def test_cost_per_finding_model_filter(
     )
     assert resp.status_code == 200
     assert resp.json()["summary"]["reviews_analyzed"] == 0
+
+
+@pytest.mark.anyio
+async def test_benchmark_routes_require_admin_key(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    resp = await client.get("/api/v1/admin/benchmarks/runs", headers=_auth_headers())
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_cost_per_finding_unlinked_installation_returns_404(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _rand_id()
+    resp = await client.get(
+        f"/api/v1/telemetry/cost-per-finding?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 404
 
 
 @pytest.mark.anyio
