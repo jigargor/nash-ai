@@ -8,6 +8,8 @@ import redis.exceptions as redis_exc
 from redis.asyncio import Redis
 
 from app.agent.review_config import MaxModeConfig, ModelProvider, ReviewConfig, ReviewModelConfig
+from app.agent.review_config import ContextPackagingConfig
+from app.agent.schema import ContextBudgets
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ def _cache_key(owner: str, repo: str, head_sha: str) -> str:
 
 def _serialize_config(config: ReviewConfig) -> str:
     payload = asdict(config)
+    payload["budgets"] = config.budgets.model_dump(mode="json")
     payload["model"]["input_per_1m_usd"] = str(config.model.input_per_1m_usd)
     payload["model"]["output_per_1m_usd"] = str(config.model.output_per_1m_usd)
     return json.dumps(payload)
@@ -48,8 +51,22 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         conflict_threshold=int(max_mode_data.get("conflict_threshold", 35)),
         high_risk_severity=str(max_mode_data.get("high_risk_severity", "high")),
     )
+    budgets_data = dict(data.get("budgets") or {})
+    budgets = ContextBudgets.model_validate(budgets_data)
+    packaging_data = dict(data.get("packaging") or {})
+    packaging = ContextPackagingConfig(
+        layered_context_enabled=bool(packaging_data.get("layered_context_enabled", True)),
+        partial_review_mode_enabled=bool(packaging_data.get("partial_review_mode_enabled", True)),
+        summarization_enabled=bool(packaging_data.get("summarization_enabled", False)),
+        partial_review_changed_lines_threshold=int(packaging_data.get("partial_review_changed_lines_threshold", 600)),
+        max_summary_calls_per_review=int(packaging_data.get("max_summary_calls_per_review", 3)),
+        generated_paths=[str(item) for item in list(packaging_data.get("generated_paths") or [])],
+        vendor_paths=[str(item) for item in list(packaging_data.get("vendor_paths") or [])],
+    )
     data["model"] = model
     data["max_mode"] = max_mode
+    data["budgets"] = budgets
+    data["packaging"] = packaging
     return ReviewConfig(**data)
 
 
