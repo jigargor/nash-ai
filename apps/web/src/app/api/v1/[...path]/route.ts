@@ -7,7 +7,14 @@ import { hydrateApiProxyEnvFromAncestors } from "@/lib/monorepo-env";
 
 const DEFAULT_DEV_API = "http://localhost:8000";
 
-/** Upstream fetch timeout so the browser does not hang on "Loading…" if Railway is unreachable. */
+/**
+ * Without this, Vercel often ends the function at ~10s while we still wait on Railway
+ * (`UPSTREAM_TIMEOUT_MS`), which surfaces as a blank 504 in the browser.
+ * Raise toward 60 on Pro if Railway cold starts regularly exceed the upstream timeout.
+ */
+export const maxDuration = 30;
+
+/** Upstream fetch timeout — must stay below `maxDuration` (leave headroom for cookie/session work). */
 const UPSTREAM_TIMEOUT_MS = 25_000;
 
 /**
