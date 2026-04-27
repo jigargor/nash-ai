@@ -15,6 +15,26 @@ class CacheRequestOptions:
     cached_content_name: str | None = None
 
 
+@dataclass(frozen=True)
+class StructuredOutputRequest:
+    model_name: str
+    system_prompt: str
+    messages: list[dict[str, Any]]
+    tool_name: str
+    tool_description: str
+    input_schema: dict[str, Any]
+    context: dict[str, Any]
+    max_tokens: int
+    temperature: float | None = None
+
+
+@dataclass(frozen=True)
+class StructuredOutputResult:
+    payload: dict[str, Any]
+    raw_response: Any
+    usage: LLMUsage
+
+
 class ProviderAdapter(Protocol):
     provider: ModelProvider
 
@@ -32,12 +52,8 @@ class ProviderAdapter(Protocol):
     async def structured_output(
         self,
         *,
-        model_name: str,
-        system_prompt: str,
-        messages: list[dict[str, Any]],
-        tool_schema: dict[str, Any],
-        context: dict[str, Any],
-    ) -> Any: ...
+        request: StructuredOutputRequest,
+    ) -> StructuredOutputResult: ...
 
     def render_anthropic_system(self, system_prompt: str, options: CacheRequestOptions | None = None) -> list[dict[str, Any]]: ...
 
@@ -73,12 +89,8 @@ class BaseProviderAdapter:
     async def structured_output(
         self,
         *,
-        model_name: str,
-        system_prompt: str,
-        messages: list[dict[str, Any]],
-        tool_schema: dict[str, Any],
-        context: dict[str, Any],
-    ) -> Any:
+        request: StructuredOutputRequest,
+    ) -> StructuredOutputResult:
         raise NotImplementedError("Provider adapters expose structured_output through app.agent.finalize")
 
     def render_anthropic_system(self, system_prompt: str, options: CacheRequestOptions | None = None) -> list[dict[str, Any]]:

@@ -1,5 +1,11 @@
 from app.llm.providers.anthropic import AnthropicAdapter
-from app.llm.providers.base import CacheRequestOptions, ProviderAdapter, record_usage
+from app.llm.providers.base import (
+    CacheRequestOptions,
+    ProviderAdapter,
+    StructuredOutputRequest,
+    StructuredOutputResult,
+    record_usage,
+)
 from app.llm.providers.gemini import GeminiAdapter
 from app.llm.providers.openai import OpenAIAdapter
 
@@ -21,4 +27,12 @@ def registered_provider_ids() -> set[str]:
     return set(_ADAPTERS)
 
 
-__all__ = ["CacheRequestOptions", "ProviderAdapter", "get_provider_adapter", "record_usage", "registered_provider_ids"]
+__all__ = [
+    "CacheRequestOptions",
+    "ProviderAdapter",
+    "StructuredOutputRequest",
+    "StructuredOutputResult",
+    "get_provider_adapter",
+    "record_usage",
+    "registered_provider_ids",
+]

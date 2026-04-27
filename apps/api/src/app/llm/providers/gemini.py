@@ -4,10 +4,11 @@ from typing import Any
 
 import httpx
 
-from app.llm.providers.base import BaseProviderAdapter, CacheRequestOptions
+from app.llm.providers.base import CacheRequestOptions
+from app.llm.providers.openai import OpenAIAdapter
 
 
-class GeminiAdapter(BaseProviderAdapter):
+class GeminiAdapter(OpenAIAdapter):
     provider = "gemini"
 
     def chat_completion_extra_kwargs(
