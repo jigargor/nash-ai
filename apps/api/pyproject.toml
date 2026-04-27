@@ -5,6 +5,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"app.agent.prompts" = ["*.md", "*.yaml", "stacks/*.md"]
+
 [project]
 name = "api"
 version = "0.1.0"

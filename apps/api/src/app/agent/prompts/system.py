@@ -1,4 +1,5 @@
 from functools import lru_cache
+from importlib import resources
 from pathlib import Path
 
 import yaml
@@ -8,15 +9,22 @@ PROMPTS_DIR = Path(__file__).parent
 
 @lru_cache(maxsize=64)
 def _load_file(relative_path: str) -> str:
-    return (PROMPTS_DIR / relative_path).read_text(encoding="utf-8").strip()
+    try:
+        return resources.files("app.agent.prompts").joinpath(relative_path).read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, ModuleNotFoundError):
+        return (PROMPTS_DIR / relative_path).read_text(encoding="utf-8").strip()
 
 
 @lru_cache(maxsize=1)
 def _load_verified_facts() -> list[dict[str, object]]:
-    facts_path = PROMPTS_DIR / "verified_facts.yaml"
-    if not facts_path.exists():
-        return []
-    raw = yaml.safe_load(facts_path.read_text(encoding="utf-8")) or []
+    try:
+        raw_text = resources.files("app.agent.prompts").joinpath("verified_facts.yaml").read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError):
+        facts_path = PROMPTS_DIR / "verified_facts.yaml"
+        if not facts_path.exists():
+            return []
+        raw_text = facts_path.read_text(encoding="utf-8")
+    raw = yaml.safe_load(raw_text) or []
     if not isinstance(raw, list):
         return []
     normalized: list[dict[str, object]] = []
