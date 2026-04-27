@@ -32,7 +32,7 @@ const csp = [
   "font-src 'self' data:",
   // Allow HTTPS APIs when NEXT_PUBLIC_* points at Railway (or OAuth); prefer same-origin /api/* via BFF.
   "connect-src 'self' https:",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
 ].join("; ");
 

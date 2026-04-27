@@ -80,11 +80,12 @@ async def retry_review(
 
         try:
             owner, repo = _split_repo_full_name(review.repo_full_name)
-        except ValueError as exc:
+        except ValueError:
             logger.exception("Invalid review repo name review_id=%s", review_id)
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
-            ) from exc
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid repository name format",
+            )
 
         if not settings.has_llm_api_key_configured():
             raise HTTPException(

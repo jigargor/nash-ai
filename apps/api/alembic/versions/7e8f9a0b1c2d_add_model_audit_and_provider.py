@@ -23,7 +23,10 @@ TENANT_CONTEXT = "nullif(current_setting('app.current_installation_id', true), '
 
 
 def upgrade() -> None:
-    op.add_column("reviews", sa.Column("model_provider", sa.Text(), server_default="anthropic", nullable=False))
+    op.add_column(
+        "reviews",
+        sa.Column("model_provider", sa.Text(), server_default="anthropic", nullable=False),
+    )
     op.alter_column("reviews", "model_provider", server_default=None)
 
     op.create_table(
@@ -43,8 +46,18 @@ def upgrade() -> None:
         sa.Column("accepted_findings_count", sa.Integer(), nullable=True),
         sa.Column("conflict_score", sa.Integer(), nullable=True),
         sa.Column("decision", sa.Text(), nullable=True),
-        sa.Column("metadata_json", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
-        sa.Column("created_at", sa.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "metadata_json",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.TIMESTAMP(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["review_id"], ["reviews.id"]),
         sa.PrimaryKeyConstraint("id"),
     )

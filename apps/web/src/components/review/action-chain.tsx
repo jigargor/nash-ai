@@ -53,11 +53,11 @@ function DecisionBadge({ decision }: { decision: string | null }) {
     edited: "#a78bfa",
     challenged: "#fb923c",
     tie_break: "#f43f5e",
-    skip_review: "var(--text-muted)",
+    skip_review: "#6b7280",
     light_review: "#f59e0b",
     full_review: "#60a5fa",
   };
-  const color = colorMap[decision] ?? "var(--text-muted)";
+  const color = colorMap[decision] ?? "#6b7280";
   return (
     <span
       style={{

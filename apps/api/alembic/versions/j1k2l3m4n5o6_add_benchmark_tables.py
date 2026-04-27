@@ -31,10 +31,17 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), sa.Identity(always=False), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("prompt_version", sa.Text(), nullable=False),
-        sa.Column("model_config_json", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "model_config_json",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.Column("dataset_path", sa.Text(), nullable=False),
         sa.Column("triggered_by", sa.Text(), nullable=True),
-        sa.Column("started_at", sa.TIMESTAMP(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "started_at", sa.TIMESTAMP(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.Column("completed_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column("status", sa.Text(), nullable=False, server_default=sa.text("'running'")),
         sa.Column("totals_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
@@ -58,7 +65,9 @@ def upgrade() -> None:
         sa.Column("cost_usd", sa.Numeric(10, 6), nullable=True),
         sa.Column("cost_per_tp_usd", sa.Numeric(10, 6), nullable=True),
         sa.Column("stage_timings_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column("created_at", sa.TIMESTAMP(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.TIMESTAMP(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["run_id"], ["benchmark_runs.id"]),
         sa.ForeignKeyConstraint(["review_id"], ["reviews.id"]),
         sa.PrimaryKeyConstraint("id"),

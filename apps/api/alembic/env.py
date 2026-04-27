@@ -11,20 +11,33 @@ from app.db.url import normalize_asyncpg_database_url
 # access to the values within the .ini file in use.
 config = context.config
 
-# The app settings object is strict, so provide benign defaults when the
-# migration environment imports app modules without a fully populated .env.
-# DATABASE_URL must be set before importing app.* (session.py loads Settings).
-# Default matches local docker-compose Postgres (host port 5433).
+# The app settings object is strict; provide benign defaults so app modules
+# can be imported without a fully populated .env. DATABASE_URL must be set
+# explicitly — the local fallback is intentional for dev only and warns loudly.
+_explicit_db_url = os.environ.get("DATABASE_URL")
 os.environ.setdefault(
     "DATABASE_URL",
     "postgresql+asyncpg://dev:dev@localhost:5433/codereview",
 )
+if not _explicit_db_url:
+    import warnings
+
+    warnings.warn(
+        "DATABASE_URL not set — using local dev default (localhost:5433/codereview). "
+        "Set DATABASE_URL explicitly in CI/CD to avoid accidental migrations against the wrong database.",
+        stacklevel=1,
+    )
 os.environ.setdefault("GITHUB_APP_ID", "0")
 os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "placeholder")
 os.environ.setdefault("GITHUB_CLIENT_ID", "placeholder")
 os.environ.setdefault("GITHUB_CLIENT_SECRET", "placeholder")
-os.environ.setdefault("FERNET_KEY", "placeholder")
 os.environ.setdefault("ANTHROPIC_API_KEY", "placeholder")
+# Fernet key must be a valid 32-byte URL-safe base64 key for the startup validator.
+# Generate a random throwaway key if none is set — it is never used during migrations.
+if not os.environ.get("FERNET_KEY"):
+    from cryptography.fernet import Fernet
+
+    os.environ["FERNET_KEY"] = Fernet.generate_key().decode()
 
 database_url = os.getenv("DATABASE_URL")
 if database_url:

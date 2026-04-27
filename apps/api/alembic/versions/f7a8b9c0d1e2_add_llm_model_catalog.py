@@ -32,7 +32,12 @@ def upgrade() -> None:
             server_default=sa.text("'{}'::jsonb"),
             nullable=False,
         ),
-        sa.Column("generated_at", sa.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "generated_at",
+            sa.TIMESTAMP(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.Column("promoted_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -80,6 +85,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("llm_model_health_provider_status", table_name="llm_model_health")
     op.drop_table("llm_model_health")
-    op.drop_index("llm_model_catalog_snapshots_promoted_at", table_name="llm_model_catalog_snapshots")
-    op.drop_index("llm_model_catalog_snapshots_version_hash", table_name="llm_model_catalog_snapshots")
+    op.drop_index(
+        "llm_model_catalog_snapshots_promoted_at", table_name="llm_model_catalog_snapshots"
+    )
+    op.drop_index(
+        "llm_model_catalog_snapshots_version_hash", table_name="llm_model_catalog_snapshots"
+    )
     op.drop_table("llm_model_catalog_snapshots")

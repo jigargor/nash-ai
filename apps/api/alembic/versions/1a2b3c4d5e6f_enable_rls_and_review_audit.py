@@ -33,7 +33,12 @@ def upgrade() -> None:
         sa.Column("old_row", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("new_row", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("changed_by_installation_id", sa.BigInteger(), nullable=True),
-        sa.Column("changed_at", sa.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "changed_at",
+            sa.TIMESTAMP(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
