@@ -124,6 +124,11 @@ async def get_review_debug(
     x_admin_api_key: str | None = Header(default=None),
     installation_id: int | None = Query(default=None, ge=1),
 ) -> dict[str, object]:
+    # Return 404 in production — don't acknowledge the route exists.
+    # Debug artifacts contain internal telemetry and code excerpts;
+    # use Langfuse traces for production debugging instead.
+    if settings.environment.lower() == "production":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     _require_admin_key(x_admin_api_key)
 
     async with AsyncSessionLocal() as session:

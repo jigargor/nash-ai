@@ -69,6 +69,7 @@ from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_r
 from app.llm.router import ModelRoleRoutingConfig
 from app.llm.types import ModelProvider
 from app.observability import record_review_trace
+from app.llm.circuit_breaker import record_provider_failure, record_provider_success
 from app.ratelimit import check_and_consume_daily_token_budget, current_daily_token_usage
 from app.telemetry.finding_outcomes import seed_pending_finding_outcomes
 
@@ -366,6 +367,7 @@ async def run_review(
     head_sha: str,
     *,
     user_github_id: int | None = None,
+    redis: Any | None = None,
 ) -> None:
     await _mark_review_running(review_id, installation_id)
 
@@ -386,6 +388,7 @@ async def run_review(
         "tokens_used": 0,
         "user_provider_keys": user_provider_keys,
         "user_github_id": user_github_id,
+        "_redis": redis,
     }
     started_at = monotonic()
 
@@ -886,6 +889,14 @@ async def run_review(
             status="failed",
             review_config=review_config if "review_config" in locals() else None,
         )
+        # Record provider failure for circuit breaker tracking
+        _redis = context.get("_redis")
+        if _redis is not None:
+            provider = str(context.get("runtime_model_provider") or "anthropic")
+            try:
+                await record_provider_failure(_redis, provider)
+            except Exception:
+                pass  # circuit breaker is best-effort
         logger.info(
             "Review failed review_id=%s duration_ms=%s",
             review_id,
@@ -968,6 +979,16 @@ async def _mark_review_done(
                 for row in rows:
                     row.last_used_at = now
                 await key_session.commit()
+
+    # Record success to reset the circuit breaker for this provider
+    if status == "done":
+        _redis = context.get("_redis")
+        if _redis is not None:
+            provider = str(context.get("runtime_model_provider") or "anthropic")
+            try:
+                await record_provider_success(_redis, provider)
+            except Exception:
+                pass  # circuit breaker is best-effort
 
 
 def _estimate_cost_usd(

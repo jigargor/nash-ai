@@ -52,7 +52,14 @@ async def review_pr(
     user_github_id: int | None = None,
 ) -> None:
     await run_review(
-        review_id, installation_id, owner, repo, pr_number, head_sha, user_github_id=user_github_id
+        review_id,
+        installation_id,
+        owner,
+        repo,
+        pr_number,
+        head_sha,
+        user_github_id=user_github_id,
+        redis=ctx.get("redis"),
     )
 
 

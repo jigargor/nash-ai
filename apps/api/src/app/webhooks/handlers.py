@@ -8,6 +8,7 @@ from app.agent.review_config import DEFAULT_MODEL_NAME
 from app.config import settings
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, set_installation_context
+from app.llm.circuit_breaker import is_circuit_open
 from app.ratelimit import check_installation_review_rate_limit, current_daily_token_usage
 from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
 
@@ -95,6 +96,36 @@ async def queue_pull_request_review(
             repo_full_name,
             pr_number,
         )
+        return
+
+    # Check circuit breaker before doing any DB work or enqueue.
+    # We check the primary provider (anthropic) as a proxy for overall availability;
+    # if the circuit is open a delay comment is posted on the PR instead.
+    if await is_circuit_open(redis, "anthropic"):
+        logger.warning(
+            "Circuit open for anthropic — posting delay comment instead of enqueuing "
+            "installation_id=%s repo=%s pr_number=%s",
+            installation_id,
+            repo_full_name,
+            pr_number,
+        )
+        try:
+            from app.github.client import GitHubClient
+
+            gh = await GitHubClient.for_installation(installation_id)
+            await gh.post_issue_comment(
+                owner,
+                repo_name,
+                pr_number,
+                "⏳ **Automated review delayed**: the AI provider is temporarily unavailable. "
+                "This review will retry automatically once service recovers (~15 minutes).",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to post circuit-open comment installation_id=%s pr=%s",
+                installation_id,
+                pr_number,
+            )
         return
 
     logger.warning(
