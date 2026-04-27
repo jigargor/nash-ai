@@ -257,19 +257,55 @@ async def test_queue_pull_request_review_skip_tag_case_insensitive(
 
 @pytest.mark.anyio
 async def test_primary_provider_for_circuit_breaker_prefers_default_when_configured(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.webhooks.handlers.settings.anthropic_api_key", "anthropic-key")
-    monkeypatch.setattr("app.webhooks.handlers.settings.openai_api_key", "openai-key")
-    monkeypatch.setattr("app.webhooks.handlers.settings.gemini_api_key", None)
-    assert _primary_provider_for_circuit_breaker() == "anthropic"
+    installation_id = randint(100_000_000, 999_999_999)
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            Installation(
+                installation_id=installation_id,
+                account_login=f"acme-{installation_id}",
+                account_type="Organization",
+            )
+        )
+        await session.commit()
+    assert await _primary_provider_for_circuit_breaker(installation_id) == "anthropic"
 
 
 @pytest.mark.anyio
 async def test_primary_provider_for_circuit_breaker_falls_back_to_first_configured(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.webhooks.handlers.settings.anthropic_api_key", None)
-    monkeypatch.setattr("app.webhooks.handlers.settings.openai_api_key", "openai-key")
-    monkeypatch.setattr("app.webhooks.handlers.settings.gemini_api_key", "gemini-key")
-    assert _primary_provider_for_circuit_breaker() == "openai"
+    installation_id = randint(100_000_000, 999_999_999)
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            Installation(
+                installation_id=installation_id,
+                account_login=f"acme-{installation_id}",
+                account_type="Organization",
+            )
+        )
+        session.add_all(
+            [
+                Review(
+                    installation_id=installation_id,
+                    repo_full_name="acme/repo",
+                    pr_number=1,
+                    pr_head_sha=(uuid4().hex + uuid4().hex)[:40],
+                    status="done",
+                    model_provider="anthropic",
+                    model="claude-sonnet-4-5",
+                ),
+                Review(
+                    installation_id=installation_id,
+                    repo_full_name="acme/repo",
+                    pr_number=2,
+                    pr_head_sha=(uuid4().hex + uuid4().hex)[:40],
+                    status="done",
+                    model_provider="openai",
+                    model="gpt-5.5",
+                ),
+            ]
+        )
+        await session.commit()
+    assert await _primary_provider_for_circuit_breaker(installation_id) == "openai"

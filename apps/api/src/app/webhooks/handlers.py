@@ -18,22 +18,20 @@ SKIP_REVIEW_TAG = "[skip-nash-review]"
 FORCE_REVIEW_TAG = "[force-nash-review]"
 
 
-def _primary_provider_for_circuit_breaker() -> str:
-    """Choose the provider used for pre-enqueue circuit checks."""
-    configured_providers = [
-        provider
-        for provider, key in (
-            ("anthropic", settings.anthropic_api_key),
-            ("openai", settings.openai_api_key),
-            ("gemini", settings.gemini_api_key),
+async def _primary_provider_for_circuit_breaker(installation_id: int) -> str:
+    """Choose provider for pre-enqueue circuit checks, without touching secret values."""
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        latest_provider = await session.scalar(
+            select(Review.model_provider)
+            .where(Review.installation_id == installation_id)
+            .where(Review.model_provider.is_not(None))
+            .order_by(Review.id.desc())
+            .limit(1)
         )
-        if (key or "").strip()
-    ]
-    if not configured_providers:
-        return DEFAULT_MODEL_PROVIDER
-    if DEFAULT_MODEL_PROVIDER in configured_providers:
-        return DEFAULT_MODEL_PROVIDER
-    return configured_providers[0]
+    if isinstance(latest_provider, str) and latest_provider.strip():
+        return latest_provider.strip().lower()
+    return DEFAULT_MODEL_PROVIDER
 
 
 def _pr_text_has_force_review_tag(title: str | None, body: str | None) -> bool:
@@ -116,7 +114,7 @@ async def queue_pull_request_review(
         )
         return
 
-    provider_for_circuit = _primary_provider_for_circuit_breaker()
+    provider_for_circuit = await _primary_provider_for_circuit_breaker(installation_id)
     # Check circuit breaker before doing any DB work or enqueue.
     if await is_circuit_open(redis, provider_for_circuit):
         logger.warning(
