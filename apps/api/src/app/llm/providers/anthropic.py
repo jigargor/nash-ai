@@ -43,9 +43,11 @@ class AnthropicAdapter(BaseProviderAdapter):
         request: StructuredOutputRequest,
     ) -> StructuredOutputResult:
         client = create_async_anthropic_client(get_provider_api_key(self.provider))
+        temp = 0.0 if request.temperature is None else float(request.temperature)
         response = await client.messages.create(  # type: ignore[call-overload]
             model=request.model_name,
             max_tokens=request.max_tokens,
+            temperature=temp,
             system=self.render_anthropic_system(
                 request.system_prompt,
                 CacheRequestOptions(
