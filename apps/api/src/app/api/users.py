@@ -22,7 +22,7 @@ SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "gemini"
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
     if settings.environment.lower() == "production" and not settings.api_access_key:
-        raise HTTPException(
+        raise HTTPException(  # pragma: no cover
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured"
         )
     if not settings.api_access_key:

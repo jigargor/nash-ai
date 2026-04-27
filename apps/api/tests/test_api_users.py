@@ -16,6 +16,8 @@ from app.config import settings
 from app.db.models import User, UserProviderKey
 from app.db.session import AsyncSessionLocal, engine
 
+from conftest import _auth_headers  # shared across api test files
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -31,12 +33,6 @@ async def reset_db_pool() -> None:
     """Dispose the engine pool before each test so asyncpg doesn't reuse connections
     bound to a previous test's event loop (Windows asyncio / ProactorEventLoop quirk)."""
     await engine.dispose()
-
-
-def _auth_headers() -> dict[str, str]:
-    if settings.api_access_key:
-        return {"X-Api-Key": settings.api_access_key}
-    return {}
 
 
 @pytest.fixture

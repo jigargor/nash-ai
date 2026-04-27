@@ -1,9 +1,12 @@
+"""Endpoint integration tests for app.api.router.
+
+Pure-function unit tests for router helpers live in test_api_router_helpers.py.
+Shared DB helpers and fixtures are imported from conftest.py.
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import uuid4
 
 import httpx
 import pytest
@@ -11,78 +14,17 @@ from fastapi import FastAPI
 
 from app.api import router as api_router
 from app.config import settings
-from app.db.models import Installation, RepoConfig, Review, ReviewModelAudit
+from app.db.models import RepoConfig, Review, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
 
-
-@dataclass
-class _FakeJob:
-    job_id: str
-
-
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.calls: list[tuple[object, ...]] = []
-
-    async def enqueue_job(self, *args: object, **_kwargs: object) -> _FakeJob:
-        self.calls.append(args)
-        return _FakeJob(job_id=f"job-{len(self.calls)}")
-
-
-def _random_installation_id() -> int:
-    return int(str(uuid4().int)[:9])
-
-
-def _auth_headers() -> dict[str, str]:
-    if settings.api_access_key:
-        return {"X-Api-Key": settings.api_access_key}
-    return {}
-
-
-async def _insert_installation(installation_id: int, *, suspended: bool = False) -> None:
-    await engine.dispose()
-    await engine.dispose()
-    async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
-        session.add(
-            Installation(
-                installation_id=installation_id,
-                account_login=f"acme-{installation_id}",
-                account_type="Organization",
-                suspended_at=datetime.now(timezone.utc) if suspended else None,
-            )
-        )
-        await session.commit()
-
-
-async def _insert_review(
-    installation_id: int,
-    *,
-    repo_full_name: str = "acme/repo",
-    status: str = "done",
-    findings: dict[str, object] | None = None,
-) -> int:
-    await engine.dispose()
-    async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
-        review = Review(
-            installation_id=installation_id,
-            repo_full_name=repo_full_name,
-            pr_number=7,
-            pr_head_sha="a" * 40,
-            status=status,
-            model_provider="anthropic",
-            model="claude-sonnet-4-5",
-            findings=findings,
-            debug_artifacts={},
-            tokens_used=123,
-            cost_usd=0.25,
-        )
-        session.add(review)
-        await session.flush()
-        review_id = int(review.id)
-        await session.commit()
-    return review_id
+# Shared helpers from conftest (conftest dir is on sys.path during pytest)
+from conftest import (
+    _FakeRedis,
+    _auth_headers,
+    _insert_installation,
+    _insert_review,
+    _random_installation_id,
+)
 
 
 @pytest.fixture
@@ -688,64 +630,168 @@ async def test_get_repo_codereview_config_found(
 
 
 # ---------------------------------------------------------------------------
-# Unit tests for the new helper functions added in the UI update commit
+# GET /api/v1/installations  (previously untested — 20 statements)
 # ---------------------------------------------------------------------------
 
 
-def test_findings_count_from_review_row_returns_count() -> None:
-    review = SimpleNamespace(findings={"findings": [{"severity": "high"}, {"severity": "low"}]})
-    assert api_router._findings_count_from_review_row(review) == 2  # type: ignore[attr-defined]
+@pytest.mark.anyio
+async def test_list_installations_returns_active_only(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    active_id = _random_installation_id()
+    suspended_id = _random_installation_id()
+    await _insert_installation(active_id)
+    await _insert_installation(suspended_id, suspended=True)
+
+    resp = await client.get("/api/v1/installations", headers=_auth_headers())
+    assert resp.status_code == 200
+    ids = [item["installation_id"] for item in resp.json()]
+    assert active_id in ids
+    assert suspended_id not in ids
 
 
-def test_findings_count_from_review_row_none_findings() -> None:
-    review = SimpleNamespace(findings=None)
-    assert api_router._findings_count_from_review_row(review) == 0  # type: ignore[attr-defined]
+@pytest.mark.anyio
+async def test_list_installations_active_only_false_includes_suspended(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    suspended_id = _random_installation_id()
+    await _insert_installation(suspended_id, suspended=True)
+
+    resp = await client.get(
+        "/api/v1/installations?active_only=false", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    ids = [item["installation_id"] for item in resp.json()]
+    assert suspended_id in ids
+    assert any(item["active"] is False for item in resp.json() if item["installation_id"] == suspended_id)
 
 
-def test_findings_count_from_review_row_non_list() -> None:
-    review = SimpleNamespace(findings={"findings": "not-a-list"})
-    assert api_router._findings_count_from_review_row(review) == 0  # type: ignore[attr-defined]
+# ---------------------------------------------------------------------------
+# list_repos — RepoConfig loop coverage (lines 346-357)
+# ---------------------------------------------------------------------------
 
 
-def test_as_int_or_none_from_int() -> None:
-    assert api_router._as_int_or_none(42) == 42  # type: ignore[attr-defined]
+@pytest.mark.anyio
+async def test_list_repos_template_generated_true_when_repo_config_present(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    await _insert_review(installation_id, repo_full_name="acme/cfg-repo")
+
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            RepoConfig(
+                installation_id=installation_id,
+                repo_full_name="acme/cfg-repo",
+                ai_generated_at=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
+
+    resp = await client.get(
+        f"/api/v1/repos?installation_id={installation_id}", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    repo = next(r for r in resp.json() if r["repo_full_name"] == "acme/cfg-repo")
+    assert repo["ai_template_generated"] is True
+    assert repo["ai_template_generated_at"] is not None
 
 
-def test_as_int_or_none_from_float_integer() -> None:
-    assert api_router._as_int_or_none(3.0) == 3  # type: ignore[attr-defined]
+@pytest.mark.anyio
+async def test_list_repos_template_generated_false_when_no_repo_config(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    await _insert_review(installation_id, repo_full_name="acme/no-cfg-repo")
+
+    resp = await client.get(
+        f"/api/v1/repos?installation_id={installation_id}", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    repo = next(r for r in resp.json() if r["repo_full_name"] == "acme/no-cfg-repo")
+    assert repo["ai_template_generated"] is False
 
 
-def test_as_int_or_none_from_float_fractional() -> None:
-    assert api_router._as_int_or_none(3.5) is None  # type: ignore[attr-defined]
+# ---------------------------------------------------------------------------
+# stream — status-change branch (lines 785-787)
+# ---------------------------------------------------------------------------
 
 
-def test_as_int_or_none_from_bool() -> None:
-    assert api_router._as_int_or_none(True) is None  # type: ignore[attr-defined]
+@pytest.mark.anyio
+async def test_stream_review_emits_status_change(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 'running' review that becomes 'done' on second read emits both started and complete."""
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="running")
 
+    call_count = 0
 
-def test_as_int_or_none_from_string() -> None:
-    assert api_router._as_int_or_none("42") is None  # type: ignore[attr-defined]
+    class _FakeSession:
+        async def get(self, _model: object, _id: int) -> object:
+            nonlocal call_count
+            call_count += 1
+            from types import SimpleNamespace
+            from datetime import datetime, timezone
+            status_val = "running" if call_count == 1 else "done"
+            return SimpleNamespace(
+                id=review_id,
+                installation_id=installation_id,
+                status=status_val,
+                findings=None,
+                debug_artifacts={},
+                tokens_used=0,
+                cost_usd=None,
+                created_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc) if status_val == "done" else None,
+                repo_full_name="acme/repo",
+                pr_number=1,
+                pr_head_sha="a" * 40,
+                model_provider="anthropic",
+                model="claude-sonnet-4-5",
+            )
 
+        async def __aenter__(self) -> "_FakeSession":
+            return self
 
-def test_diff_stats_from_debug_artifacts_returns_stats() -> None:
-    review = SimpleNamespace(debug_artifacts={
-        "fast_path_decision": {"changed_file_count": 5, "changed_line_count": 120}
-    })
-    files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
-    assert files == 5
-    assert lines == 120
+        async def __aexit__(self, *_: object) -> None:
+            pass
 
+        async def execute(self, *_: object, **__: object) -> object:
+            from unittest.mock import MagicMock
+            m = MagicMock()
+            m.scalars.return_value.all.return_value = []
+            return m
 
-def test_diff_stats_from_debug_artifacts_none_artifacts() -> None:
-    review = SimpleNamespace(debug_artifacts=None)
-    files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
-    assert files is None and lines is None
+    async def _fake_set_ctx(*_a: object, **_k: object) -> None:
+        pass
 
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
 
-def test_diff_stats_from_debug_artifacts_missing_fast_path() -> None:
-    review = SimpleNamespace(debug_artifacts={})
-    files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
-    assert files is None and lines is None
+    resp = await client.get(
+        f"/api/v1/reviews/{review_id}/stream?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    # Should have both a 'started' event and a 'complete' event (status changed)
+    assert "started" in resp.text
+    assert "complete" in resp.text
 
 
 # ---------------------------------------------------------------------------

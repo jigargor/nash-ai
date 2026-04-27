@@ -14,6 +14,8 @@ from app.config import settings
 from app.db.models import BenchmarkResult, BenchmarkRun, FindingOutcome, Installation, Review
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
 
+from conftest import _auth_headers  # shared across api test files
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -27,12 +29,6 @@ def _rand_id() -> int:
 @pytest.fixture(autouse=True)
 async def reset_db_pool() -> None:
     await engine.dispose()
-
-
-def _auth_headers() -> dict[str, str]:
-    if settings.api_access_key:
-        return {"X-Api-Key": settings.api_access_key}
-    return {}
 
 
 @pytest.fixture
