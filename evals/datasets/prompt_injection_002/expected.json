@@ -1,0 +1,10 @@
+{
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file_path": "src/db/connection.py",
+      "line_start": 8
+    }
+  ]
+}

@@ -89,7 +89,11 @@ function FastPathBody({ meta }: { meta: Record<string, unknown> | null }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-      {reason && <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)" }}>{reason}</p>}
+      {reason ? (
+        <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)", overflowWrap: "anywhere", wordBreak: "break-word" }}>
+          {reason}
+        </p>
+      ) : null}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", alignItems: "center" }}>
         {confidence != null && (
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
@@ -407,33 +411,56 @@ function StageCard({
             color: "inherit",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>{label}</span>
-            {/* Model pill */}
-            <span style={{ fontSize: "0.7rem", background: "var(--card-muted)", border: "1px solid var(--border-strong)", borderRadius: "999px", padding: "0.05rem 0.5rem", color: "var(--text-muted)", fontFamily: "monospace" }}>
-              {audit.provider}/{audit.model}
-            </span>
-            {/* Duration */}
-            {audit.stage_duration_ms != null && (
-              <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{fmtMs(audit.stage_duration_ms)}</span>
-            )}
-            {/* Tokens */}
-            <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginLeft: "auto" }}>
-              {fmtTokens(audit.total_tokens)} tok
-            </span>
-            {/* Findings */}
-            {audit.findings_count != null && (
-              <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
-                {audit.findings_count} finding{audit.findings_count !== 1 ? "s" : ""}
-                {audit.accepted_findings_count != null && audit.accepted_findings_count !== audit.findings_count
-                  ? ` → ${audit.accepted_findings_count} kept`
-                  : ""}
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", alignItems: "stretch", width: "100%" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>{label}</span>
+              <DecisionBadge decision={audit.decision} />
+              {hasBody ? (
+                <span
+                  style={{
+                    fontSize: "0.65rem",
+                    color: "var(--text-muted)",
+                    display: "inline-block",
+                    transform: open ? "rotate(90deg)" : "none",
+                    transition: "transform 0.15s",
+                  }}
+                >
+                  ▶
+                </span>
+              ) : null}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", alignItems: "center", width: "100%" }}>
+              <span
+                style={{
+                  fontSize: "0.7rem",
+                  background: "var(--card-muted)",
+                  border: "1px solid var(--border-strong)",
+                  borderRadius: "999px",
+                  padding: "0.05rem 0.5rem",
+                  color: "var(--text-muted)",
+                  fontFamily: "monospace",
+                  overflowWrap: "anywhere",
+                  wordBreak: "break-word",
+                  maxWidth: "100%",
+                }}
+              >
+                {audit.provider}/{audit.model}
               </span>
-            )}
-            <DecisionBadge decision={audit.decision} />
-            {hasBody && (
-              <span style={{ fontSize: "0.65rem", color: "var(--text-muted)", display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
-            )}
+              {audit.stage_duration_ms != null ? (
+                <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{fmtMs(audit.stage_duration_ms)}</span>
+              ) : null}
+              <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                {fmtTokens(audit.total_tokens)} tok
+              </span>
+              {audit.findings_count != null ? (
+                <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                  {audit.findings_count} finding{audit.findings_count !== 1 ? "s" : ""}
+                  {audit.accepted_findings_count != null && audit.accepted_findings_count !== audit.findings_count
+                    ? ` → ${audit.accepted_findings_count} kept`
+                    : ""}
+                </span>
+              ) : null}
+            </div>
           </div>
         </button>
         {open && hasBody && (
@@ -495,33 +522,54 @@ function ChunkingCallout({ plan }: { plan: Record<string, unknown> }) {
 // Token summary footer
 // ---------------------------------------------------------------------------
 
-function TokenSummary({ audits, costUsd }: { audits: ReviewModelAudit[]; costUsd: string | null }) {
-  let totalInput = 0, totalOutput = 0, totalAll = 0;
+function TokenSummary({
+  audits,
+  costUsd,
+  postedFindingsCount,
+}: {
+  audits: ReviewModelAudit[];
+  costUsd: string | null;
+  postedFindingsCount: number;
+}) {
+  let totalInput = 0,
+    totalOutput = 0,
+    totalAll = 0;
   for (const a of audits) {
     totalInput += a.input_tokens;
     totalOutput += a.output_tokens;
     totalAll += a.total_tokens;
   }
-  if (totalAll === 0) return null;
+
+  const showTokens = totalAll > 0;
+  const showCost = Boolean(costUsd);
 
   return (
     <div style={{ display: "flex", gap: "0.75rem" }}>
       <div style={{ width: "24px", flexShrink: 0 }} />
       <div style={{ flex: 1, borderTop: "1px solid var(--border)", paddingTop: "0.6rem", display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center" }}>
-        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-          Total: <strong style={{ color: "var(--text-primary)" }}>{fmtTokens(totalAll)}</strong>
-        </span>
-        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-          Input: <strong style={{ color: "var(--text-primary)" }}>{fmtTokens(totalInput)}</strong>
-        </span>
-        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-          Output: <strong style={{ color: "var(--text-primary)" }}>{fmtTokens(totalOutput)}</strong>
-        </span>
-        {costUsd && (
-          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginLeft: "auto" }}>
-            Est. cost: <strong style={{ color: "var(--accent)" }}>${costUsd}</strong>
+        {showTokens ? (
+          <>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+              Total: <strong style={{ color: "var(--text-primary)" }}>{fmtTokens(totalAll)}</strong>
+            </span>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+              Input: <strong style={{ color: "var(--text-primary)" }}>{fmtTokens(totalInput)}</strong>
+            </span>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+              Output: <strong style={{ color: "var(--text-primary)" }}>{fmtTokens(totalOutput)}</strong>
+            </span>
+          </>
+        ) : null}
+        <span style={{ marginLeft: "auto", display: "inline-flex", gap: "0.65rem", alignItems: "center", flexWrap: "wrap" }}>
+          {showCost ? (
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+              Est. cost: <strong style={{ color: "var(--accent)" }}>${costUsd}</strong>
+            </span>
+          ) : null}
+          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+            Findings: <strong style={{ color: "var(--text-primary)" }}>{postedFindingsCount}</strong>
           </span>
-        )}
+        </span>
       </div>
     </div>
   );
@@ -535,13 +583,21 @@ interface ActionChainProps {
   audits: ReviewModelAudit[];
   debugArtifacts: Record<string, unknown> | null;
   costUsd?: string | null;
+  /** Final posted findings count (matches PR review summary). */
+  postedFindingsCount: number;
+  /** Shown when there are no model-audit rows (e.g. still running or audits not persisted). */
+  pipelineEmptyHint?: string | null;
 }
 
 const AUTO_OPEN_STAGES = new Set(["primary", "challenger", "tie_break"]);
 
-export function ActionChain({ audits, debugArtifacts, costUsd }: ActionChainProps) {
-  if (audits.length === 0) return null;
-
+export function ActionChain({
+  audits,
+  debugArtifacts,
+  costUsd,
+  postedFindingsCount,
+  pipelineEmptyHint,
+}: ActionChainProps) {
   const chunkingPlan = debugArtifacts?.chunking_plan as Record<string, unknown> | undefined;
   const hasChunking = chunkingPlan && Array.isArray(chunkingPlan.chunks) && (chunkingPlan.chunks as unknown[]).length > 1;
 
@@ -560,6 +616,16 @@ export function ActionChain({ audits, debugArtifacts, costUsd }: ActionChainProp
       <p style={{ margin: "0 0 0.75rem", fontSize: "0.8rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
         Action chain
       </p>
+      <p style={{ margin: "0 0 0.65rem", fontSize: "0.78rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
+        LLM pipeline stages (provider calls). This is not the GitHub HTTP trace—those requests happen inside each
+        stage when the agent reads the repo or posts comments.
+      </p>
+      {audits.length === 0 ? (
+        <p style={{ margin: "0 0 0.85rem", fontSize: "0.85rem", color: "var(--text-muted)" }}>
+          {pipelineEmptyHint ??
+            "No pipeline stages recorded yet. If the review is still running, refresh after it completes."}
+        </p>
+      ) : null}
       <div>
         {audits.map((audit, i) => (
           <div key={audit.id}>
@@ -573,7 +639,7 @@ export function ActionChain({ audits, debugArtifacts, costUsd }: ActionChainProp
           </div>
         ))}
       </div>
-      <TokenSummary audits={audits} costUsd={costUsd ?? null} />
+      <TokenSummary audits={audits} costUsd={costUsd ?? null} postedFindingsCount={postedFindingsCount} />
     </div>
   );
 }

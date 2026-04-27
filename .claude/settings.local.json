@@ -7,7 +7,20 @@
       "Bash(python3)",
       "Bash(awk '{print $9, $5}')",
       "Bash(uv run *)",
-      "WebFetch(domain:docs.anthropic.com)"
+      "WebFetch(domain:docs.anthropic.com)",
+      "Read(//c/c/Users/gorji/Documents/2026/nash-ai/apps/web/**)",
+      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\(JSON.stringify\\(p.dependencies, null, 2\\)\\)\")",
+      "Bash(xargs ls *)",
+      "Bash(python3 -c ' *)",
+      "Bash(pnpm add *)",
+      "Bash(python -m pytest tests/ -q --ignore=tests/test_agent_chunked_runtime.py)",
+      "Bash(python -m pytest tests/test_webhooks_router.py -x -q)",
+      "Bash(python -m pytest tests/test_llm_catalog_router.py tests/test_agent_provider_clients.py tests/test_github_auth.py -q)",
+      "Bash(python -m pytest tests/test_llm_catalog_router.py -v)",
+      "Bash(git push *)",
+      "Bash(gh api *)",
+      "Bash(gh run *)",
+      "Bash(awk -F: '{print $1 \"\\\\t\" $2}')"
     ]
   }
 }

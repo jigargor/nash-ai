@@ -5,6 +5,17 @@ import React from "react";
 import { PrReviewPageClient } from "@/components/review/pr-review-page-client";
 import { useReviewUiStore } from "@/stores/review-ui-store";
 
+vi.mock("next/link", () => ({
+  default: (props: React.ComponentProps<"a"> & { href: string }) => {
+    const { href, children, ...rest } = props;
+    return (
+      <a href={href} {...rest}>
+        {children}
+      </a>
+    );
+  },
+}));
+
 vi.mock("@/hooks/use-review", () => ({
   useReview: () => ({
     isLoading: false,
@@ -58,6 +69,8 @@ vi.mock("@/hooks/use-review-model-audits", () => ({
     data: {
       model_audits: [],
     },
+    isLoading: false,
+    isError: false,
   }),
 }));
 

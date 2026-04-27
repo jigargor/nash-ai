@@ -6,6 +6,7 @@ src/api.egg-info/requires.txt
 src/api.egg-info/top_level.txt
 src/app/__init__.py
 src/app/config.py
+src/app/crypto.py
 src/app/main.py
 src/app/observability.py
 src/app/ratelimit.py
@@ -33,6 +34,7 @@ src/app/agent/provider_clients.py
 src/app/agent/review_config.py
 src/app/agent/runner.py
 src/app/agent/schema.py
+src/app/agent/snapshot.py
 src/app/agent/telemetry_audit.py
 src/app/agent/text_sanitizer.py
 src/app/agent/tools.py
@@ -51,7 +53,9 @@ src/app/agent/prompts/stacks/nextjs.md
 src/app/agent/prompts/stacks/prisma.md
 src/app/agent/prompts/stacks/react.md
 src/app/agent/prompts/stacks/supabase.md
+src/app/api/benchmarks.py
 src/app/api/router.py
+src/app/api/users.py
 src/app/db/__init__.py
 src/app/db/models.py
 src/app/db/session.py
@@ -63,6 +67,7 @@ src/app/github/comments.py
 src/app/github/smoke_check.py
 src/app/github/utils.py
 src/app/llm/__init__.py
+src/app/llm/circuit_breaker.py
 src/app/llm/maintenance.py
 src/app/llm/router.py
 src/app/llm/types.py
@@ -100,7 +105,10 @@ tests/test_agent_schema.py
 tests/test_agent_tools.py
 tests/test_agent_validator.py
 tests/test_agent_vendor_detect.py
+tests/test_api_benchmarks.py
 tests/test_api_router.py
+tests/test_api_router_helpers.py
+tests/test_api_users.py
 tests/test_config_cache.py
 tests/test_database_transaction_isolation.py
 tests/test_database_url_tls.py
@@ -108,6 +116,7 @@ tests/test_db_url.py
 tests/test_diff_parser.py
 tests/test_finding_outcomes.py
 tests/test_github_auth.py
+tests/test_github_client.py
 tests/test_github_comments.py
 tests/test_github_live_auth.py
 tests/test_integration_review_flow.py
@@ -115,6 +124,7 @@ tests/test_llm_catalog_router.py
 tests/test_llm_provider_adapters.py
 tests/test_queue_recovery.py
 tests/test_ratelimit.py
+tests/test_snapshot.py
 tests/test_telemetry_audit.py
 tests/test_text_sanitizer.py
 tests/test_webhooks_handlers.py

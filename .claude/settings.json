@@ -5,7 +5,8 @@
       "Bash(xargs grep *)",
       "Bash(grep -n \"PUT\\\\|DELETE\\\\|PATCH\" /c/Users/gorji/Documents/2026/nash-ai/apps/web/src/app/api/v1/\\\\\\\\[...path\\\\\\\\]/route.ts)",
       "Bash(python -m pytest tests/ -x -q)",
-      "Bash(python -m ruff check src/ tests/)"
+      "Bash(python -m ruff check src/ tests/)",
+      "Bash(gh pr *)"
     ]
   }
 }

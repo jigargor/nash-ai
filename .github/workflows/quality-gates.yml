@@ -76,10 +76,14 @@ jobs:
         run: uv run mypy src
       - name: Migrations
         run: uv run alembic upgrade head
-      - name: Pytest
-        run: uv run pytest --cov=src/app/agent --cov=src/app/telemetry --cov=src/app/api --cov-report=term-missing --cov-fail-under=60
+      - name: Pytest (with coverage)
+        run: uv run pytest --cov=src/app --cov-report=json:coverage.json --cov-report=term-missing
+      - name: Enforce per-module coverage thresholds
+        run: uv run python scripts/check_coverage.py coverage.json coverage_thresholds.json
       - name: Bandit
         run: uv run bandit -r src
+      - name: Audit Python dependencies
+        run: uv run pip-audit
 
   frontend-checks:
     runs-on: ubuntu-latest
@@ -100,6 +104,8 @@ jobs:
         run: pnpm --filter web typecheck
       - name: Web tests
         run: pnpm --filter web test
+      - name: Audit Node dependencies
+        run: pnpm audit --audit-level high
 
   evals:
     runs-on: ubuntu-latest

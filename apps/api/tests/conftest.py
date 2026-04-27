@@ -1,14 +1,123 @@
+from __future__ import annotations
+
 import asyncio
 import os
 import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
+from uuid import uuid4
 
 import asyncpg
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+
+from app.api import router as api_router
+from app.config import settings
+from app.db.models import Installation, Review
+from app.db.session import AsyncSessionLocal, engine, set_installation_context
+
+
+# ---------------------------------------------------------------------------
+# Shared test helpers — importable by any test file
+# (these are plain functions, not fixtures; test files import them explicitly)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeJob:
+    job_id: str
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    async def enqueue_job(self, *args: object, **_kwargs: object) -> _FakeJob:
+        self.calls.append(args)
+        return _FakeJob(job_id=f"job-{len(self.calls)}")
+
+
+def _random_installation_id() -> int:
+    return int(str(uuid4().int)[:9])
+
+
+def _auth_headers() -> dict[str, str]:
+    if settings.api_access_key:
+        return {"X-Api-Key": settings.api_access_key}
+    return {}
+
+
+async def _insert_installation(installation_id: int, *, suspended: bool = False) -> None:
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            Installation(
+                installation_id=installation_id,
+                account_login=f"acme-{installation_id}",
+                account_type="Organization",
+                suspended_at=datetime.now(timezone.utc) if suspended else None,
+            )
+        )
+        await session.commit()
+
+
+async def _insert_review(
+    installation_id: int,
+    *,
+    repo_full_name: str = "acme/repo",
+    status: str = "done",
+    findings: dict[str, object] | None = None,
+) -> int:
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        review = Review(
+            installation_id=installation_id,
+            repo_full_name=repo_full_name,
+            pr_number=7,
+            pr_head_sha="a" * 40,
+            status=status,
+            model_provider="anthropic",
+            model="claude-sonnet-4-5",
+            findings=findings,
+            debug_artifacts={},
+            tokens_used=123,
+            cost_usd=0.25,
+        )
+        session.add(review)
+        await session.flush()
+        review_id = int(review.id)
+        await session.commit()
+    return review_id
+
+
+# ---------------------------------------------------------------------------
+# Shared fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def api_test_app() -> FastAPI:
+    """FastAPI app with the main API router and fake Redis state."""
+    application = FastAPI()
+    application.include_router(api_router.router)
+    application.state.redis = _FakeRedis()
+    return application
+
+
+@pytest.fixture
+async def api_client(api_test_app: FastAPI) -> httpx.AsyncIterator[httpx.AsyncClient]:
+    """httpx client wired to api_test_app."""
+    transport = httpx.ASGITransport(app=api_test_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        yield c
 
 
 @pytest.fixture(scope="session")

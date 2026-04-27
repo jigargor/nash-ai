@@ -4,10 +4,11 @@ from datetime import UTC, datetime
 from arq.connections import ArqRedis
 from sqlalchemy import select
 
-from app.agent.review_config import DEFAULT_MODEL_NAME
+from app.agent.review_config import DEFAULT_MODEL_NAME, DEFAULT_MODEL_PROVIDER
 from app.config import settings
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, set_installation_context
+from app.llm.circuit_breaker import is_circuit_open
 from app.ratelimit import check_installation_review_rate_limit, current_daily_token_usage
 from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
 
@@ -15,6 +16,22 @@ logger = logging.getLogger(__name__)
 
 SKIP_REVIEW_TAG = "[skip-nash-review]"
 FORCE_REVIEW_TAG = "[force-nash-review]"
+
+
+async def _primary_provider_for_circuit_breaker(installation_id: int) -> str:
+    """Choose provider for pre-enqueue circuit checks, without touching secret values."""
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        latest_provider = await session.scalar(
+            select(Review.model_provider)
+            .where(Review.installation_id == installation_id)
+            .where(Review.model_provider.is_not(None))
+            .order_by(Review.id.desc())
+            .limit(1)
+        )
+    if isinstance(latest_provider, str) and latest_provider.strip():
+        return latest_provider.strip().lower()
+    return DEFAULT_MODEL_PROVIDER
 
 
 def _pr_text_has_force_review_tag(title: str | None, body: str | None) -> bool:
@@ -95,6 +112,36 @@ async def queue_pull_request_review(
             repo_full_name,
             pr_number,
         )
+        return
+
+    provider_for_circuit = await _primary_provider_for_circuit_breaker(installation_id)
+    # Check circuit breaker before doing any DB work or enqueue.
+    if await is_circuit_open(redis, provider_for_circuit):
+        logger.warning(
+            "Circuit open for provider=%s — posting delay comment instead of enqueuing "
+            "installation_id=%s repo=%s pr_number=%s",
+            provider_for_circuit,
+            installation_id,
+            repo_full_name,
+            pr_number,
+        )
+        try:
+            from app.github.client import GitHubClient
+
+            gh = await GitHubClient.for_installation(installation_id)
+            await gh.post_issue_comment(
+                owner,
+                repo_name,
+                pr_number,
+                "⏳ **Automated review delayed**: the AI provider is temporarily unavailable. "
+                "This review will retry automatically once service recovers (~15 minutes).",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to post circuit-open comment installation_id=%s pr=%s",
+                installation_id,
+                pr_number,
+            )
         return
 
     logger.warning(

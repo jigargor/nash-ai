@@ -5,3 +5,8 @@
 export const AUTH_COOKIE_NAME = "__Host-nash_session";
 export const AUTH_STATE_COOKIE_NAME = "__Host-nash_oauth_state";
 export const AUTH_COOKIE_TTL_SECONDS = 60 * 60 * 24;
+
+/** Set when the user submits the login form with terms accepted; required before OAuth redirect. */
+export const TERMS_ACCEPTANCE_COOKIE_NAME = "__Host-nash_terms_accept";
+/** Long enough to complete the GitHub OAuth round trip. */
+export const TERMS_ACCEPTANCE_COOKIE_TTL_SECONDS = 60 * 15;

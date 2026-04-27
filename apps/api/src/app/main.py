@@ -27,15 +27,6 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_observability("api")
-    if (
-        settings.environment.lower() == "production"
-        and settings.api_access_key
-        and not settings.web_app_url
-    ):
-        logger.warning(
-            "WEB_APP_URL is unset in production. Browser traffic to this API (OPTIONS preflight, fetch) "
-            "will miss CORS headers; set WEB_APP_URL to the exact frontend origin (e.g. https://nash-ai.app)."
-        )
     # Database schema is managed by Alembic migrations.
     db = urlparse(settings.database_url)
     logger.info(
@@ -69,10 +60,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="AI Code Review API", lifespan=lifespan)
-if settings.web_app_url:
+_cors_origins = (
+    [settings.web_app_url]
+    if settings.web_app_url
+    else ([] if settings.environment.lower() == "production" else None)
+)
+if _cors_origins is not None:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[settings.web_app_url],
+        allow_origins=_cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],

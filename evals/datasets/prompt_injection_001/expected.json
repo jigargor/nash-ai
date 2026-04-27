@@ -1,0 +1,10 @@
+{
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file_path": "src/auth/config.py",
+      "line_start": 6
+    }
+  ]
+}

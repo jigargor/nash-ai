@@ -1,3 +1,5 @@
+import asyncio
+import dataclasses
 import logging
 import json
 from dataclasses import replace
@@ -69,6 +71,8 @@ from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_r
 from app.llm.router import ModelRoleRoutingConfig
 from app.llm.types import ModelProvider
 from app.observability import record_review_trace
+from app.agent.snapshot import SnapshotPayload, store_snapshot
+from app.llm.circuit_breaker import record_provider_failure, record_provider_success
 from app.ratelimit import check_and_consume_daily_token_budget, current_daily_token_usage
 from app.telemetry.finding_outcomes import seed_pending_finding_outcomes
 
@@ -357,6 +361,51 @@ async def _load_user_provider_keys(github_id: int) -> dict[str, str]:
     return result
 
 
+async def _capture_context_snapshot(
+    *,
+    context: dict[str, Any],
+    pr: dict[str, Any],
+    diff_text: str,
+    system_prompt: str,
+    user_prompt: str,
+    context_bundle: "ContextBundle",
+    review_config: "ReviewConfig",
+    chunk_plan: dict[str, Any] | None = None,
+) -> None:
+    """Fire-and-forget: persist a snapshot of the LLM input for eval replay.
+
+    Any exception is logged and swallowed — caller must not await this task
+    in a way that would surface errors to the review pipeline.
+    """
+    try:
+        payload = SnapshotPayload(
+            review_id=context["review_id"],
+            pr_metadata={
+                "owner": context["owner"],
+                "repo": context["repo"],
+                "pr_number": context["pr_number"],
+                "head_sha": context["head_sha"],
+                "title": pr.get("title", ""),
+            },
+            diff_text=diff_text,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            context_telemetry=context_bundle.telemetry.as_dict(),
+            review_config=dataclasses.asdict(review_config),
+            model_resolutions=dict(context.get("llm_model_resolutions") or {}),
+            fetched_files=dict(context_bundle.fetched_files),
+            chunk_plan=chunk_plan,
+        )
+        await store_snapshot(payload)
+        logger.debug("Context snapshot captured review_id=%s", context["review_id"])
+    except Exception:
+        logger.warning(
+            "Context snapshot capture failed review_id=%s",
+            context.get("review_id"),
+            exc_info=True,
+        )
+
+
 async def run_review(
     review_id: int,
     installation_id: int,
@@ -366,6 +415,7 @@ async def run_review(
     head_sha: str,
     *,
     user_github_id: int | None = None,
+    redis: Any | None = None,
 ) -> None:
     await _mark_review_running(review_id, installation_id)
 
@@ -386,6 +436,7 @@ async def run_review(
         "tokens_used": 0,
         "user_provider_keys": user_provider_keys,
         "user_github_id": user_github_id,
+        "_redis": redis,
     }
     started_at = monotonic()
 
@@ -506,6 +557,17 @@ async def run_review(
             system_prompt,
             user_prompt,
         ) = await _assemble_context(gh, context, diff_text, review_config)
+        asyncio.create_task(
+            _capture_context_snapshot(
+                context=context,
+                pr=pr,
+                diff_text=diff_text,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                context_bundle=context_bundle,
+                review_config=review_config,
+            )
+        )
         primary_resolution = _resolve_runtime_model(
             context,
             review_config,
@@ -886,6 +948,17 @@ async def run_review(
             status="failed",
             review_config=review_config if "review_config" in locals() else None,
         )
+        # Record provider failure for circuit breaker tracking
+        _redis = context.get("_redis")
+        if _redis is not None:
+            provider = str(context.get("runtime_model_provider") or "anthropic")
+            try:
+                await record_provider_failure(_redis, provider)
+            except Exception:
+                logger.debug(
+                    "Circuit breaker record_provider_failure failed (best-effort)",
+                    exc_info=True,
+                )
         logger.info(
             "Review failed review_id=%s duration_ms=%s",
             review_id,
@@ -968,6 +1041,19 @@ async def _mark_review_done(
                 for row in rows:
                     row.last_used_at = now
                 await key_session.commit()
+
+    # Record success to reset the circuit breaker for this provider
+    if status == "done":
+        _redis = context.get("_redis")
+        if _redis is not None:
+            provider = str(context.get("runtime_model_provider") or "anthropic")
+            try:
+                await record_provider_success(_redis, provider)
+            except Exception:
+                logger.debug(
+                    "Circuit breaker record_provider_success failed (best-effort)",
+                    exc_info=True,
+                )
 
 
 def _estimate_cost_usd(

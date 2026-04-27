@@ -76,13 +76,13 @@ models:
       pricing_url: https://www.anthropic.com/pricing
       caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
   - provider: anthropic
-    model: claude-3-5-haiku-latest
+    model: claude-haiku-4-5-20251001
     family: claude
     tier: economy
     status: active
     replacement_candidates: []
     shutdown_at: null
-    score: 68
+    score: 70
     capabilities:
       tool_calling: true
       structured_output: true

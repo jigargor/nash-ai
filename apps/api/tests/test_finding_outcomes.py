@@ -11,9 +11,18 @@ from app.db.models import FindingOutcome, Installation, Review
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
 from app.telemetry.finding_outcomes import (
     Outcome,
+    _coerce_int,
+    _has_bot_coauthor,
+    _looks_like_modified_apply,
+    _safe_commit_list,
+    _safe_reaction_list,
+    _safe_reply_list,
     classify_finding_outcome,
     classify_review_outcomes,
+    commits_scoped_narrowly,
+    detect_suggestion_apply,
     list_review_finding_outcomes,
+    seed_pending_finding_outcomes,
     summarize_finding_outcomes,
 )
 
@@ -273,3 +282,357 @@ async def test_classify_finding_outcome_acknowledged_for_merged_pr_with_positive
         pr_state={"state": "closed", "merged": True},
     )
     assert decision.outcome == Outcome.ACKNOWLEDGED
+
+
+# ---------------------------------------------------------------------------
+# _coerce_int
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_int_from_int() -> None:
+    assert _coerce_int(42) == 42
+
+
+def test_coerce_int_from_float() -> None:
+    assert _coerce_int(3.7) == 3
+
+
+def test_coerce_int_from_numeric_string() -> None:
+    assert _coerce_int("95") == 95
+
+
+def test_coerce_int_from_bool_returns_default() -> None:
+    assert _coerce_int(True, 0) == 0
+    assert _coerce_int(False, 99) == 99
+
+
+def test_coerce_int_from_invalid_string_returns_default() -> None:
+    assert _coerce_int("not-a-number", 7) == 7
+
+
+def test_coerce_int_from_none_returns_default() -> None:
+    assert _coerce_int(None, 5) == 5
+
+
+def test_coerce_int_empty_string_returns_default() -> None:
+    assert _coerce_int("", 3) == 3
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers
+# ---------------------------------------------------------------------------
+
+
+def test_safe_commit_list_filters_non_dicts() -> None:
+    raw = [{"sha": "a"}, "not-a-dict", None, {"sha": "b"}]
+    result = _safe_commit_list(raw)
+    assert len(result) == 2
+
+
+def test_safe_commit_list_non_list_returns_empty() -> None:
+    assert _safe_commit_list("string") == []
+    assert _safe_commit_list(None) == []
+
+
+def test_safe_reaction_list_filters_non_dicts() -> None:
+    assert _safe_reaction_list([{"+1": True}, "bad"]) == [{"+1": True}]
+
+
+def test_safe_reply_list_non_list_returns_empty() -> None:
+    assert _safe_reply_list(42) == []
+
+
+def test_has_bot_coauthor_true() -> None:
+    from app.telemetry.finding_outcomes import BOT_COAUTHOR
+    commit = {"co_authored_by": BOT_COAUTHOR}
+    assert _has_bot_coauthor(commit) is True
+
+
+def test_has_bot_coauthor_false() -> None:
+    assert _has_bot_coauthor({"co_authored_by": "someone-else"}) is False
+
+
+def test_has_bot_coauthor_missing_field() -> None:
+    assert _has_bot_coauthor({}) is False
+
+
+def test_looks_like_modified_apply_true() -> None:
+    added = ["value = encrypt(secret_key)", "return value"]
+    suggestion = ["value = encrypt(key)", "return value"]
+    assert _looks_like_modified_apply(added, suggestion) is True
+
+
+def test_looks_like_modified_apply_false_empty_inputs() -> None:
+    assert _looks_like_modified_apply([], ["x"]) is False
+    assert _looks_like_modified_apply(["x"], []) is False
+
+
+def test_looks_like_modified_apply_no_overlap() -> None:
+    added = ["aaaa bbb cccc"]
+    suggestion = ["xxxx yyy zzzz"]
+    assert _looks_like_modified_apply(added, suggestion) is False
+
+
+# ---------------------------------------------------------------------------
+# commits_scoped_narrowly
+# ---------------------------------------------------------------------------
+
+
+def test_commits_scoped_narrowly_true() -> None:
+    commits = [
+        {"files": [{"filename": "src/main.py"}]},
+    ]
+    assert commits_scoped_narrowly(commits, {"file_path": "src/main.py"}) is True
+
+
+def test_commits_scoped_narrowly_false_touches_other_files() -> None:
+    commits = [
+        {"files": [{"filename": "src/main.py"}, {"filename": "src/other.py"}]},
+    ]
+    assert commits_scoped_narrowly(commits, {"file_path": "src/main.py"}) is False
+
+
+def test_commits_scoped_narrowly_false_empty_commits() -> None:
+    assert commits_scoped_narrowly([], {"file_path": "src/main.py"}) is False
+
+
+def test_commits_scoped_narrowly_ignores_non_list_files() -> None:
+    commits = [{"files": "not-a-list"}]
+    assert commits_scoped_narrowly(commits, {"file_path": "src/main.py"}) is False
+
+
+# ---------------------------------------------------------------------------
+# seed_pending_finding_outcomes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_seed_pending_finding_outcomes_creates_rows() -> None:
+    installation_id = _random_installation_id()
+    await _seed_installation(installation_id)
+    review_id = await _seed_review(installation_id, findings=[{}, {}])
+
+    await seed_pending_finding_outcomes(
+        review_id=review_id,
+        installation_id=installation_id,
+        finding_count=2,
+        github_comment_ids=[101, 102],
+    )
+
+    rows = await list_review_finding_outcomes(review_id, installation_id)
+    assert len(rows) == 2
+    assert rows[0]["outcome"] == Outcome.PENDING.value
+    assert rows[0]["github_comment_id"] == 101
+    assert rows[1]["github_comment_id"] == 102
+
+
+@pytest.mark.anyio
+async def test_seed_pending_finding_outcomes_idempotent() -> None:
+    installation_id = _random_installation_id()
+    await _seed_installation(installation_id)
+    review_id = await _seed_review(installation_id, findings=[{}])
+
+    await seed_pending_finding_outcomes(review_id, installation_id, 1, [None])
+    await seed_pending_finding_outcomes(review_id, installation_id, 1, [999])
+
+    rows = await list_review_finding_outcomes(review_id, installation_id)
+    assert len(rows) == 1
+    # Second call should update the comment_id since it was None before
+    assert rows[0]["github_comment_id"] == 999
+
+
+# ---------------------------------------------------------------------------
+# classify_finding_outcome — more paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_classify_finding_outcome_abandoned_for_closed_unmerged_pr() -> None:
+    now = datetime.now(timezone.utc)
+    review = SimpleNamespace(id=1, installation_id=1, created_at=now, completed_at=now)
+    finding = {
+        "file_path": "src/main.py",
+        "line_start": 5,
+        "line_end": 5,
+        "target_line_content": "x = 1",
+        "suggestion": None,
+    }
+    decision = await classify_finding_outcome(
+        gh=_FakeGitHubClient(),
+        owner="acme",
+        repo="repo",
+        pr_number=1,
+        review=review,
+        finding=finding,
+        comment_id=None,
+        pr_state={"state": "closed", "merged": False},
+    )
+    assert decision.outcome == Outcome.ABANDONED
+
+
+@pytest.mark.anyio
+async def test_classify_finding_outcome_ignored_merged_no_reactions() -> None:
+    now = datetime.now(timezone.utc)
+    review = SimpleNamespace(id=2, installation_id=1, created_at=now, completed_at=now)
+    finding = {
+        "file_path": "src/main.py",
+        "line_start": 5,
+        "line_end": 5,
+        "target_line_content": "print('hi')",
+        "suggestion": None,
+    }
+    decision = await classify_finding_outcome(
+        gh=_FakeGitHubClient(),
+        owner="acme",
+        repo="repo",
+        pr_number=1,
+        review=review,
+        finding=finding,
+        comment_id=None,
+        pr_state={"state": "closed", "merged": True},
+    )
+    assert decision.outcome == Outcome.IGNORED
+
+
+@pytest.mark.anyio
+async def test_classify_finding_outcome_dismissed_negative_reaction() -> None:
+    class _NegativeClient(_FakeGitHubClient):
+        async def get_pull_review_comment_reactions(self, *_a: object, **_k: object) -> list:
+            return [{"content": "-1"}]
+
+    now = datetime.now(timezone.utc)
+    review = SimpleNamespace(id=3, installation_id=1, created_at=now, completed_at=now)
+    finding = {
+        "file_path": "src/main.py",
+        "line_start": 10,
+        "line_end": 10,
+        "target_line_content": "value = x",
+        "suggestion": None,
+    }
+    decision = await classify_finding_outcome(
+        gh=_NegativeClient(),
+        owner="acme",
+        repo="repo",
+        pr_number=1,
+        review=review,
+        finding=finding,
+        comment_id=555,
+        pr_state={"state": "closed", "merged": True},
+    )
+    assert decision.outcome == Outcome.DISMISSED
+
+
+@pytest.mark.anyio
+async def test_classify_finding_outcome_pending_for_recent_open_pr() -> None:
+    now = datetime.now(timezone.utc)
+    review = SimpleNamespace(id=4, installation_id=1, created_at=now, completed_at=now)
+    finding = {
+        "file_path": "src/main.py",
+        "line_start": 5,
+        "line_end": 5,
+        "target_line_content": "api_key = 'secret'",
+        "suggestion": None,
+    }
+    decision = await classify_finding_outcome(
+        gh=_FakeGitHubClient(),
+        owner="acme",
+        repo="repo",
+        pr_number=1,
+        review=review,
+        finding=finding,
+        comment_id=None,
+        pr_state={"state": "open", "merged": False},
+    )
+    assert decision.outcome == Outcome.PENDING
+
+
+@pytest.mark.anyio
+async def test_classify_finding_outcome_dismissed_resolved_negative_reply() -> None:
+    class _ResolvedNegativeClient(_FakeGitHubClient):
+        async def is_pull_review_thread_resolved(self, *_a: object, **_k: object) -> bool:
+            return True
+
+        async def get_pull_review_comment_replies(self, *_a: object, **_k: object) -> list:
+            return [{"body": "won't fix this"}]
+
+    now = datetime.now(timezone.utc)
+    review = SimpleNamespace(id=5, installation_id=1, created_at=now, completed_at=now)
+    finding = {
+        "file_path": "src/main.py",
+        "line_start": 15,
+        "line_end": 15,
+        "target_line_content": "x = dangerous_call()",
+        "suggestion": None,
+    }
+    decision = await classify_finding_outcome(
+        gh=_ResolvedNegativeClient(),
+        owner="acme",
+        repo="repo",
+        pr_number=1,
+        review=review,
+        finding=finding,
+        comment_id=777,
+        pr_state={"state": "closed", "merged": True},
+    )
+    assert decision.outcome == Outcome.DISMISSED
+
+
+# ---------------------------------------------------------------------------
+# detect_suggestion_apply
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_detect_suggestion_apply_empty_suggestion_returns_none() -> None:
+    result = await detect_suggestion_apply(
+        gh=_FakeGitHubClient(),
+        owner="acme",
+        repo="repo",
+        commits=[],
+        suggestion="",
+        file_path="src/main.py",
+        line_start=1,
+        line_end=1,
+    )
+    assert result == "none"
+
+
+@pytest.mark.anyio
+async def test_detect_suggestion_apply_no_commits_returns_none() -> None:
+    result = await detect_suggestion_apply(
+        gh=_FakeGitHubClient(),
+        owner="acme",
+        repo="repo",
+        commits=[],
+        suggestion="x = encrypt(secret)",
+        file_path="src/main.py",
+        line_start=1,
+        line_end=1,
+    )
+    assert result == "none"
+
+
+@pytest.mark.anyio
+async def test_detect_suggestion_apply_near_match_returns_near() -> None:
+
+    class _CommitFilesClient(_FakeGitHubClient):
+        async def get_commit_files(self, _o: str, _r: str, _sha: str) -> list:
+            return [
+                {
+                    "filename": "src/auth.py",
+                    "patch": "+x = encrypt(secret)\n+return x",
+                }
+            ]
+
+    commits = [{"sha": "abc123", "co_authored_by": None}]
+    result = await detect_suggestion_apply(
+        gh=_CommitFilesClient(),
+        owner="acme",
+        repo="repo",
+        commits=commits,
+        suggestion="x = encrypt(secret)",
+        file_path="src/auth.py",
+        line_start=1,
+        line_end=1,
+    )
+    assert result == "near"

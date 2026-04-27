@@ -23,6 +23,12 @@ loadEnvConfig(
 );
 
 // default-src alone blocks inline script/style that React/Next hydration relies on.
+// React + Next dev tooling (e.g. Turbopack, stack reconstruction) uses eval(); never in production bundles.
+const isDev = process.env.NODE_ENV !== "production";
+const scriptSrc = isDev
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+  : "script-src 'self' 'unsafe-inline'";
+
 const csp = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -32,7 +38,7 @@ const csp = [
   "font-src 'self' data:",
   // Allow HTTPS APIs when NEXT_PUBLIC_* points at Railway (or OAuth); prefer same-origin /api/* via BFF.
   "connect-src 'self' https:",
-  "script-src 'self' 'unsafe-inline'",
+  scriptSrc,
   "style-src 'self' 'unsafe-inline'",
 ].join("; ");
 
@@ -47,11 +53,21 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  images: {
+    // Next.js 16+: local src with query strings must match localPatterns (omit `search` to allow any ?v=…).
+    localPatterns: [{ pathname: "/logo.png" }, { pathname: "/me.png" }],
+    // In dev, avoid long-lived /_next/image optimizer cache when iterating on public/logo.png.
+    ...(isDev ? { minimumCacheTTL: 0 } : {}),
+  },
   async headers() {
     return [
       {
         source: "/:path*",
         headers: securityHeaders,
+      },
+      {
+        source: "/logo.png",
+        headers: [{ key: "Cache-Control", value: "public, max-age=0, must-revalidate" }],
       },
     ];
   },

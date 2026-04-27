@@ -6,7 +6,11 @@ from uuid import uuid4
 
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
-from app.webhooks.handlers import queue_pull_request_review, sync_installation_from_webhook
+from app.webhooks.handlers import (
+    _primary_provider_for_circuit_breaker,
+    queue_pull_request_review,
+    sync_installation_from_webhook,
+)
 from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
 
 
@@ -18,6 +22,10 @@ class _FakeJob:
 class _FakeRedis:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
+
+    async def exists(self, *keys: object) -> int:
+        """Redis EXISTS shim: no keys stored in this fake, so circuit is never open."""
+        return 0
 
     async def enqueue_job(self, *args: object) -> _FakeJob:
         self.calls.append(args)
@@ -59,6 +67,13 @@ def _installation_payload(installation_id: int, action: str) -> GitHubInstallati
             },
         }
     )
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_global_engine_after_test() -> None:
+    """Each AnyIO test can use a fresh asyncio loop; dispose the pool so later tests do not reuse dead connections."""
+    yield
+    await engine.dispose()
 
 
 @pytest.mark.anyio
@@ -238,3 +253,59 @@ async def test_queue_pull_request_review_skip_tag_case_insensitive(
 
     await queue_pull_request_review(redis, payload)
     assert not redis.calls
+
+
+@pytest.mark.anyio
+async def test_primary_provider_for_circuit_breaker_prefers_default_when_configured(
+) -> None:
+    installation_id = randint(100_000_000, 999_999_999)
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            Installation(
+                installation_id=installation_id,
+                account_login=f"acme-{installation_id}",
+                account_type="Organization",
+            )
+        )
+        await session.commit()
+    assert await _primary_provider_for_circuit_breaker(installation_id) == "anthropic"
+
+
+@pytest.mark.anyio
+async def test_primary_provider_for_circuit_breaker_falls_back_to_first_configured(
+) -> None:
+    installation_id = randint(100_000_000, 999_999_999)
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            Installation(
+                installation_id=installation_id,
+                account_login=f"acme-{installation_id}",
+                account_type="Organization",
+            )
+        )
+        session.add_all(
+            [
+                Review(
+                    installation_id=installation_id,
+                    repo_full_name="acme/repo",
+                    pr_number=1,
+                    pr_head_sha=(uuid4().hex + uuid4().hex)[:40],
+                    status="done",
+                    model_provider="anthropic",
+                    model="claude-sonnet-4-5",
+                ),
+                Review(
+                    installation_id=installation_id,
+                    repo_full_name="acme/repo",
+                    pr_number=2,
+                    pr_head_sha=(uuid4().hex + uuid4().hex)[:40],
+                    status="done",
+                    model_provider="openai",
+                    model="gpt-5.5",
+                ),
+            ]
+        )
+        await session.commit()
+    assert await _primary_provider_for_circuit_breaker(installation_id) == "openai"

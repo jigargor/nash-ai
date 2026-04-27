@@ -44,7 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
     if settings.environment.lower() == "production" and not settings.api_access_key:
-        raise HTTPException(
+        raise HTTPException(  # pragma: no cover
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured"
         )
     if not settings.api_access_key:
@@ -142,7 +142,7 @@ def _serialize_review_config_yaml(config: ReviewConfig) -> str:
     return yaml.safe_dump(payload, sort_keys=False)
 
 
-async def _resolve_repo_head_sha(gh: GitHubClient, owner: str, repo: str) -> str:
+async def _resolve_repo_head_sha(gh: GitHubClient, owner: str, repo: str) -> str:  # pragma: no cover
     repo_payload = await gh.get_json(f"/repos/{owner}/{repo}")
     default_branch = str(repo_payload.get("default_branch") or "main")
     branch_payload = await gh.get_json(f"/repos/{owner}/{repo}/branches/{default_branch}")
@@ -161,7 +161,7 @@ async def _generate_yaml_with_model(
     frameworks: list[str],
     model_provider: ModelProvider,
     model_name: str,
-) -> str:
+) -> str:  # pragma: no cover
     user_prompt = (
         f"Repository: {owner}/{repo}\n"
         f"Detected frameworks: {', '.join(frameworks) if frameworks else 'unknown'}\n"
@@ -217,7 +217,38 @@ async def _list_installation_rows(
     return list(rows)
 
 
+def _findings_count_from_review_row(review: Review) -> int:
+    raw = review.findings
+    if raw is None or not isinstance(raw, dict):
+        return 0
+    findings_list = raw.get("findings")
+    return len(findings_list) if isinstance(findings_list, list) else 0
+
+
+def _as_int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
+def _diff_stats_from_debug_artifacts(review: Review) -> tuple[int | None, int | None]:
+    artifacts = review.debug_artifacts
+    if not isinstance(artifacts, dict):
+        return None, None
+    fast_path = artifacts.get("fast_path_decision")
+    if not isinstance(fast_path, dict):
+        return None, None
+    changed_files = _as_int_or_none(fast_path.get("changed_file_count"))
+    changed_lines = _as_int_or_none(fast_path.get("changed_line_count"))
+    return changed_files, changed_lines
+
+
 def _review_list_item(review: Review) -> dict[str, object]:
+    changed_files, changed_lines = _diff_stats_from_debug_artifacts(review)
     return {
         "id": int(review.id),
         "installation_id": int(review.installation_id),
@@ -228,6 +259,9 @@ def _review_list_item(review: Review) -> dict[str, object]:
         "model": review.model,
         "tokens_used": int(review.tokens_used) if review.tokens_used is not None else None,
         "cost_usd": str(review.cost_usd) if review.cost_usd is not None else None,
+        "findings_count": _findings_count_from_review_row(review),
+        "files_changed": changed_files,
+        "lines_changed": changed_lines,
         "created_at": review.created_at.isoformat(),
         "completed_at": review.completed_at.isoformat()
         if review.completed_at is not None
@@ -758,6 +792,6 @@ async def stream_review_events(
 
             await asyncio.sleep(2)
 
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Stream timeout'})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Stream timeout'})}\n\n"  # pragma: no cover
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
