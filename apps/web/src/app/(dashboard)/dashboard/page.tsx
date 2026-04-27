@@ -9,6 +9,7 @@ import { useOutcomeSummary } from "@/hooks/use-outcome-summary";
 import { useInstallations } from "@/hooks/use-installations";
 import { useRerunReview } from "@/hooks/use-review-actions";
 import { useReviews } from "@/hooks/use-reviews";
+import { isReviewInFlightStatus } from "@/lib/review-status";
 
 export default function DashboardHomePage() {
   const installations = useInstallations();
@@ -89,12 +90,15 @@ export default function DashboardHomePage() {
                 </Link>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", color: "var(--text-muted)" }}>
                   <span>
-                    {review.status} · {review.tokens_used ?? 0} tokens · ${review.cost_usd ?? "0.000000"}
+                    {isReviewInFlightStatus(review.status) ? "● " : ""}
+                    {review.status}
+                    {isReviewInFlightStatus(review.status) ? " (refreshing…)" : ""} · {review.tokens_used ?? 0} tokens · $
+                    {review.cost_usd ?? "0.000000"}
                   </span>
                   {review.status === "failed" ? (
                     <Button
                       variant="ghost"
-                      disabled={retryReview.isPending}
+                      disabled={retryReview.isPending && retryReview.variables?.reviewId === review.id}
                       onClick={() =>
                         retryReview.mutate({
                           reviewId: review.id,
@@ -102,7 +106,7 @@ export default function DashboardHomePage() {
                         })
                       }
                     >
-                      {retryReview.isPending && retryReview.variables?.reviewId === review.id ? "Retrying..." : "Retry"}
+                      {retryReview.isPending && retryReview.variables?.reviewId === review.id ? "Queuing…" : "Retry"}
                     </Button>
                   ) : null}
                 </div>

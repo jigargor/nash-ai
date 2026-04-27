@@ -7,6 +7,7 @@ import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { useInstallations } from "@/hooks/use-installations";
 import { useReviews } from "@/hooks/use-reviews";
+import { isReviewInFlightStatus } from "@/lib/review-status";
 
 export default function ReviewsPage() {
   const installations = useInstallations();
@@ -103,7 +104,9 @@ export default function ReviewsPage() {
                   {review.repo_full_name} · PR #{review.pr_number}
                 </span>
                 <span style={{ color: "var(--text-muted)" }}>
+                  {isReviewInFlightStatus(review.status) ? "● " : ""}
                   {review.status}
+                  {isReviewInFlightStatus(review.status) ? " (refreshing…)" : ""}
                   {review.model_provider || review.model ? ` · ${review.model_provider ?? "provider"}/${review.model ?? "model"}` : ""}
                   {" · "}
                   {review.tokens_used ?? 0} tokens · ${review.cost_usd ?? "0.000000"}
