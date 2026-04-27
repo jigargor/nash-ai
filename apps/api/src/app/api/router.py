@@ -355,7 +355,15 @@ async def get_repo_codereview_config(
     repo = _validate_repo_segment(repo, "repository name")
     gh = await GitHubClient.for_installation(installation_id)
     raw = await safe_fetch_file(gh, owner, repo, ".codereview.yml", "HEAD")
-    return {"found": raw is not None, "yaml_text": raw}
+    config_json: dict[str, object] | None = None
+    if raw is not None:
+        try:
+            parsed = yaml.safe_load(raw)
+            if isinstance(parsed, dict):
+                config_json = parsed
+        except yaml.YAMLError:
+            pass
+    return {"found": raw is not None, "yaml_text": raw, "config_json": config_json}
 
 
 @router.post("/repos/{owner}/{repo}/codereview-template/generate")
