@@ -540,6 +540,7 @@ async def get_review(
             "finding_outcomes": await list_review_finding_outcomes(
                 int(review.id), int(review.installation_id)
             ),
+            "debug_artifacts": review.debug_artifacts,
         }
 
 
@@ -616,6 +617,9 @@ async def get_review_model_audits(
                 if row.conflict_score is not None
                 else None,
                 "decision": row.decision,
+                "stage_duration_ms": int(row.stage_duration_ms)
+                if row.stage_duration_ms is not None
+                else None,
                 "metadata_json": row.metadata_json,
                 "created_at": row.created_at.isoformat() if row.created_at is not None else None,
             }

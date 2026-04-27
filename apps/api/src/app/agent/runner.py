@@ -538,6 +538,12 @@ async def run_review(
             decision="generated",
             model_resolution=primary_resolution,
             stage_started_at=primary_stage_started_at,
+            extra_metadata={
+                "system_prompt_tokens": count_tokens(system_prompt),
+                "user_prompt_tokens": count_tokens(user_prompt),
+                "output_summary_excerpt": (result.summary or "")[:400] or None,
+                "context_layers": context_bundle.telemetry.as_dict(),
+            },
         )
         tools_called_per_file = extract_tool_usage_by_file(messages)
         tool_call_history = extract_tool_call_history(messages)
@@ -696,6 +702,11 @@ async def run_review(
                 decision="challenged",
                 model_resolution=challenger_resolution,
                 stage_started_at=challenger_stage_started_at,
+                extra_metadata={
+                    "primary_findings_count": len(draft_result.findings),
+                    "challenger_findings_count": len(challenger_result.findings),
+                    "merge_strategy": "consensus",
+                },
             )
             tie_break_result: ReviewResult | None = None
             should_tie_break = (
@@ -735,6 +746,9 @@ async def run_review(
                     decision="tie_break",
                     model_resolution=tie_break_resolution,
                     stage_started_at=tie_break_stage_started_at,
+                    extra_metadata={
+                        "conflict_resolution": "tie_break_accepted",
+                    },
                 )
             draft_result = _merge_debate_results(
                 primary=draft_result,
@@ -766,6 +780,7 @@ async def run_review(
             provider=editor_resolution.provider,
             context=context,
         )
+        _editor_actions = Counter(d.action for d in edited_result.decisions)
         await _record_model_audit(
             context=context,
             stage="editor",
@@ -777,6 +792,11 @@ async def run_review(
             decision="edited",
             model_resolution=editor_resolution,
             stage_started_at=editor_stage_started_at,
+            extra_metadata={
+                "keep_count": _editor_actions.get("keep", 0),
+                "drop_count": _editor_actions.get("drop", 0),
+                "modify_count": _editor_actions.get("modify", 0),
+            },
         )
         final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
         final_result = _apply_review_config_filters(final_result, review_config)
@@ -1169,6 +1189,8 @@ async def _run_chunked_review(
 
         _set_chunk_state(chunk_state, chunk.chunk_id, status="running")
         await persist_chunk_state(context, chunk_state)
+        chunk_stage_started_at = monotonic()
+        chunk_token_snapshot = _token_snapshot(context)
         try:
             messages = await run_agent(
                 system_prompt,
@@ -1183,6 +1205,24 @@ async def _run_chunked_review(
                 context,
                 model_name=chunk_resolution.model,
                 provider=chunk_resolution.provider,
+            )
+            await _record_model_audit(
+                context=context,
+                stage="chunk_review",
+                provider=chunk_resolution.provider,
+                model=chunk_resolution.model,
+                token_before=chunk_token_snapshot,
+                findings_count=len(chunk_result.findings),
+                decision="generated",
+                model_resolution=chunk_resolution,
+                stage_started_at=chunk_stage_started_at,
+                extra_metadata={
+                    "chunk_id": chunk.chunk_id,
+                    "chunk_file_count": len(chunk.files),
+                    "chunk_file_paths": [entry.path for entry in chunk.files[:10]],
+                    "chunk_estimated_tokens": chunk.estimated_prompt_tokens,
+                    "output_summary_excerpt": (chunk_result.summary or "")[:300] or None,
+                },
             )
             chunk_result.findings = _repair_findings_from_files(
                 chunk_result.findings,

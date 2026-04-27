@@ -31,6 +31,7 @@ export interface ReviewDetail {
   created_at: string;
   completed_at: string | null;
   finding_outcomes: FindingOutcome[];
+  debug_artifacts: Record<string, unknown> | null;
 }
 
 export interface ReviewOutcomeResponse {
@@ -52,6 +53,7 @@ export interface ReviewModelAudit {
   accepted_findings_count: number | null;
   conflict_score: number | null;
   decision: string;
+  stage_duration_ms: number | null;
   metadata_json: Record<string, unknown> | null;
   created_at: string | null;
 }

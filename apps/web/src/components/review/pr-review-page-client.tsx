@@ -3,6 +3,7 @@
 import type { Finding } from "@ai-code-review/shared-types";
 import { useEffect } from "react";
 
+import { ActionChain } from "@/components/review/action-chain";
 import { DiffViewer } from "@/components/review/diff-viewer";
 import { FileTree } from "@/components/review/file-tree";
 import { FindingsPanel } from "@/components/review/findings-panel";
@@ -154,7 +155,6 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         </div>
         <p style={{ color: "var(--text-muted)", marginBottom: 0, marginTop: "0.45rem", fontSize: "0.85rem" }}>
           Model: {reviewQuery.data.model_provider ?? "provider"} / {reviewQuery.data.model}
-          {modelAudits.data ? ` · audit stages: ${modelAudits.data.model_audits.length}` : ""}
         </p>
         <Button
           variant={isFailedReview ? "danger" : "ghost"}
@@ -165,6 +165,14 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
           {isInFlight ? "Review in progress…" : isFailedReview ? "Retry review" : "Re-run review"}
         </Button>
       </Panel>
+
+      {modelAudits.data && modelAudits.data.model_audits.length > 0 && (
+        <ActionChain
+          audits={modelAudits.data.model_audits}
+          debugArtifacts={reviewQuery.data.debug_artifacts ?? null}
+          costUsd={reviewQuery.data.cost_usd}
+        />
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(380px, 2fr) minmax(260px, 1fr)", minHeight: "60vh" }} className="panel panel-elevated">
         <FileTree findings={findings} onSelectFinding={setSelectedFindingIndex} />
