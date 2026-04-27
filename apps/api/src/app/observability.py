@@ -1,3 +1,4 @@
+import importlib.util
 import logging
 from typing import Any
 
@@ -67,23 +68,24 @@ def record_review_trace(metadata: dict[str, Any]) -> None:
 
 
 def create_async_anthropic_client(api_key: str) -> AsyncAnthropic:
-    """Return Anthropic async client; Langfuse auto-wrap only when available (removed in langfuse v4+)."""
+    """Return Anthropic async client; Langfuse auto-wrap only when ``langfuse.anthropic`` exists (dropped in v4+)."""
     global _LANGFUSE_ANTHROPIC_SHIM_WARNED
     if settings.langfuse_public_key and settings.langfuse_secret_key:
-        try:
-            from langfuse.anthropic import AsyncAnthropic as LangfuseAsyncAnthropic  # type: ignore[import-not-found]
-        except ModuleNotFoundError:
-            # Langfuse 4.x dropped langfuse.anthropic; traces still work via Langfuse SDK / record_review_trace.
+        if importlib.util.find_spec("langfuse.anthropic") is None:
             if not _LANGFUSE_ANTHROPIC_SHIM_WARNED:
                 logger.warning(
-                    "Langfuse Anthropic shim unavailable; using anthropic.AsyncAnthropic directly"
+                    "Langfuse Anthropic shim not present (expected on langfuse>=4); "
+                    "using anthropic.AsyncAnthropic; traces still use Langfuse SDK when configured"
                 )
                 _LANGFUSE_ANTHROPIC_SHIM_WARNED = True
-        except Exception:
-            logger.exception("Failed to import Langfuse Anthropic wrapper; using standard client")
         else:
             try:
-                return LangfuseAsyncAnthropic(api_key=api_key)
-            except Exception:
-                logger.exception("Failed to construct Langfuse Anthropic client; using standard client")
+                from langfuse.anthropic import AsyncAnthropic as LangfuseAsyncAnthropic  # type: ignore[import-not-found]
+            except ImportError:
+                logger.exception("Failed to import Langfuse Anthropic wrapper; using standard client")
+            else:
+                try:
+                    return LangfuseAsyncAnthropic(api_key=api_key)
+                except Exception:
+                    logger.exception("Failed to construct Langfuse Anthropic client; using standard client")
     return AsyncAnthropic(api_key=api_key)
