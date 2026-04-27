@@ -46,7 +46,10 @@ async def _resolve_user(github_id: int) -> User:
             await session.execute(select(User).where(User.github_id == github_id))
         ).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account not found — please log out and back in to register your account.",
+        )
     if row.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return row
@@ -185,6 +188,10 @@ async def delete_current_user(
     return {"detail": "User marked for deletion"}
 
 
+def _empty_key_list() -> list[KeyStatusResponse]:
+    return [KeyStatusResponse(provider=p, has_key=False) for p in sorted(SUPPORTED_PROVIDERS)]
+
+
 @router.get("/me/keys", response_model=list[KeyStatusResponse])
 async def list_user_keys(
     x_user_github_id: int | None = Header(default=None),
@@ -192,8 +199,15 @@ async def list_user_keys(
     """List which providers the user has keys stored for. Never returns key material."""
     if x_user_github_id is None:
         raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
-    user = await _resolve_user(x_user_github_id)
+
     async with AsyncSessionLocal() as session:
+        user = (
+            await session.execute(select(User).where(User.github_id == x_user_github_id))
+        ).scalar_one_or_none()
+        # User row may not exist yet if they logged in before the upsert-on-login was deployed.
+        # Return empty list rather than 404 — the UI will show all providers as "Not set".
+        if user is None or user.deleted_at is not None:
+            return _empty_key_list()
         rows = (
             (
                 await session.execute(
