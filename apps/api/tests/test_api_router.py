@@ -8,7 +8,6 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
 
 from app.api import router as api_router
 from app.config import settings

@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, Mapping, Protocol, cast
+from typing import Any, Mapping, Protocol, cast
 
 import yaml
 from pydantic import ValidationError
@@ -9,7 +9,7 @@ from app.agent.schema import ContextBudgets
 from app.github.utils import safe_fetch_file
 from app.llm.catalog.loader import load_baseline_catalog
 from app.llm.router import ModelRoleRoutingConfig, ModelsRoutingConfig
-from app.llm.types import ModelProvider, ModelTier
+from app.llm.types import ModelProvider as ModelProvider, ModelTier
 
 
 class _GitHubFileReader(Protocol):
