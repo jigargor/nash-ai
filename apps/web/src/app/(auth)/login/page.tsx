@@ -1,54 +1,63 @@
 import Image from "next/image";
+import Link from "next/link";
 
-export default function LoginPage() {
+import { logoPngSrc } from "@/lib/branding";
+
+interface LoginPageProps {
+  searchParams: Promise<{ error?: string }>;
+}
+
+function errorMessage(code: string | undefined): string | null {
+  if (!code) return null;
+  if (code === "terms" || code === "terms_required") {
+    return "Please accept the Terms & Conditions to continue.";
+  }
+  if (code === "state_mismatch") return "Sign-in session expired. Please try again.";
+  if (code === "oauth_failed") return "GitHub sign-in failed. Please try again.";
+  return "Something went wrong. Please try again.";
+}
+
+export default async function LoginPage({ searchParams }: LoginPageProps) {
+  const sp = await searchParams;
+  const err = errorMessage(sp.error);
+
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        placeItems: "center",
-        padding: "2rem",
-      }}
-    >
-      <section
-        style={{
-          width: "min(420px, 100%)",
-          border: "1px solid var(--border)",
-          background: "var(--card)",
-          borderRadius: "0.75rem",
-          padding: "1.5rem",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: "1.5rem" }}>
+    <main className="login-page">
+      <section className="login-card">
+        <div className="login-logo-wrap">
           <Image
-            src="/logo.svg"
+            src={logoPngSrc()}
             alt="Nash AI logo"
             width={200}
             height={200}
             priority
-            style={{ width: "min(200px, 70vw)", height: "auto", display: "block" }}
+            className="login-logo"
           />
         </div>
-        <h1 style={{ marginTop: 0, fontFamily: "var(--font-instrument-serif)" }}>Sign in</h1>
-        <p style={{ color: "var(--text-muted)" }}>
-          Authenticate with your GitHub account to access the review dashboard.
-        </p>
-        {/* Full navigation: OAuth route must not use client-side <Link>. */}
-        {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- API OAuth redirect */}
-        <a
-          href="/api/v1/auth/login"
-          style={{
-            display: "inline-block",
-            marginTop: "1rem",
-            padding: "0.65rem 1rem",
-            borderRadius: "0.5rem",
-            border: "1px solid var(--border)",
-            background: "var(--background)",
-            textDecoration: "none",
-          }}
-        >
-          Login with GitHub
-        </a>
+        <h1 className="login-title">Sign in</h1>
+        <p className="login-lead">Authenticate with your GitHub account to access the review dashboard.</p>
+
+        {err ? (
+          <p className="login-error" role="alert">
+            {err}
+          </p>
+        ) : null}
+
+        <form action="/api/v1/auth/login" method="post" className="login-form">
+          <label className="login-terms-label">
+            <input type="checkbox" name="accept_terms" value="on" required className="login-terms-checkbox" />
+            <span>
+              I have read and agree to the{" "}
+              <Link href="/terms" className="login-inline-link">
+                Terms & Conditions
+              </Link>
+              .
+            </span>
+          </label>
+          <button type="submit" className="button button-primary login-submit">
+            Continue with GitHub
+          </button>
+        </form>
       </section>
     </main>
   );
