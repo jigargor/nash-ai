@@ -546,9 +546,14 @@ async def test_is_pull_review_thread_resolved_returns_false_on_error_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _fake_client()
+    error = httpx.HTTPStatusError(
+        "404",
+        request=_FAKE_REQUEST,
+        response=httpx.Response(404, content=b"{}", request=_FAKE_REQUEST),
+    )
     monkeypatch.setattr(
         "app.github.client._request_with_retry",
-        AsyncMock(return_value=httpx.Response(404, content=b"{}", request=_FAKE_REQUEST)),
+        AsyncMock(side_effect=error),
     )
     result = await client.is_pull_review_thread_resolved("acme", "repo", 1, 42)
     assert result is False

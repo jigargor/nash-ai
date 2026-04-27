@@ -84,7 +84,10 @@ def _write_dataset(out_dir: Path, data: dict, *, force: bool) -> None:
     prompts_dir.mkdir(exist_ok=True)
 
     # diff.patch — consumed by run_eval.py harness
-    (out_dir / "diff.patch").write_text(data["diff_text"], encoding="utf-8")
+    diff_text = data.get("diff_text", "")
+    if not diff_text:
+        print("Warning: diff_text is empty or missing in snapshot.", file=sys.stderr)
+    (out_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
 
     # context.json — consumed by run_eval.py harness
     pr = data.get("pr_metadata", {})

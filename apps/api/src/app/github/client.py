@@ -43,21 +43,21 @@ async def _request_with_retry(
     GitHub secondary rate limits return 403 with Retry-After; primary rate
     limits return 429.  Transient 5xx also deserve a retry.
     """
-    for attempt in range(_MAX_RETRIES + 1):
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        for attempt in range(_MAX_RETRIES + 1):
             response = await client.request(method, url, headers=headers, params=params, json=json)
-        if response.status_code not in _RETRYABLE_STATUS:
-            response.raise_for_status()
-            return response
-        if attempt == _MAX_RETRIES:
-            response.raise_for_status()
-        retry_after_raw = response.headers.get("Retry-After", "")
-        try:
-            retry_after = int(retry_after_raw)
-        except ValueError:
-            retry_after = 0
-        delay = retry_after if retry_after > 0 else (2**attempt + random.uniform(0, 1))
-        await asyncio.sleep(min(delay, 60))
+            if response.status_code not in _RETRYABLE_STATUS:
+                response.raise_for_status()
+                return response
+            if attempt == _MAX_RETRIES:
+                response.raise_for_status()
+            retry_after_raw = response.headers.get("Retry-After", "")
+            try:
+                retry_after = int(retry_after_raw)
+            except ValueError:
+                retry_after = 0
+            delay = retry_after if retry_after > 0 else (2**attempt + random.uniform(0, 1))
+            await asyncio.sleep(min(delay, 60))
     raise RuntimeError("unreachable")  # pragma: no cover
 
 
@@ -252,13 +252,14 @@ class GitHubClient:
     async def is_pull_review_thread_resolved(
         self, owner: str, repo: str, pr_number: int, comment_id: int
     ) -> bool:
-        response = await _request_with_retry(
-            "GET",
-            f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/threads",
-            self._headers,
-            params={"per_page": 100},
-        )
-        if response.status_code >= 400:
+        try:
+            response = await _request_with_retry(
+                "GET",
+                f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/threads",
+                self._headers,
+                params={"per_page": 100},
+            )
+        except httpx.HTTPStatusError:
             return False
         payload = response.json()
         if not isinstance(payload, list):
