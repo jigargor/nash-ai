@@ -613,10 +613,14 @@ async def test_run_chunked_review_skips_failed_chunk_and_returns_result(monkeypa
 
     monkeypatch.setattr("app.agent.runner.persist_chunk_state", _noop)
 
-    async def _failing_run_agent(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+    async def _ok_run_agent(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        return [{"role": "assistant", "content": []}]
+
+    async def _failing_finalize(*_args: object, **_kwargs: object) -> ReviewResult:
         raise RuntimeError("finalize exploded")
 
-    monkeypatch.setattr("app.agent.runner.run_agent", _failing_run_agent)
+    monkeypatch.setattr("app.agent.runner.run_agent", _ok_run_agent)
+    monkeypatch.setattr("app.agent.runner.finalize_review", _failing_finalize)
     async def _fake_synthesis(**_kwargs: object) -> ReviewResult:
         return ReviewResult(findings=[], summary="Cross-chunk synthesis summary.")
 

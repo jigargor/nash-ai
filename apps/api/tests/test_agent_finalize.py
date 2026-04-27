@@ -1,11 +1,11 @@
-from types import SimpleNamespace
-
 import pytest
 from pydantic import ValidationError
 
 from app.agent import finalize as finalize_module
 from app.agent.finalize import _build_schema_feedback, _repair_review_input
+from app.agent.review_config import ModelProvider
 from app.agent.schema import ReviewResult
+from app.llm.providers import StructuredOutputResult
 
 
 def _minimal_finding(**overrides: object) -> dict[str, object]:
@@ -135,36 +135,19 @@ async def test_finalize_anthropic_recovers_after_retry_exhaustion(monkeypatch: p
         ],
     }
 
-    class _FakeClient:
-        class _Messages:
-            @staticmethod
-            async def create(**_kwargs: object) -> object:
-                return SimpleNamespace(
-                    usage=SimpleNamespace(),
-                    content=[SimpleNamespace(type="tool_use", name="submit_review", input=bad_payload)],
-                )
-
-        messages = _Messages()
-
     class _FakeAdapter:
-        @staticmethod
-        def render_anthropic_system(system_prompt: str, _options: object) -> str:
-            return system_prompt
+        async def structured_output(self, *, request: object) -> StructuredOutputResult:  # noqa: ARG002
+            usage = type("Usage", (), {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})()
+            return StructuredOutputResult(payload=bad_payload, raw_response={"fake": True}, usage=usage)
 
-        @staticmethod
-        def parse_usage(_usage: object) -> dict[str, int]:
-            return {}
-
-    monkeypatch.setattr(finalize_module, "create_async_anthropic_client", lambda _api_key: _FakeClient())
-    monkeypatch.setattr(finalize_module, "get_provider_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(finalize_module, "get_provider_adapter", lambda _provider: _FakeAdapter())
-    monkeypatch.setattr(finalize_module, "record_usage", lambda *_args, **_kwargs: None)
 
-    result = await finalize_module._finalize_anthropic(
+    result = await finalize_module.finalize_review(
         system_prompt="sys",
         messages=[],
         context={},
         model_name="claude-sonnet-4-5",
+        provider="anthropic",
         validation_feedback=None,
         allow_retry=False,
     )
@@ -178,39 +161,49 @@ async def test_finalize_anthropic_recovers_after_retry_exhaustion(monkeypatch: p
 
 @pytest.mark.anyio
 async def test_finalize_anthropic_missing_submit_tool_returns_safe_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _FakeClient:
-        class _Messages:
-            @staticmethod
-            async def create(**_kwargs: object) -> object:
-                return SimpleNamespace(
-                    usage=SimpleNamespace(),
-                    content=[SimpleNamespace(type="text", text="No tool payload")],
-                )
-
-        messages = _Messages()
-
     class _FakeAdapter:
-        @staticmethod
-        def render_anthropic_system(system_prompt: str, _options: object) -> str:
-            return system_prompt
+        async def structured_output(self, *, request: object) -> StructuredOutputResult:  # noqa: ARG002
+            raise RuntimeError("submit_review tool missing")
 
-        @staticmethod
-        def parse_usage(_usage: object) -> dict[str, int]:
-            return {}
-
-    monkeypatch.setattr(finalize_module, "create_async_anthropic_client", lambda _api_key: _FakeClient())
-    monkeypatch.setattr(finalize_module, "get_provider_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(finalize_module, "get_provider_adapter", lambda _provider: _FakeAdapter())
-    monkeypatch.setattr(finalize_module, "record_usage", lambda *_args, **_kwargs: None)
 
-    result = await finalize_module._finalize_anthropic(
+    result = await finalize_module.finalize_review(
         system_prompt="sys",
         messages=[],
         context={},
         model_name="claude-sonnet-4-5",
+        provider="anthropic",
         validation_feedback=None,
         allow_retry=False,
     )
 
     assert result.findings == []
     assert "safe empty result" in result.summary.lower()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("provider", ["anthropic", "openai", "gemini"])
+async def test_finalize_review_same_payload_all_providers(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: ModelProvider,
+) -> None:
+    payload = {"summary": "Looks good.", "findings": [_minimal_finding()]}
+
+    class _FakeAdapter:
+        async def structured_output(self, *, request: object) -> StructuredOutputResult:  # noqa: ARG002
+            usage = type("Usage", (), {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})()
+            return StructuredOutputResult(payload=payload, raw_response={"fake": True}, usage=usage)
+
+    monkeypatch.setattr(finalize_module, "get_provider_adapter", lambda _provider: _FakeAdapter())
+
+    result = await finalize_module.finalize_review(
+        system_prompt="sys",
+        messages=[],
+        context={},
+        model_name="model",
+        provider=provider,
+    )
+
+    assert isinstance(result, ReviewResult)
+    assert len(result.findings) == 1
+    assert result.summary == "Looks good."

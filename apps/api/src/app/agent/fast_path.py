@@ -1,23 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError
 
 from app.agent.chunking import ClassifiedDiffFile, classify_diff_files
 from app.agent.context_builder import count_tokens
 from app.agent.diff_parser import FileInDiff
-from app.agent.provider_clients import (
-    anthropic_tools_to_openai_tools,
-    create_openai_compatible_client,
-    get_provider_api_key,
-    parse_openai_tool_arguments,
-)
 from app.agent.review_config import FastPathConfig
-from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
+from app.llm.providers import StructuredOutputRequest, get_provider_adapter
 from app.llm.types import ModelProvider
-from app.observability import create_async_anthropic_client
 
 FastPathDecisionValue = Literal["skip_review", "light_review", "full_review", "high_risk_review"]
 
@@ -236,71 +229,21 @@ async def _request_fast_path_decision(
     model_name: str,
     provider: ModelProvider,
 ) -> object:
-    if provider in {"openai", "gemini"}:
-        return await _request_openai_compatible(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            context=context,
-            model_name=model_name,
-            provider=provider,
-        )
-    return await _request_anthropic(system_prompt=system_prompt, user_prompt=user_prompt, context=context, model_name=model_name)
-
-
-async def _request_anthropic(*, system_prompt: str, user_prompt: str, context: dict[str, Any], model_name: str) -> object:
-    client = create_async_anthropic_client(get_provider_api_key("anthropic"))
-    adapter = get_provider_adapter("anthropic")
-    response = await client.messages.create(  # type: ignore[call-overload]
-        model=model_name,
-        max_tokens=1024,
-        system=adapter.render_anthropic_system(system_prompt, _cache_options(context)),
-        tools=[FAST_PATH_TOOL],
-        tool_choice={"type": "tool", "name": "classify_fast_path"},
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-    record_usage(context, "anthropic", model_name, adapter.parse_usage(response.usage))
-    for block in response.content:
-        if block.type == "tool_use" and block.name == "classify_fast_path":
-            return block.input
-    raise RuntimeError("Fast-path model did not return classify_fast_path tool output")
-
-
-async def _request_openai_compatible(
-    *,
-    system_prompt: str,
-    user_prompt: str,
-    context: dict[str, Any],
-    model_name: str,
-    provider: ModelProvider,
-) -> object:
-    client = create_openai_compatible_client(provider)
     adapter = get_provider_adapter(provider)
-    openai_messages: Any = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-    openai_tools: Any = anthropic_tools_to_openai_tools([FAST_PATH_TOOL])
-    openai_tool_choice: Any = {"type": "function", "function": {"name": "classify_fast_path"}}
-    response = await client.chat.completions.create(
-        model=model_name,
-        temperature=0,
-        messages=openai_messages,
-        tools=openai_tools,
-        tool_choice=openai_tool_choice,
-        **adapter.chat_completion_extra_kwargs(
-            system_prompt=system_prompt,
+    result = await adapter.structured_output(
+        request=StructuredOutputRequest(
             model_name=model_name,
-            options=_cache_options(context),
-        ),
+            system_prompt=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            tool_name=str(FAST_PATH_TOOL["name"]),
+            tool_description=str(FAST_PATH_TOOL["description"]),
+            input_schema=cast(dict[str, Any], FAST_PATH_TOOL["input_schema"]),
+            context=context,
+            max_tokens=1024,
+            temperature=0,
+        )
     )
-    if response.usage is not None:
-        record_usage(context, provider, model_name, adapter.parse_usage(response.usage))
-    if not response.choices:
-        raise RuntimeError("Fast-path model did not return a completion")
-    message = response.choices[0].message
-    for call in list(message.tool_calls or []):
-        function_obj = getattr(call, "function", None)
-        if getattr(function_obj, "name", None) == "classify_fast_path":
-            arguments = getattr(function_obj, "arguments", "{}")
-            return parse_openai_tool_arguments(arguments if isinstance(arguments, str) else "{}")
-    raise RuntimeError("Fast-path model did not return classify_fast_path tool output")
+    return result.payload
 
 
 def _system_prompt() -> str:
@@ -321,21 +264,6 @@ def _diff_excerpt(diff_text: str, max_tokens: int) -> str:
         lines.append(line[:500])
         tokens += line_tokens
     return "\n".join(lines)
-
-
-def _cache_options(context: dict[str, Any]) -> CacheRequestOptions:
-    return CacheRequestOptions(
-        cache_key=_optional_str(context.get("llm_prompt_cache_key")),
-        ttl=_optional_str(context.get("anthropic_cache_ttl")),
-        retention=_optional_str(context.get("openai_prompt_cache_retention")),
-        cached_content_name=_optional_str(context.get("gemini_cached_content_name")),
-    )
-
-
-def _optional_str(value: object) -> str | None:
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
 
 
 def _file_class_counts(classified: list[ClassifiedDiffFile]) -> dict[str, int]:
