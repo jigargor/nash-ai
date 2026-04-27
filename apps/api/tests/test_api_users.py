@@ -520,3 +520,42 @@ async def test_delete_user_key_user_not_found_returns_404(
         headers={**_auth_headers(), "X-User-Github-Id": "6666666"},
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_users_module_functions_cover_db_branches_directly() -> None:
+    """Direct function calls ensure DB branches are traced consistently on Py3.12."""
+    github_id = _rand_github_id()
+    await _seed_user(github_id)
+
+    # upsert branch: create then update existing key
+    body_create = users_module.UpsertKeyRequest(api_key="sk-direct-create-key-long-enough")
+    created = await users_module.upsert_user_key(
+        provider="anthropic",
+        body=body_create,
+        x_user_github_id=github_id,
+        validate=False,
+    )
+    assert "created" in created["detail"]
+
+    body_update = users_module.UpsertKeyRequest(api_key="sk-direct-update-key-long-enough")
+    updated = await users_module.upsert_user_key(
+        provider="anthropic",
+        body=body_update,
+        x_user_github_id=github_id,
+        validate=False,
+    )
+    assert "updated" in updated["detail"]
+
+    deleted = await users_module.delete_user_key(
+        provider="anthropic",
+        x_user_github_id=github_id,
+    )
+    assert "deleted" in deleted["detail"]
+
+    # delete_current_user happy path and already-deleted path
+    result = await users_module.delete_current_user(x_user_github_id=github_id)
+    assert result["detail"] == "User marked for deletion"
+    with pytest.raises(users_module.HTTPException) as exc_info:
+        await users_module.delete_current_user(x_user_github_id=github_id)
+    assert exc_info.value.status_code == 404

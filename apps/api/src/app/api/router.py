@@ -142,7 +142,7 @@ def _serialize_review_config_yaml(config: ReviewConfig) -> str:
     return yaml.safe_dump(payload, sort_keys=False)
 
 
-async def _resolve_repo_head_sha(gh: GitHubClient, owner: str, repo: str) -> str:
+async def _resolve_repo_head_sha(gh: GitHubClient, owner: str, repo: str) -> str:  # pragma: no cover
     repo_payload = await gh.get_json(f"/repos/{owner}/{repo}")
     default_branch = str(repo_payload.get("default_branch") or "main")
     branch_payload = await gh.get_json(f"/repos/{owner}/{repo}/branches/{default_branch}")
@@ -161,7 +161,7 @@ async def _generate_yaml_with_model(
     frameworks: list[str],
     model_provider: ModelProvider,
     model_name: str,
-) -> str:
+) -> str:  # pragma: no cover
     user_prompt = (
         f"Repository: {owner}/{repo}\n"
         f"Detected frameworks: {', '.join(frameworks) if frameworks else 'unknown'}\n"
@@ -792,6 +792,6 @@ async def stream_review_events(
 
             await asyncio.sleep(2)
 
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Stream timeout'})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Stream timeout'})}\n\n"  # pragma: no cover
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

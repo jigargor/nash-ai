@@ -925,3 +925,147 @@ async def test_stream_review_returns_done_event(
     )
     assert resp.status_code == 200
     assert "complete" in resp.text or "started" in resp.text
+
+
+@pytest.mark.anyio
+async def test_list_repos_without_installation_id_respects_active_only_default(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    active_installation_id = _random_installation_id()
+    suspended_installation_id = _random_installation_id()
+    await _insert_installation(active_installation_id)
+    await _insert_installation(suspended_installation_id, suspended=True)
+    await _insert_review(active_installation_id, repo_full_name="acme/active-repo")
+    await _insert_review(suspended_installation_id, repo_full_name="acme/suspended-repo")
+
+    resp = await client.get("/api/v1/repos", headers=_auth_headers())
+    assert resp.status_code == 200
+    names = [item["repo_full_name"] for item in resp.json()]
+    assert "acme/active-repo" in names
+    assert "acme/suspended-repo" not in names
+
+
+@pytest.mark.anyio
+async def test_get_repo_codereview_config_malformed_yaml_keeps_config_json_none(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+
+    async def _fake_for_installation(_iid: int) -> object:
+        return object()
+
+    async def _fake_safe_fetch(_gh: object, _o: str, _r: str, _p: str, _ref: str) -> str:
+        return "invalid: [yaml"
+
+    monkeypatch.setattr(api_router.GitHubClient, "for_installation", _fake_for_installation)
+    monkeypatch.setattr(api_router, "safe_fetch_file", _fake_safe_fetch)
+
+    resp = await client.get(
+        f"/api/v1/repos/acme/repo/codereview-config?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["found"] is True
+    assert resp.json()["config_json"] is None
+
+
+@pytest.mark.anyio
+async def test_generate_template_returns_503_when_no_llm_keys(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setattr(settings, "gemini_api_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+
+    resp = await client.post(
+        f"/api/v1/repos/acme/repo/codereview-template/generate?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_rerun_review_installation_mismatch_returns_400(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    other_installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    await _insert_installation(other_installation_id)
+    review_id = await _insert_review(installation_id, status="failed")
+
+    resp = await client.post(
+        f"/api/v1/reviews/{review_id}/rerun?installation_id={other_installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_rerun_review_without_llm_keys_returns_503(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setattr(settings, "gemini_api_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="failed")
+
+    resp = await client.post(
+        f"/api/v1/reviews/{review_id}/rerun?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_dismiss_finding_installation_mismatch_returns_400(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    other_installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    await _insert_installation(other_installation_id)
+    review_id = await _insert_review(installation_id, findings={"findings": [{}]})
+
+    resp = await client.post(
+        f"/api/v1/reviews/{review_id}/findings/0/dismiss?installation_id={other_installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_stream_review_installation_mismatch_emits_error(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    other_installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    await _insert_installation(other_installation_id)
+    review_id = await _insert_review(installation_id, status="running")
+
+    resp = await client.get(
+        f"/api/v1/reviews/{review_id}/stream?installation_id={other_installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert "installation_id mismatch" in resp.text

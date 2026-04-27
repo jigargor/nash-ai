@@ -9,6 +9,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.api import benchmarks as benchmarks_module
 from app.api.benchmarks import router as benchmarks_router, telemetry_router, _verify_api_access
 from app.config import settings
 from app.db.models import BenchmarkResult, BenchmarkRun, FindingOutcome, Installation, Review
@@ -348,3 +349,26 @@ async def test_cost_per_finding_model_filter(
     )
     assert resp.status_code == 200
     assert resp.json()["summary"]["reviews_analyzed"] == 0
+
+
+@pytest.mark.anyio
+async def test_benchmarks_module_functions_cover_error_branches_directly() -> None:
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException):
+        await benchmarks_module.get_benchmark_run(999999999)
+
+    run_a = await _seed_benchmark_run("run-a-direct")
+    run_b = await _seed_benchmark_run("run-b-direct")
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        row_a = await session.get(BenchmarkRun, run_a)
+        row_b = await session.get(BenchmarkRun, run_b)
+        assert row_a is not None and row_b is not None
+        row_a.totals_json = {"precision": "not-a-number", "recall": None}
+        row_b.totals_json = {"precision": 1.0, "recall": 0.5}
+        await session.commit()
+
+    body = await benchmarks_module.compare_benchmark_runs(run_a=run_a, run_b=run_b)
+    assert body["delta"]["precision"] is None
+    assert body["delta"]["recall"] is None
