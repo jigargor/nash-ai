@@ -39,6 +39,59 @@ python evals/compare.py evals/results/baseline.json evals/results/<label>.json
 
 CI runs the harness on pull requests labeled **`prompt-change`** (see `.github/workflows/quality-gates.yml`).
 
+## How PR review works end-to-end
+
+The review worker runs a staged chain so findings remain line-accurate, explainable, and auditable.
+
+1. **Webhook -> queue handoff**
+   - GitHub `pull_request` events are signature-verified and converted into a queued review job.
+   - The API returns quickly; ARQ workers perform the expensive analysis asynchronously.
+
+2. **Input collection + repo policy load**
+   - Worker fetches PR metadata, diff, and commit context from GitHub.
+   - `.codereview.yml` is loaded and cached by `(owner, repo, sha)` to lock one config snapshot per run.
+   - Model/provider, thresholds, context budgets, and chunking toggles are resolved here.
+
+3. **Context packaging and PR chunking**
+   - The system builds layered context: **project profile -> repo additions/rules -> review-specific hunks/files**.
+   - For large diffs, chunking splits reviewable files into bounded chunks (token/latency constrained) and keeps PR-wide manifest awareness.
+   - Anchors (file + line targets) are tracked so final comments map to valid PR diff positions.
+
+4. **Primary model analysis chain**
+   - Main model performs tool-augmented ReAct passes (`fetch_file_content`, `search_codebase`, `get_file_history`, etc.).
+   - A structured finalize step converts chain output into schema-validated findings.
+   - Findings are repaired/validated against fetched file content and diff-commentable line sets.
+
+5. **Branching logic (`max_mode`)**
+   - If `max_mode.enabled=false`: primary path proceeds to editor/post filters.
+   - If `max_mode.enabled=true`: a challenger model re-scores/validates findings.
+   - Conflict score is computed from overlap/disagreement across findings.
+   - Tie-break model is invoked only when conflict exceeds threshold or high-risk severity signals are present.
+   - Final merge favors consensus and evidence-backed high-severity findings.
+
+6. **Post-processing and posting**
+   - Confidence, severity, category, and ignore-path filters are applied.
+   - Editor pass removes duplicates, weak claims, and poor phrasing before publish.
+   - Inline review comments are posted via GitHub Review Comments API, then outcomes are tracked over time.
+
+7. **Audit and outcome loop**
+   - Each review stage records model/provider usage, token deltas, decisions, and run IDs.
+   - Outcome classification later measures applied/dismissed/ignored behavior to score model usefulness by repo/category.
+
+## Langfuse workflow (when keys are set)
+
+When `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` (and optional `LANGFUSE_HOST`) are configured:
+
+- Worker/API initialize Langfuse at startup.
+- Review runs emit trace metadata early (review id, repo, PR, model/provider, prompt version, run id).
+- Anthropic client calls are wrapped through Langfuse-compatible client plumbing, so model activity is observable alongside app logs.
+- Traces are used to:
+  - diagnose false positives/false negatives by comparing prompt versions and model choices,
+  - measure cost/latency trade-offs across providers and `max_mode` branches,
+  - improve chunking and prompt policy based on real review outcomes.
+
+Practical impact: Langfuse gives a reproducible feedback loop between prompt/model decisions and real PR acceptance outcomes, which improves precision and reduces noisy findings over time.
+
 ## Quick Start
 
 ### 1. Install dependencies
