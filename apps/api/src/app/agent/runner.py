@@ -10,6 +10,7 @@ from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 import redis.exceptions as redis_exc
+from pydantic import ValidationError
 from redis.asyncio import Redis
 
 from app.agent.acknowledgments import extract_todo_fixme_markers
@@ -1020,7 +1021,7 @@ def _chunk_findings_from_state(state: dict[str, dict[str, object]], chunk_id: st
             continue
         try:
             findings.append(Finding.model_validate(entry))
-        except Exception:
+        except ValidationError:
             continue
     return findings
 
