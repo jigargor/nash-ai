@@ -355,7 +355,15 @@ async def get_repo_codereview_config(
     repo = _validate_repo_segment(repo, "repository name")
     gh = await GitHubClient.for_installation(installation_id)
     raw = await safe_fetch_file(gh, owner, repo, ".codereview.yml", "HEAD")
-    return {"found": raw is not None, "yaml_text": raw}
+    config_json: dict[str, object] | None = None
+    if raw is not None:
+        try:
+            parsed = yaml.safe_load(raw)
+            if isinstance(parsed, dict):
+                config_json = parsed
+        except yaml.YAMLError:
+            pass
+    return {"found": raw is not None, "yaml_text": raw, "config_json": config_json}
 
 
 @router.post("/repos/{owner}/{repo}/codereview-template/generate")
@@ -532,6 +540,7 @@ async def get_review(
             "finding_outcomes": await list_review_finding_outcomes(
                 int(review.id), int(review.installation_id)
             ),
+            "debug_artifacts": review.debug_artifacts,
         }
 
 
@@ -608,6 +617,9 @@ async def get_review_model_audits(
                 if row.conflict_score is not None
                 else None,
                 "decision": row.decision,
+                "stage_duration_ms": int(row.stage_duration_ms)
+                if row.stage_duration_ms is not None
+                else None,
                 "metadata_json": row.metadata_json,
                 "created_at": row.created_at.isoformat() if row.created_at is not None else None,
             }

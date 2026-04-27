@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     db_command_timeout_seconds: int = 30
     # asyncpg connect establishment timeout (avoid long hangs before pool timeout / LB 502).
     db_connect_timeout_seconds: int = 15
-    db_statement_timeout_ms: int | None = None
+    db_statement_timeout_ms: int = 30_000
     redis_url: str = "redis://localhost:6379"
     fernet_key: str
     anthropic_api_key: str | None = None

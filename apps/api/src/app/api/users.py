@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.config import settings
 from app.crypto import encrypt_secret
 from app.db.models import User, UserKeyAuditLog, UserProviderKey
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, set_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,7 @@ async def delete_current_user(
     if x_user_github_id is None:
         raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
     async with AsyncSessionLocal() as session:
+        await set_user_context(session, x_user_github_id)
         row = (
             await session.execute(select(User).where(User.github_id == x_user_github_id))
         ).scalar_one_or_none()
@@ -201,6 +202,7 @@ async def list_user_keys(
         raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
 
     async with AsyncSessionLocal() as session:
+        await set_user_context(session, x_user_github_id)
         user = (
             await session.execute(select(User).where(User.github_id == x_user_github_id))
         ).scalar_one_or_none()
@@ -251,8 +253,6 @@ async def upsert_user_key(
     if x_user_github_id is None:
         raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
 
-    user = await _resolve_user(x_user_github_id)
-
     if validate:
         await _validate_api_key(provider, body.api_key)
 
@@ -260,6 +260,16 @@ async def upsert_user_key(
     now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as session:
+        await set_user_context(session, x_user_github_id)
+        user = (
+            await session.execute(select(User).where(User.github_id == x_user_github_id))
+        ).scalar_one_or_none()
+        if user is None or user.deleted_at is not None:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found — please log out and back in to register your account.",
+            )
+
         existing = (
             await session.execute(
                 select(UserProviderKey).where(
@@ -294,9 +304,17 @@ async def delete_user_key(
     if x_user_github_id is None:
         raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
 
-    user = await _resolve_user(x_user_github_id)
-
     async with AsyncSessionLocal() as session:
+        await set_user_context(session, x_user_github_id)
+        user = (
+            await session.execute(select(User).where(User.github_id == x_user_github_id))
+        ).scalar_one_or_none()
+        if user is None or user.deleted_at is not None:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found — please log out and back in to register your account.",
+            )
+
         row = (
             await session.execute(
                 select(UserProviderKey).where(

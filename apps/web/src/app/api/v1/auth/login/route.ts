@@ -29,7 +29,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   response.cookies.set(AUTH_STATE_COOKIE_NAME, state, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: true, // required by __Host- prefix
     path: "/",
     maxAge: AUTH_COOKIE_TTL_SECONDS,
   });

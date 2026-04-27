@@ -14,10 +14,10 @@ export interface SessionPayload {
 function getSessionSecret(): string {
   const secret = process.env.AUTH_SESSION_SECRET?.trim();
   if (secret) return secret;
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("Missing AUTH_SESSION_SECRET in production");
-  }
-  return "dev-insecure-session-secret";
+  throw new Error(
+    "AUTH_SESSION_SECRET is not set. Generate one with: " +
+      "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+  );
 }
 
 let hmacKeyPromise: Promise<CryptoKey> | null = null;

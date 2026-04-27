@@ -44,6 +44,7 @@ export function fetchRepos(installationId?: number) {
 export interface CodeReviewConfigResult {
   found: boolean;
   yaml_text: string | null;
+  config_json: Record<string, unknown> | null;
 }
 
 export function fetchCodeReviewConfig(owner: string, repo: string, installationId: number) {

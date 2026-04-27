@@ -21,7 +21,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column("repo_configs", sa.Column("ai_generated_yaml", sa.Text(), nullable=True))
-    op.add_column("repo_configs", sa.Column("ai_generated_at", sa.TIMESTAMP(timezone=True), nullable=True))
+    op.add_column(
+        "repo_configs", sa.Column("ai_generated_at", sa.TIMESTAMP(timezone=True), nullable=True)
+    )
 
 
 def downgrade() -> None:
