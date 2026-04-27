@@ -22,6 +22,7 @@ class _FakeJob:
 class _FakeRedis:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
+        self.locks: set[str] = set()
 
     async def exists(self, *keys: object) -> int:
         """Redis EXISTS shim: no keys stored in this fake, so circuit is never open."""
@@ -30,6 +31,20 @@ class _FakeRedis:
     async def enqueue_job(self, *args: object) -> _FakeJob:
         self.calls.append(args)
         return _FakeJob(job_id=f"job-{len(self.calls)}")
+
+    async def set(
+        self,
+        key: str,
+        _value: str,
+        *,
+        ex: int | None = None,
+        nx: bool = False,
+    ) -> bool:
+        _ = ex
+        if nx and key in self.locks:
+            return False
+        self.locks.add(key)
+        return True
 
 
 def _payload(
@@ -142,6 +157,27 @@ async def test_queue_pull_request_review_skips_duplicate_active_review(
     assert total_reviews == 1
     assert len(redis.calls) == 1
     assert redis.calls[0][0] == "review_pr"
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_when_submission_lock_already_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _FakeRedis()
+    payload = _payload()
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _daily_usage(*_args, **_kwargs) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, payload)
+    await queue_pull_request_review(redis, payload)
+    assert len(redis.calls) == 1
 
 
 @pytest.mark.anyio

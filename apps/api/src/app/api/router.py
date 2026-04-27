@@ -34,6 +34,7 @@ from app.github.client import GitHubClient
 from app.github.utils import safe_fetch_file, split_repo_full_name as _split_repo_full_name
 from app.llm.router import resolve_model_for_role
 from app.observability import create_async_anthropic_client
+from app.queue.idempotency import acquire_review_submission_lock
 from app.queue.connection import require_app_redis
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -792,6 +793,17 @@ async def rerun_review(
 
         owner, repo = _split_repo_full_name(review.repo_full_name)
         redis = require_app_redis(request)
+        lock_acquired = await acquire_review_submission_lock(
+            redis,
+            installation_id=int(review.installation_id),
+            pr_number=int(review.pr_number),
+            head_sha=review.pr_head_sha,
+        )
+        if not lock_acquired:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Review submission already in progress for this PR head",
+            )
         job = await redis.enqueue_job(
             "review_pr",
             int(review.id),

@@ -39,10 +39,25 @@ class _FakeJob:
 class _FakeRedis:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
+        self.locks: set[str] = set()
 
     async def enqueue_job(self, *args: object, **_kwargs: object) -> _FakeJob:
         self.calls.append(args)
         return _FakeJob(job_id=f"job-{len(self.calls)}")
+
+    async def set(
+        self,
+        key: str,
+        _value: str,
+        *,
+        ex: int | None = None,
+        nx: bool = False,
+    ) -> bool:
+        _ = ex
+        if nx and key in self.locks:
+            return False
+        self.locks.add(key)
+        return True
 
 
 def _random_installation_id() -> int:

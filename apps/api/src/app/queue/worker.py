@@ -87,6 +87,7 @@ class WorkerSettings:
     functions = [review_pr, classify_pr_outcomes, classify_pending_outcomes, refresh_llm_catalog]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = default_queue_name
+    max_tries = 1
     max_jobs = 5
     job_timeout = 300
     keep_result = 3600

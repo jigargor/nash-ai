@@ -285,6 +285,31 @@ async def test_rerun_review_enqueues_job_and_resets_status(
 
 
 @pytest.mark.anyio
+async def test_rerun_review_duplicate_submission_lock_returns_409(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-anthropic-key")
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="failed")
+
+    first = await client.post(
+        f"/api/v1/reviews/{review_id}/rerun?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert first.status_code == 200
+
+    second = await client.post(
+        f"/api/v1/reviews/{review_id}/rerun?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert second.status_code == 409
+    assert second.json()["detail"] == "Review submission already in progress for this PR head"
+
+
+@pytest.mark.anyio
 async def test_dismiss_finding_is_idempotent(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

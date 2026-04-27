@@ -150,6 +150,7 @@ class Review(Base):
     model: Mapped[str] = mapped_column(Text, nullable=False)
     findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     debug_artifacts: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    github_review_node_id: Mapped[str | None] = mapped_column(Text)
     tokens_used: Mapped[int | None] = mapped_column(Integer)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
     triggered_by_user_id: Mapped[int | None] = mapped_column(

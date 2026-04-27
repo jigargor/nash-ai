@@ -530,6 +530,7 @@ async def run_review(
             review_post_response = await post_review(
                 gh, owner, repo, pr_number, head_sha, final_result
             )
+            context["github_review_node_id"] = extract_review_node_id(review_post_response)
             comment_ids = extract_review_comment_ids(review_post_response)
             await seed_pending_finding_outcomes(
                 review_id=cast(int, context["review_id"]),
@@ -925,6 +926,7 @@ async def run_review(
         )
 
         review_post_response = await post_review(gh, owner, repo, pr_number, head_sha, final_result)
+        context["github_review_node_id"] = extract_review_node_id(review_post_response)
         comment_ids = extract_review_comment_ids(review_post_response)
         await seed_pending_finding_outcomes(
             review_id=cast(int, context["review_id"]),
@@ -1012,6 +1014,9 @@ async def _mark_review_done(
         review.debug_artifacts = current_artifacts or None
         review.tokens_used = int(context.get("tokens_used", 0))
         review.cost_usd = float(cost)
+        github_review_node_id = context.get("github_review_node_id")
+        if isinstance(github_review_node_id, str) and github_review_node_id.strip():
+            review.github_review_node_id = github_review_node_id.strip()
         review.completed_at = datetime.now(timezone.utc)
         await session.commit()
 
@@ -2424,3 +2429,11 @@ def extract_review_comment_ids(review_response: dict[str, object]) -> list[int |
         raw_id = comment.get("id")
         comment_ids.append(int(raw_id) if isinstance(raw_id, int) else None)
     return comment_ids
+
+
+def extract_review_node_id(review_response: dict[str, object]) -> str | None:
+    raw_node_id = review_response.get("node_id")
+    if isinstance(raw_node_id, str):
+        normalized = raw_node_id.strip()
+        return normalized if normalized else None
+    return None

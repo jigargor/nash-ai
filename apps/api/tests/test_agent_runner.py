@@ -240,6 +240,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
         model="claude-sonnet-4-5",
         findings=None,
         debug_artifacts={"chunking_state": {"prior": {"status": "done"}}},
+        github_review_node_id=None,
         tokens_used=None,
         cost_usd=None,
         completed_at=None,
@@ -271,6 +272,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
         "input_tokens": 800,
         "output_tokens": 200,
         "debug_artifacts": {"quality": {"final_findings_total": 0}},
+        "github_review_node_id": "PRR_kwDOExampleNode",
     }
     review_config = ReviewConfig(
         model=ReviewModelConfig(
@@ -284,6 +286,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
     assert review.status == "done"
     assert review.model_provider == "anthropic"
     assert review.model == "claude-3-5-haiku-latest"
+    assert review.github_review_node_id == "PRR_kwDOExampleNode"
     assert "chunking_state" in review.debug_artifacts
     assert "quality" in review.debug_artifacts
 

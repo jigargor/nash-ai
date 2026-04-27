@@ -9,6 +9,7 @@ from app.config import settings
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.llm.circuit_breaker import is_circuit_open
+from app.queue.idempotency import acquire_review_submission_lock
 from app.ratelimit import check_installation_review_rate_limit, current_daily_token_usage
 from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
 
@@ -171,6 +172,20 @@ async def queue_pull_request_review(
             installation_id,
             daily_usage,
             settings.daily_token_budget_per_installation,
+        )
+        return
+    if not await acquire_review_submission_lock(
+        redis,
+        installation_id=installation_id,
+        pr_number=pr_number,
+        head_sha=head_sha,
+    ):
+        logger.warning(
+            "Skipping duplicate review enqueue via submission lock installation_id=%s repo=%s pr_number=%s head_sha=%s",
+            installation_id,
+            repo_full_name,
+            pr_number,
+            head_sha,
         )
         return
     async with AsyncSessionLocal() as session:
