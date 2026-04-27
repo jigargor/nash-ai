@@ -955,7 +955,10 @@ async def run_review(
             try:
                 await record_provider_failure(_redis, provider)
             except Exception:
-                pass  # circuit breaker is best-effort
+                logger.debug(
+                    "Circuit breaker record_provider_failure failed (best-effort)",
+                    exc_info=True,
+                )
         logger.info(
             "Review failed review_id=%s duration_ms=%s",
             review_id,
@@ -1047,7 +1050,10 @@ async def _mark_review_done(
             try:
                 await record_provider_success(_redis, provider)
             except Exception:
-                pass  # circuit breaker is best-effort
+                logger.debug(
+                    "Circuit breaker record_provider_success failed (best-effort)",
+                    exc_info=True,
+                )
 
 
 def _estimate_cost_usd(
