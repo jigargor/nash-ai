@@ -89,6 +89,20 @@ class Finding(BaseModel):
             "platform, framework, or library behavior. See vendor-claim rules."
         ),
     )
+    side: Literal["RIGHT", "LEFT"] = Field(
+        default="RIGHT",
+        description="GitHub diff side anchor for line.",
+    )
+    start_side: Literal["RIGHT", "LEFT"] | None = Field(
+        default=None,
+        description="GitHub diff side anchor for start_line in multi-line comments.",
+    )
+    old_line_no: int | None = Field(default=None, ge=1)
+    new_line_no: int | None = Field(default=None, ge=1)
+    patch_hunk: str | None = Field(
+        default=None,
+        description="Best-effort diff hunk identifier used for anchor diagnostics.",
+    )
 
     @field_validator("message")
     @classmethod

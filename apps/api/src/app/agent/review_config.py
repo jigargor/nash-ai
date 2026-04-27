@@ -61,6 +61,19 @@ class ContextPackagingConfig:
 
 
 @dataclass
+class ChunkingConfig:
+    enabled: bool = True
+    proactive_threshold_tokens: int = 35_000
+    target_chunk_tokens: int = 18_000
+    max_chunks: int = 8
+    min_files_per_chunk: int = 1
+    include_file_classes: list[str] = field(default_factory=lambda: ["reviewable", "config_only", "test_only"])
+    max_total_prompt_tokens: int = 120_000
+    max_latency_seconds: int = 240
+    output_headroom_tokens: int = 4096
+
+
+@dataclass
 class ReviewConfig:
     confidence_threshold: int = DEFAULT_CONFIDENCE_THRESHOLD
     severity_threshold: str = DEFAULT_SEVERITY_THRESHOLD
@@ -73,6 +86,7 @@ class ReviewConfig:
     max_mode: MaxModeConfig = field(default_factory=MaxModeConfig)
     budgets: ContextBudgets = field(default_factory=ContextBudgets)
     packaging: ContextPackagingConfig = field(default_factory=ContextPackagingConfig)
+    chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
 
 
 async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: str) -> ReviewConfig:
@@ -102,6 +116,7 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
     max_mode = _parse_max_mode(parsed.get("max_mode"))
     budgets = _parse_budgets(parsed.get("budgets"))
     packaging = _parse_packaging(parsed)
+    chunking = _parse_chunking(parsed.get("chunking"))
     return ReviewConfig(
         confidence_threshold=threshold,
         severity_threshold=severity_threshold,
@@ -114,6 +129,7 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
         max_mode=max_mode,
         budgets=budgets,
         packaging=packaging,
+        chunking=chunking,
     )
 
 
@@ -248,6 +264,30 @@ def _parse_packaging(parsed: Mapping[str, Any]) -> ContextPackagingConfig:
         max_summary_calls_per_review=_normalize_positive_int(parsed.get("max_summary_calls_per_review"), 3),
         generated_paths=_normalize_path_patterns(parsed.get("generated_paths")),
         vendor_paths=_normalize_path_patterns(parsed.get("vendor_paths")),
+    )
+
+
+def _parse_chunking(raw_value: object) -> ChunkingConfig:
+    if not isinstance(raw_value, Mapping):
+        return ChunkingConfig()
+    include_file_classes_raw = raw_value.get("include_file_classes")
+    include_file_classes = (
+        [str(item) for item in include_file_classes_raw if isinstance(item, str)]
+        if isinstance(include_file_classes_raw, list)
+        else ["reviewable", "config_only", "test_only"]
+    )
+    if not include_file_classes:
+        include_file_classes = ["reviewable", "config_only", "test_only"]
+    return ChunkingConfig(
+        enabled=bool(raw_value.get("enabled", True)),
+        proactive_threshold_tokens=_normalize_positive_int(raw_value.get("proactive_threshold_tokens"), 35_000),
+        target_chunk_tokens=_normalize_positive_int(raw_value.get("target_chunk_tokens"), 18_000),
+        max_chunks=_normalize_positive_int(raw_value.get("max_chunks"), 8),
+        min_files_per_chunk=_normalize_positive_int(raw_value.get("min_files_per_chunk"), 1),
+        include_file_classes=include_file_classes,
+        max_total_prompt_tokens=_normalize_positive_int(raw_value.get("max_total_prompt_tokens"), 120_000),
+        max_latency_seconds=_normalize_positive_int(raw_value.get("max_latency_seconds"), 240),
+        output_headroom_tokens=_normalize_positive_int(raw_value.get("output_headroom_tokens"), 4096),
     )
 
 

@@ -7,8 +7,8 @@ from typing import cast
 import redis.exceptions as redis_exc
 from redis.asyncio import Redis
 
+from app.agent.review_config import ChunkingConfig, ContextPackagingConfig
 from app.agent.review_config import MaxModeConfig, ModelProvider, ReviewConfig, ReviewModelConfig
-from app.agent.review_config import ContextPackagingConfig
 from app.agent.schema import ContextBudgets
 from app.config import settings
 
@@ -63,10 +63,24 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         generated_paths=[str(item) for item in list(packaging_data.get("generated_paths") or [])],
         vendor_paths=[str(item) for item in list(packaging_data.get("vendor_paths") or [])],
     )
+    chunking_data = dict(data.get("chunking") or {})
+    chunking = ChunkingConfig(
+        enabled=bool(chunking_data.get("enabled", True)),
+        proactive_threshold_tokens=int(chunking_data.get("proactive_threshold_tokens", 35_000)),
+        target_chunk_tokens=int(chunking_data.get("target_chunk_tokens", 18_000)),
+        max_chunks=int(chunking_data.get("max_chunks", 8)),
+        min_files_per_chunk=int(chunking_data.get("min_files_per_chunk", 1)),
+        include_file_classes=[str(item) for item in list(chunking_data.get("include_file_classes") or [])]
+        or ["reviewable", "config_only", "test_only"],
+        max_total_prompt_tokens=int(chunking_data.get("max_total_prompt_tokens", 120_000)),
+        max_latency_seconds=int(chunking_data.get("max_latency_seconds", 240)),
+        output_headroom_tokens=int(chunking_data.get("output_headroom_tokens", 4096)),
+    )
     data["model"] = model
     data["max_mode"] = max_mode
     data["budgets"] = budgets
     data["packaging"] = packaging
+    data["chunking"] = chunking
     return ReviewConfig(**data)
 
 

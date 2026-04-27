@@ -6,6 +6,7 @@ from app.agent.review_config import (
     DEFAULT_SEVERITY_THRESHOLD,
     _parse_budgets,
     _parse_categories,
+    _parse_chunking,
     _parse_max_mode,
     _parse_model_config,
     _parse_packaging,
@@ -59,6 +60,31 @@ def test_parse_severity_threshold_defaults_on_unknown_value() -> None:
 
 def test_parse_categories_filters_to_supported_values() -> None:
     assert _parse_categories(["security", "style", "bogus", 1]) == ["security", "style"]
+
+
+def test_parse_chunking_reads_thresholds_and_included_classes() -> None:
+    chunking = _parse_chunking(
+        {
+            "enabled": True,
+            "proactive_threshold_tokens": 31000,
+            "target_chunk_tokens": 12000,
+            "max_chunks": 4,
+            "min_files_per_chunk": 2,
+            "include_file_classes": ["reviewable", "config_only"],
+            "max_total_prompt_tokens": 90000,
+            "max_latency_seconds": 180,
+            "output_headroom_tokens": 3000,
+        }
+    )
+    assert chunking.enabled is True
+    assert chunking.proactive_threshold_tokens == 31000
+    assert chunking.target_chunk_tokens == 12000
+    assert chunking.max_chunks == 4
+    assert chunking.min_files_per_chunk == 2
+    assert chunking.include_file_classes == ["reviewable", "config_only"]
+    assert chunking.max_total_prompt_tokens == 90000
+    assert chunking.max_latency_seconds == 180
+    assert chunking.output_headroom_tokens == 3000
 
 
 class FakeGitHubClient:
@@ -127,6 +153,35 @@ def test_load_review_config_reads_new_phase4_fields() -> None:
     assert config.ignore_paths == ["**/*.md"]
     assert config.review_drafts is True
     assert config.max_findings_per_pr == 7
+
+
+def test_load_review_config_reads_chunking_block() -> None:
+    config = asyncio.run(
+        load_review_config(
+            FakeGitHubClient(
+                {
+                    ".codereview.yml": """
+                    chunking:
+                      enabled: true
+                      proactive_threshold_tokens: 32000
+                      target_chunk_tokens: 15000
+                      max_chunks: 6
+                      include_file_classes:
+                        - reviewable
+                        - config_only
+                    """
+                }
+            ),
+            "acme",
+            "demo",
+            "sha",
+        )
+    )
+    assert config.chunking.enabled is True
+    assert config.chunking.proactive_threshold_tokens == 32000
+    assert config.chunking.target_chunk_tokens == 15000
+    assert config.chunking.max_chunks == 6
+    assert config.chunking.include_file_classes == ["reviewable", "config_only"]
 
 
 def test_parse_model_config_provider_defaults_to_anthropic() -> None:

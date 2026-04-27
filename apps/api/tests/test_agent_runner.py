@@ -5,11 +5,15 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent.context_builder import ContextTelemetry
+from app.agent.anchors import attach_anchor_metadata, filter_findings_with_valid_anchors
+from app.agent.dedupe import dedupe_findings
 from app.agent.review_config import ReviewConfig, ReviewModelConfig
 from app.agent.runner import (
+    _apply_policy_filters,
     _apply_review_config_filters,
     _apply_confidence_threshold,
     _attach_debug_artifacts,
+    _chunking_config_hash,
     _calculate_conflict_score,
     _merge_debate_results,
     _mark_review_done,
@@ -21,6 +25,7 @@ from app.agent.runner import (
     cross_check_tool_evidence,
     extract_tool_call_history,
 )
+from app.agent.diff_parser import FileInDiff, NumberedLine
 from app.agent.schema import Finding, ReviewResult
 
 
@@ -172,7 +177,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
         model_provider="anthropic",
         model="claude-sonnet-4-5",
         findings=None,
-        debug_artifacts=None,
+        debug_artifacts={"chunking_state": {"prior": {"status": "done"}}},
         tokens_used=None,
         cost_usd=None,
         completed_at=None,
@@ -203,6 +208,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
         "tokens_used": 1000,
         "input_tokens": 800,
         "output_tokens": 200,
+        "debug_artifacts": {"quality": {"final_findings_total": 0}},
     }
     review_config = ReviewConfig(
         model=ReviewModelConfig(
@@ -216,6 +222,8 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
     assert review.status == "done"
     assert review.model_provider == "anthropic"
     assert review.model == "claude-3-5-haiku-latest"
+    assert "chunking_state" in review.debug_artifacts
+    assert "quality" in review.debug_artifacts
 
 
 def test_extract_tool_call_history_collects_tool_use_blocks() -> None:
@@ -296,3 +304,69 @@ def test_merge_debate_results_keeps_consensus_findings() -> None:
     merged = _merge_debate_results(primary=primary, challenger=challenger, tie_break=tie_break)
     assert len(merged.findings) == 2
     assert {item.file_path for item in merged.findings} == {"a.py", "c.py"}
+
+
+def test_dedupe_findings_preserves_distinct_categories_for_same_line() -> None:
+    security_finding = _finding("src/auth.py", confidence=91)
+    security_finding.category = "security"
+    security_finding.message = "Unsanitized redirect target."
+    correctness_finding = _finding("src/auth.py", confidence=89)
+    correctness_finding.category = "correctness"
+    correctness_finding.message = "Unsanitized redirect target."
+    deduped = dedupe_findings([security_finding, correctness_finding])
+    assert len(deduped) == 2
+
+
+def test_anchor_metadata_and_validation_drop_invalid_anchor_lines() -> None:
+    finding = _finding("src/core.py")
+    finding.line_start = 8
+    finding.line_end = 8
+    files = [
+        FileInDiff(
+            path="src/core.py",
+            language="Python",
+            is_new=False,
+            is_deleted=False,
+            numbered_lines=[
+                NumberedLine(new_line_no=8, old_line_no=7, kind="add", content="value = transform(raw)"),
+                NumberedLine(new_line_no=9, old_line_no=8, kind="ctx", content="return value"),
+            ],
+            context_window=[],
+        )
+    ]
+    with_anchor = attach_anchor_metadata([finding], files)
+    assert with_anchor[0].patch_hunk is not None
+    assert with_anchor[0].new_line_no == 8
+    assert with_anchor[0].side == "RIGHT"
+
+    invalid = _finding("src/core.py")
+    invalid.line_start = 999
+    invalid.line_end = 999
+    filtered = filter_findings_with_valid_anchors([*with_anchor, invalid], files)
+    assert len(filtered) == 1
+
+
+def test_policy_filters_contract_equivalence_for_same_raw_findings() -> None:
+    raw_findings = [_finding("src/a.py", confidence=92), _finding("src/b.py", confidence=70)]
+    raw_findings[0].evidence = "diff_visible"
+    raw_findings[1].evidence = "inference"
+    left, _, _, _ = _apply_policy_filters(
+        ReviewResult(findings=[item.model_copy(deep=True) for item in raw_findings], summary="raw"),
+        threshold=85,
+        tool_call_history=[],
+        known_fact_ids=set(),
+    )
+    right, _, _, _ = _apply_policy_filters(
+        ReviewResult(findings=[item.model_copy(deep=True) for item in raw_findings], summary="raw"),
+        threshold=85,
+        tool_call_history=[],
+        known_fact_ids=set(),
+    )
+    assert [item.model_dump(mode="json") for item in left.findings] == [item.model_dump(mode="json") for item in right.findings]
+
+
+def test_chunking_config_hash_changes_when_chunking_knobs_change() -> None:
+    base = ReviewConfig()
+    changed = ReviewConfig()
+    changed.chunking.max_chunks = base.chunking.max_chunks + 1
+    assert _chunking_config_hash(base) != _chunking_config_hash(changed)

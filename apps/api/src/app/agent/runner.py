@@ -1,4 +1,6 @@
 import logging
+import json
+from hashlib import sha1
 from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -13,13 +15,25 @@ from redis.asyncio import Redis
 from app.agent.acknowledgments import extract_todo_fixme_markers
 from app.agent.config_cache import get_cached_review_config, set_cached_review_config
 from app.agent.constants import PROMPT_VERSION, REPAIR_RETRY_DROP_RATE, REPAIR_SEARCH_WINDOW
+from app.agent.chunking import ChunkPlan, ChunkingPlannerConfig, PlannedChunk, plan_chunks
+from app.agent.chunked_runtime import (
+    chunk_repo_segments,
+    chunk_status,
+    load_chunk_state,
+    merge_chunk_state_with_plan,
+    persist_chunk_state,
+    render_chunk_diff,
+)
 from app.agent.context_builder import (
     ContextBundle,
     ContextTelemetry,
     build_context_bundle,
+    count_tokens,
     is_diff_too_large,
 )
 from app.agent.diff_parser import FileInDiff, parse_diff, right_side_diff_line_set
+from app.agent.anchors import attach_anchor_metadata, filter_findings_with_valid_anchors
+from app.agent.dedupe import dedupe_findings
 from app.agent.editor import run_editor
 from app.agent.finalize import finalize_review
 from app.agent.loop import run_agent
@@ -157,18 +171,61 @@ async def run_review(
 
     try:
         gh, diff_text, pr, commits, review_config = await _fetch_pr_inputs(context)
+        context["chunking_config_hash"] = _chunking_config_hash(review_config)
 
         if pr.get("draft", False) and not review_config.review_drafts:
             result = ReviewResult(findings=[], summary="Skipped automated review because this pull request is a draft.")
             await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
             return
-        if is_diff_too_large(diff_text):
+        diff_tokens = count_tokens(diff_text)
+        chunking_enabled = review_config.chunking.enabled and diff_tokens >= review_config.chunking.proactive_threshold_tokens
+        if is_diff_too_large(diff_text) and not chunking_enabled:
             result = ReviewResult(
                 findings=[],
                 summary="PR is too large for automated review. Please split it into smaller changes and re-run.",
             )
             await post_review(gh, owner, repo, pr_number, head_sha, result)
             await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
+            return
+        if chunking_enabled:
+            final_result = await _run_chunked_review(
+                gh=gh,
+                context=context,
+                diff_text=diff_text,
+                pr=pr,
+                commits=commits,
+                review_config=review_config,
+                started_at=started_at,
+            )
+            prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+            edited_result = await run_editor(
+                draft=final_result,
+                pr_context={
+                    "title": pr.get("title", ""),
+                    "description": pr.get("body", "") or "",
+                    "commits": [str((commit.get("commit") or {}).get("message", "")) for commit in commits],
+                },
+                prior_reviews=prior_reviews,
+                code_acknowledgments=[],
+                model_name=review_config.model.name,
+                provider=review_config.model.provider,
+            )
+            final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
+            final_result = _apply_review_config_filters(final_result, review_config)
+            review_post_response = await post_review(gh, owner, repo, pr_number, head_sha, final_result)
+            comment_ids = extract_review_comment_ids(review_post_response)
+            await seed_pending_finding_outcomes(
+                review_id=cast(int, context["review_id"]),
+                installation_id=cast(int, context["installation_id"]),
+                finding_count=len(final_result.findings),
+                github_comment_ids=comment_ids,
+            )
+            await _mark_review_done(session_data=final_result, context=context, status="done", review_config=review_config)
+            logger.info(
+                "Chunked review completed review_id=%s duration_ms=%s",
+                review_id,
+                int((monotonic() - started_at) * 1000),
+            )
             return
 
         files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt = await _assemble_context(
@@ -304,13 +361,12 @@ async def run_review(
                 )
 
         threshold = review_config.confidence_threshold or 85
-        result, confidence_dropped = _apply_confidence_threshold(result, threshold)
-        result.findings, auto_tag_vendor_rejected = auto_tag_vendor_claims(result.findings)
-        known_fact_ids = load_verified_fact_ids()
-        result.findings, evidence_tool_rejected = cross_check_tool_evidence(result.findings, tool_call_history)
-        result.findings, evidence_fact_rejected = cross_check_fact_ids(result.findings, known_fact_ids)
-        evidence_rejections = [*auto_tag_vendor_rejected, *evidence_tool_rejected, *evidence_fact_rejected]
-        evidence_rejection_reasons = Counter(reason for _, reason in evidence_rejections)
+        result, confidence_dropped, evidence_rejections, evidence_rejection_reasons = _apply_policy_filters(
+            result,
+            threshold=threshold,
+            tool_call_history=tool_call_history,
+            known_fact_ids=load_verified_fact_ids(),
+        )
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
         debate_conflict_score: int | None = None
         if review_config.max_mode.enabled:
@@ -489,7 +545,11 @@ async def _mark_review_done(
             review.model_provider = review_config.model.provider
             review.model = review_config.model.name
         review.findings = session_data.model_dump(mode="json")
-        review.debug_artifacts = context.get("debug_artifacts")
+        current_artifacts = dict(review.debug_artifacts or {})
+        incoming_artifacts = context.get("debug_artifacts")
+        if isinstance(incoming_artifacts, dict):
+            current_artifacts.update(incoming_artifacts)
+        review.debug_artifacts = current_artifacts or None
         review.tokens_used = int(context.get("tokens_used", 0))
         review.cost_usd = float(cost)
         review.completed_at = datetime.now(timezone.utc)
@@ -557,6 +617,429 @@ async def _load_review_config_cached(gh: GitHubClient, owner: str, repo: str, he
     loaded = await load_review_config(gh, owner, repo, head_sha)
     await set_cached_review_config(owner, repo, head_sha, loaded)
     return loaded
+
+
+def _chunking_config_hash(review_config: ReviewConfig) -> str:
+    payload = {
+        "chunking": {
+            "enabled": review_config.chunking.enabled,
+            "proactive_threshold_tokens": review_config.chunking.proactive_threshold_tokens,
+            "target_chunk_tokens": review_config.chunking.target_chunk_tokens,
+            "max_chunks": review_config.chunking.max_chunks,
+            "min_files_per_chunk": review_config.chunking.min_files_per_chunk,
+            "include_file_classes": review_config.chunking.include_file_classes,
+            "max_total_prompt_tokens": review_config.chunking.max_total_prompt_tokens,
+            "max_latency_seconds": review_config.chunking.max_latency_seconds,
+            "output_headroom_tokens": review_config.chunking.output_headroom_tokens,
+        }
+    }
+    serialized = json.dumps(payload, sort_keys=True)
+    return sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+async def _run_chunked_review(
+    *,
+    gh: GitHubClient,
+    context: dict[str, Any],
+    diff_text: str,
+    pr: dict[str, Any],
+    commits: list[dict[str, Any]],
+    review_config: ReviewConfig,
+    started_at: float,
+) -> ReviewResult:
+    owner = cast(str, context["owner"])
+    repo = cast(str, context["repo"])
+    pr_number = cast(int, context["pr_number"])
+    head_sha = cast(str, context["head_sha"])
+    files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
+    planner_config = ChunkingPlannerConfig(
+        enabled=review_config.chunking.enabled,
+        proactive_threshold_tokens=review_config.chunking.proactive_threshold_tokens,
+        target_chunk_tokens=review_config.chunking.target_chunk_tokens,
+        max_chunks=review_config.chunking.max_chunks,
+        min_files_per_chunk=review_config.chunking.min_files_per_chunk,
+        include_file_classes=tuple(review_config.chunking.include_file_classes),
+        max_total_prompt_tokens=review_config.chunking.max_total_prompt_tokens,
+        max_latency_seconds=review_config.chunking.max_latency_seconds,
+        output_headroom_tokens=review_config.chunking.output_headroom_tokens,
+    )
+    chunk_plan = plan_chunks(
+        files_in_diff,
+        planner_config,
+        pr_title=str(pr.get("title", "")),
+        pr_body=str(pr.get("body", "") or ""),
+        generated_paths=review_config.packaging.generated_paths,
+        vendor_paths=review_config.packaging.vendor_paths,
+    )
+    if not chunk_plan.chunks:
+        return ReviewResult(findings=[], summary=f"{chunk_plan.coverage_note} No findings generated.")
+
+    repo_profile = await profile_repo(gh, owner, repo, head_sha)
+    base_repo_segments = _build_repo_segments(repo_profile.frameworks, review_config.prompt_additions)
+    resume_state = await load_chunk_state(context)
+    chunk_state = merge_chunk_state_with_plan(resume_state, chunk_plan)
+    structured_findings: list[Finding] = []
+    chunk_summaries: list[str] = []
+    elapsed_budget_exhausted = False
+    prompt_budget_exhausted = False
+
+    for chunk in chunk_plan.chunks:
+        now_elapsed = int(monotonic() - started_at)
+        if now_elapsed >= review_config.chunking.max_latency_seconds:
+            elapsed_budget_exhausted = True
+            break
+        if chunk_status(chunk_state, chunk.chunk_id) == "done":
+            structured_findings.extend(_chunk_findings_from_state(chunk_state, chunk.chunk_id))
+            chunk_summaries.append(_chunk_summary_from_state(chunk_state, chunk.chunk_id))
+            continue
+
+        chunk_files = [entry.file_in_diff for entry in chunk.files]
+        chunk_repo_context = chunk_repo_segments(chunk_plan, chunk)
+        context_bundle = await build_context_bundle(
+            gh,
+            owner,
+            repo,
+            head_sha,
+            chunk_files,
+            budgets=review_config.budgets,
+            packaging=review_config.packaging,
+            repo_segments=[*base_repo_segments, *chunk_repo_context],
+        )
+        chunk_diff = render_chunk_diff(chunk_files)
+        system_prompt = build_system_prompt(repo_profile.frameworks, chunk_diff, review_config.prompt_additions)
+        user_prompt = build_initial_user_prompt(
+            owner,
+            repo,
+            pr_number,
+            f"{context_bundle.rendered}\n\nChunk coverage note: {chunk_plan.coverage_note}",
+        )
+        projected_prompt_cost = count_tokens(system_prompt) + count_tokens(user_prompt) + review_config.chunking.output_headroom_tokens
+        if (int(context.get("tokens_used", 0)) + projected_prompt_cost) > review_config.chunking.max_total_prompt_tokens:
+            prompt_budget_exhausted = True
+            break
+
+        _set_chunk_state(chunk_state, chunk.chunk_id, status="running")
+        await persist_chunk_state(context, chunk_state)
+        try:
+            messages = await run_agent(
+                system_prompt,
+                user_prompt,
+                context,
+                model_name=review_config.model.name,
+                provider=review_config.model.provider,
+            )
+            chunk_result = await finalize_review(
+                system_prompt,
+                messages,
+                context,
+                model_name=review_config.model.name,
+                provider=review_config.model.provider,
+            )
+            chunk_result.findings = _repair_findings_from_files(
+                chunk_result.findings,
+                dict(context_bundle.fetched_files),
+                commentable_lines=right_side_diff_line_set(chunk_files),
+                window=REPAIR_SEARCH_WINDOW,
+            )
+            chunk_result.findings = attach_anchor_metadata(chunk_result.findings, chunk_files)
+            valid_findings = filter_findings_with_valid_anchors(chunk_result.findings, chunk_files)
+            postprocessed_chunk, _, _, _ = _apply_policy_filters(
+                ReviewResult(findings=valid_findings, summary=chunk_result.summary),
+                threshold=review_config.confidence_threshold or 85,
+                tool_call_history=extract_tool_call_history(messages),
+                known_fact_ids=load_verified_fact_ids(),
+            )
+            structured_findings.extend(postprocessed_chunk.findings)
+            chunk_summaries.append(chunk_result.summary)
+            _set_chunk_state(
+                chunk_state,
+                chunk.chunk_id,
+                status="done",
+                findings=[item.model_dump(mode="json") for item in postprocessed_chunk.findings],
+                summary=chunk_result.summary,
+                estimated_prompt_tokens=chunk.estimated_prompt_tokens,
+            )
+        except Exception as exc:
+            _set_chunk_state(chunk_state, chunk.chunk_id, status="failed", error=str(exc))
+            await persist_chunk_state(context, chunk_state)
+            raise
+        await persist_chunk_state(context, chunk_state)
+
+    synthesis_result = await _run_cross_chunk_synthesis(
+        chunk_plan=chunk_plan,
+        chunk_summaries=chunk_summaries,
+        structured_findings=structured_findings,
+        context=context,
+        review_config=review_config,
+        frameworks=repo_profile.frameworks,
+    )
+    synthesis_findings = filter_findings_with_valid_anchors(
+        attach_anchor_metadata(synthesis_result.findings, files_in_diff),
+        files_in_diff,
+    )
+    synthesis_processed, _, _, _ = _apply_policy_filters(
+        ReviewResult(findings=synthesis_findings, summary=synthesis_result.summary),
+        threshold=review_config.confidence_threshold or 85,
+        tool_call_history=[],
+        known_fact_ids=load_verified_fact_ids(),
+    )
+    merged = dedupe_findings([*structured_findings, *synthesis_processed.findings])
+    final_summary_parts = [chunk_plan.coverage_note, synthesis_result.summary.strip()]
+    if chunk_plan.is_partial:
+        final_summary_parts.append("Partial coverage: max chunk count reached.")
+    if prompt_budget_exhausted:
+        final_summary_parts.append("Partial coverage: stopped at total prompt budget limit.")
+    if elapsed_budget_exhausted:
+        final_summary_parts.append("Partial coverage: stopped at latency limit.")
+    context["debug_artifacts"] = {
+        "chunking_state": chunk_state,
+        "chunking_plan": {
+            "chunks": [chunk.chunk_id for chunk in chunk_plan.chunks],
+            "skipped_files": [item.path for item in chunk_plan.skipped_files],
+            "is_partial": chunk_plan.is_partial,
+            "coverage_note": chunk_plan.coverage_note,
+        },
+    }
+    return ReviewResult(
+        findings=merged,
+        summary=(" ".join(part for part in final_summary_parts if part))[:780],
+    )
+
+
+def _chunk_repo_segments(chunk_plan: ChunkPlan, chunk: PlannedChunk) -> list[str]:
+    files = [entry.path for entry in chunk.files]
+    chunk_packages = sorted({entry.touched_package for entry in chunk.files})
+    chunk_dep_hints = sorted({hint for entry in chunk.files if (hint := entry.dependency_hint) is not None})
+    return [
+        "Full changed-file manifest:\n" + "\n".join(chunk_plan.full_manifest),
+        "Touched packages: " + (", ".join(chunk_plan.touched_packages) if chunk_plan.touched_packages else "none"),
+        "Dependency hints: " + (", ".join(chunk_plan.dependency_hints) if chunk_plan.dependency_hints else "none"),
+        f"Active chunk files ({len(files)}):\n" + "\n".join(files),
+        "Active chunk package scope: " + (", ".join(chunk_packages) if chunk_packages else "none"),
+        "Active chunk dependency hints: " + (", ".join(chunk_dep_hints) if chunk_dep_hints else "none"),
+    ]
+
+
+def _render_chunk_diff(files_in_diff: list[FileInDiff]) -> str:
+    rendered: list[str] = []
+    for file in files_in_diff:
+        rendered.append(f"diff -- {file.path}")
+        for line in file.numbered_lines:
+            marker = {"add": "+", "del": "-", "ctx": " "}[line.kind]
+            rendered.append(f"{marker}{line.content}")
+    return "\n".join(rendered)
+
+
+async def _run_cross_chunk_synthesis(
+    *,
+    chunk_plan: ChunkPlan,
+    chunk_summaries: list[str],
+    structured_findings: list[Finding],
+    context: dict[str, Any],
+    review_config: ReviewConfig,
+    frameworks: list[str],
+) -> ReviewResult:
+    if not chunk_summaries:
+        return ReviewResult(findings=[], summary="No chunk summaries were available for synthesis.")
+    synthesis_prompt = "\n".join(
+        [
+            "You are running an integration synthesis pass across chunk-level review outputs.",
+            "Find only issues that span chunk boundaries or depend on interactions between files/chunks.",
+            "Do not repeat chunk-local findings unless integration risk changes severity.",
+            "Changed file manifest:",
+            *chunk_plan.full_manifest,
+            "Chunk summaries:",
+            *[f"- {item}" for item in chunk_summaries],
+            f"Chunk finding count: {len(structured_findings)}",
+        ]
+    )
+    system_prompt = build_system_prompt(frameworks, "", review_config.prompt_additions)
+    return await finalize_review(
+        system_prompt,
+        [{"role": "user", "content": synthesis_prompt}],
+        context,
+        model_name=review_config.model.name,
+        provider=review_config.model.provider,
+        allow_retry=False,
+    )
+
+
+def _finding_dedupe_key(finding: Finding) -> tuple[str, int, str, str, str]:
+    line_value = finding.line_end or finding.line_start
+    side = finding.side
+    normalized_title = normalize_for_match(finding.message[:120])
+    normalized_excerpt = normalize_for_match(finding.target_line_content[:240])
+    return (finding.file_path, line_value, side, normalized_title, f"{finding.category}:{normalized_excerpt}")
+
+
+def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
+    merged: dict[tuple[str, int, str, str, str], Finding] = {}
+    for finding in findings:
+        key = _finding_dedupe_key(finding)
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = finding
+            continue
+        if SEVERITY_RANK[finding.severity] > SEVERITY_RANK[existing.severity]:
+            merged[key] = finding
+            continue
+        if finding.confidence > existing.confidence:
+            merged[key] = finding
+    return sorted(
+        merged.values(),
+        key=lambda item: (SEVERITY_RANK[item.severity], item.confidence),
+        reverse=True,
+    )
+
+
+def _attach_anchor_metadata(findings: list[Finding], files_in_diff: list[FileInDiff]) -> list[Finding]:
+    index = _build_diff_anchor_index(files_in_diff)
+    updated: list[Finding] = []
+    for finding in findings:
+        anchor = index.get((finding.file_path, finding.line_start))
+        if anchor is None:
+            updated.append(finding)
+            continue
+        finding.side = "RIGHT" if anchor["new_line_no"] is not None else "LEFT"
+        finding.start_side = finding.side
+        finding.old_line_no = anchor["old_line_no"]
+        finding.new_line_no = anchor["new_line_no"]
+        finding.patch_hunk = anchor["hunk_id"]
+        updated.append(finding)
+    return updated
+
+
+def _build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str, int], dict[str, int | None | str]]:
+    index: dict[tuple[str, int], dict[str, int | None | str]] = {}
+    for file in files_in_diff:
+        hunk_id = 0
+        previous_line = -1
+        for numbered in file.numbered_lines:
+            anchor = numbered.new_line_no if numbered.new_line_no is not None else numbered.old_line_no
+            if anchor is None:
+                continue
+            if previous_line != -1 and anchor > previous_line + 1:
+                hunk_id += 1
+            key = (file.path, anchor)
+            index[key] = {
+                "new_line_no": numbered.new_line_no,
+                "old_line_no": numbered.old_line_no,
+                "hunk_id": f"{file.path}:hunk:{hunk_id}",
+            }
+            previous_line = anchor
+    return index
+
+
+def _filter_findings_with_valid_anchors(findings: list[Finding], files_in_diff: list[FileInDiff]) -> list[Finding]:
+    allowed = _build_diff_anchor_index(files_in_diff)
+    filtered: list[Finding] = []
+    for finding in findings:
+        anchor_line = finding.line_end or finding.line_start
+        if (finding.file_path, anchor_line) not in allowed:
+            continue
+        filtered.append(finding)
+    return filtered
+
+
+def _chunk_state_key(context: dict[str, Any]) -> str:
+    payload = {
+        "repo": context["repo"],
+        "pr_number": context["pr_number"],
+        "head_sha": context["head_sha"],
+        "config_hash": context.get("chunking_config_hash", "default"),
+    }
+    digest = sha1(json.dumps(payload, sort_keys=True).encode("utf-8"), usedforsecurity=False).hexdigest()
+    return f"chunking:{digest}"
+
+
+async def _load_chunk_state(context: dict[str, Any]) -> dict[str, dict[str, object]]:
+    installation_id = cast(int, context["installation_id"])
+    review_id = cast(int, context["review_id"])
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        review = await session.get(Review, review_id)
+        if review is None or not review.debug_artifacts:
+            return {}
+        chunking_state = review.debug_artifacts.get("chunking_state")
+        if not isinstance(chunking_state, dict):
+            return {}
+        state = chunking_state.get(_chunk_state_key(context))
+        if not isinstance(state, dict):
+            return {}
+        return cast(dict[str, dict[str, object]], state)
+
+
+def _merge_chunk_state_with_plan(existing: dict[str, dict[str, object]], plan: ChunkPlan) -> dict[str, dict[str, object]]:
+    merged = dict(existing)
+    for chunk in plan.chunks:
+        if chunk.chunk_id not in merged:
+            merged[chunk.chunk_id] = {"status": "pending", "findings": [], "summary": ""}
+    return merged
+
+
+def _chunk_status(state: dict[str, dict[str, object]], chunk_id: str) -> str:
+    chunk_state = state.get(chunk_id, {})
+    status = chunk_state.get("status")
+    return str(status) if isinstance(status, str) else "pending"
+
+
+def _chunk_findings_from_state(state: dict[str, dict[str, object]], chunk_id: str) -> list[Finding]:
+    chunk_state = state.get(chunk_id, {})
+    findings_raw = chunk_state.get("findings")
+    if not isinstance(findings_raw, list):
+        return []
+    findings: list[Finding] = []
+    for entry in findings_raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            findings.append(Finding.model_validate(entry))
+        except Exception:
+            continue
+    return findings
+
+
+def _chunk_summary_from_state(state: dict[str, dict[str, object]], chunk_id: str) -> str:
+    summary = state.get(chunk_id, {}).get("summary")
+    return str(summary) if isinstance(summary, str) else ""
+
+
+def _set_chunk_state(
+    state: dict[str, dict[str, object]],
+    chunk_id: str,
+    *,
+    status: str,
+    findings: list[dict[str, object]] | None = None,
+    summary: str | None = None,
+    estimated_prompt_tokens: int | None = None,
+    error: str | None = None,
+) -> None:
+    chunk_state = state.setdefault(chunk_id, {})
+    chunk_state["status"] = status
+    if findings is not None:
+        chunk_state["findings"] = findings
+    if summary is not None:
+        chunk_state["summary"] = summary
+    if estimated_prompt_tokens is not None:
+        chunk_state["estimated_prompt_tokens"] = estimated_prompt_tokens
+    if error is not None:
+        chunk_state["error"] = error
+
+
+async def _persist_chunk_state(context: dict[str, Any], chunk_state: dict[str, dict[str, object]]) -> None:
+    installation_id = cast(int, context["installation_id"])
+    review_id = cast(int, context["review_id"])
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        review = await session.get(Review, review_id)
+        if review is None:
+            return
+        debug_artifacts = dict(review.debug_artifacts or {})
+        chunking_state = dict(debug_artifacts.get("chunking_state") or {})
+        chunking_state[_chunk_state_key(context)] = chunk_state
+        debug_artifacts["chunking_state"] = chunking_state
+        review.debug_artifacts = debug_artifacts
+        await session.commit()
 
 
 def _filter_diff_files(files_in_diff: list[FileInDiff], ignore_paths: list[str]) -> list[FileInDiff]:
@@ -633,6 +1116,22 @@ def _apply_confidence_threshold(result: ReviewResult, threshold: int) -> tuple[R
         )
     result.findings = kept_findings
     return result, dropped
+
+
+def _apply_policy_filters(
+    result: ReviewResult,
+    *,
+    threshold: int,
+    tool_call_history: list[dict[str, object]],
+    known_fact_ids: set[str],
+) -> tuple[ReviewResult, list[dict[str, object]], list[tuple[Finding, str]], Counter[str]]:
+    result, confidence_dropped = _apply_confidence_threshold(result, threshold)
+    result.findings, auto_tag_vendor_rejected = auto_tag_vendor_claims(result.findings)
+    result.findings, evidence_tool_rejected = cross_check_tool_evidence(result.findings, tool_call_history)
+    result.findings, evidence_fact_rejected = cross_check_fact_ids(result.findings, known_fact_ids)
+    evidence_rejections = [*auto_tag_vendor_rejected, *evidence_tool_rejected, *evidence_fact_rejected]
+    evidence_rejection_reasons = Counter(reason for _, reason in evidence_rejections)
+    return result, confidence_dropped, evidence_rejections, evidence_rejection_reasons
 
 
 def _validation_feedback(dropped: list[tuple[Finding, DropReason, str]]) -> str:

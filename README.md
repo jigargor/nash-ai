@@ -174,8 +174,17 @@ Typical keys:
 | `summarization_enabled` | Structured fallback summaries for evicted context segments (default off). |
 | `max_summary_calls_per_review` | Cap on summarization steps per review. |
 | `generated_paths` / `vendor_paths` | Glob-style path patterns to treat generated or vendored files differently when packing context. |
+| `chunking.enabled` | Enable two-stage chunked review mode for large PRs (default `true`). |
+| `chunking.proactive_threshold_tokens` | Trigger chunking when raw diff tokens exceed this threshold. |
+| `chunking.target_chunk_tokens` | Target per-chunk prompt footprint for stage-1 analysis. |
+| `chunking.max_chunks` | Maximum chunk count before switching to partial-coverage behavior. |
+| `chunking.min_files_per_chunk` | Lower bound to avoid pathological tiny chunks. |
+| `chunking.include_file_classes` | Pre-pass file classes to include (for example `reviewable`, `config_only`, `test_only`). |
+| `chunking.max_total_prompt_tokens` | Hard total prompt budget for the full chunked run. |
+| `chunking.max_latency_seconds` | Hard latency budget for the full chunked run. |
+| `chunking.output_headroom_tokens` | Reserved output headroom per chunk/synthesis call. |
 
-Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. `.codereview.yml` is cached per `(owner, repo, sha)` in Redis for one hour. `tokens_used` / `cost_usd` on each `reviews` row reflect the selected model’s pricing when configured. When `max_mode` is enabled, the pipeline records per-stage audit rows for primary/challenger/tie-break decisions.
+Review jobs build **layered context** (project → repo profile/additions → diff hunks and surrounding lines), rank hunks for relevance, enforce anchor coverage for inline comments, and record packer telemetry. For large PRs, the system uses a **two-stage chunked flow**: stage 1 analyzes bounded chunks with PR-wide manifest awareness, then stage 2 synthesizes cross-chunk integration risks before posting one consolidated review. `.codereview.yml` is cached per `(owner, repo, sha)` in Redis for one hour. `tokens_used` / `cost_usd` on each `reviews` row reflect the selected model’s pricing when configured. When `max_mode` is enabled, the pipeline records per-stage audit rows for primary/challenger/tie-break decisions.
 
 ### 11. Production deployment
 

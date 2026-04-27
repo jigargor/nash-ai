@@ -24,12 +24,12 @@ def build_review_comment_payload(finding: Finding) -> dict[str, str | int]:
     payload: dict[str, str | int] = {
         "path": finding.file_path,
         "line": line_end,
-        "side": "RIGHT",
+        "side": finding.side,
         "body": format_finding(finding),
     }
     if finding.line_end is not None and finding.line_start < finding.line_end:
         payload["start_line"] = finding.line_start
-        payload["start_side"] = "RIGHT"
+        payload["start_side"] = finding.start_side or finding.side
     return payload
 
 
