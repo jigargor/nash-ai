@@ -45,7 +45,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     response.cookies.set(AUTH_COOKIE_NAME, sessionToken, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: true, // required by __Host- prefix; browsers accept this on localhost
       path: "/",
       maxAge: AUTH_COOKIE_TTL_SECONDS,
     });

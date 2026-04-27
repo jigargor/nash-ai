@@ -15,6 +15,8 @@
     "@ai-code-review/shared-types": "workspace:*",
     "@next/env": "16.2.4",
     "@tanstack/react-query": "^5.40.0",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.37.0",
     "next": "16.2.4",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
