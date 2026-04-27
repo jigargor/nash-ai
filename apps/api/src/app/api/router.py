@@ -30,7 +30,7 @@ from app.config import settings
 from app.db.models import Installation, RepoConfig, Review, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
-from app.github.utils import split_repo_full_name as _split_repo_full_name
+from app.github.utils import safe_fetch_file, split_repo_full_name as _split_repo_full_name
 from app.llm.router import resolve_model_for_role
 from app.observability import create_async_anthropic_client
 from app.queue.connection import require_app_redis
@@ -343,6 +343,19 @@ async def list_repos(
             }
             for repo in sorted_repos[:limit]
         ]
+
+
+@router.get("/repos/{owner}/{repo}/codereview-config")
+async def get_repo_codereview_config(
+    owner: str,
+    repo: str,
+    installation_id: int = Query(..., ge=1),
+) -> dict[str, object]:
+    owner = _validate_repo_segment(owner, "repository owner")
+    repo = _validate_repo_segment(repo, "repository name")
+    gh = await GitHubClient.for_installation(installation_id)
+    raw = await safe_fetch_file(gh, owner, repo, ".codereview.yml", "HEAD")
+    return {"found": raw is not None, "yaml_text": raw}
 
 
 @router.post("/repos/{owner}/{repo}/codereview-template/generate")

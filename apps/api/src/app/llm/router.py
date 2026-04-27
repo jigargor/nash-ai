@@ -115,6 +115,12 @@ def resolve_model_for_role(
         record = active_catalog.find_model(provider, model)
         if record is not None and _model_usable(record, role_config, context_tokens=context_tokens):
             return _resolution_from_record(role, record, explicit_pin=True, catalog=active_catalog)
+        # Model not in catalog at all (e.g. newly released, not yet cataloged) — trust the pin.
+        if record is None:
+            return _resolution_from_unknown_pin(
+                role, provider, model, active_catalog, fallback_reason=None
+            )
+        # Model IS in catalog but not usable (deprecated/retired) — allow_auto_fallback decides.
         if not routing.allow_auto_fallback:
             return _resolution_from_unknown_pin(
                 role, provider, model, active_catalog, fallback_reason=None

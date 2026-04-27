@@ -355,7 +355,9 @@ def _parse_models(raw_value: object) -> ModelsRoutingConfig:
                 str(model_raw).strip() if isinstance(model_raw, str) and model_raw.strip() else None
             )
             roles[role] = ModelRoleRoutingConfig(
-                tier=_parse_model_tier(role_value.get("tier"), default=policy),
+                tier="economy"
+                if role == "fast_path"
+                else _parse_model_tier(role_value.get("tier"), default=policy),
                 provider=provider,
                 model=model,
                 require_provider_diversity=bool(

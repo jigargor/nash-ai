@@ -21,7 +21,7 @@ def test_router_resolves_default_primary_role_from_available_provider() -> None:
     )
 
     assert resolution.provider == "anthropic"
-    assert resolution.model == "claude-sonnet-4-5"
+    assert resolution.model == "claude-sonnet-4-6"
     assert resolution.role == "primary_review"
     assert resolution.explicit_pin is False
 

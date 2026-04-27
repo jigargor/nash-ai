@@ -41,6 +41,17 @@ export function fetchRepos(installationId?: number) {
   return apiFetch<RepoSummary[]>(`/api/v1/repos${suffix}`);
 }
 
+export interface CodeReviewConfigResult {
+  found: boolean;
+  yaml_text: string | null;
+}
+
+export function fetchCodeReviewConfig(owner: string, repo: string, installationId: number) {
+  return apiFetch<CodeReviewConfigResult>(
+    `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/codereview-config?installation_id=${installationId}`,
+  );
+}
+
 export function generateRepoTemplate(owner: string, repo: string, installationId: number) {
   return apiFetch<GeneratedRepoTemplate>(
     `/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/codereview-template/generate?installation_id=${installationId}`,
