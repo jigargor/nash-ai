@@ -1,0 +1,84 @@
+# .codereview.yml
+# Balanced defaults: good precision, reasonable cost, max_mode on.
+#
+# PR controls (title or description, case-insensitive):
+#   [skip-nash-review]  — do not enqueue an automated review for this PR
+#   [force-nash-review] — if both tags appear, review still runs
+
+confidence_threshold: 0.88
+severity_threshold: medium
+categories:
+  - security
+  - correctness
+  - performance
+review_drafts: false
+max_findings_per_pr: 20
+
+# Optional repo-specific guidance
+prompt_additions: |
+  Prefer minimal, safe fixes.
+  Avoid style-only comments unless they affect maintainability.
+
+ignore_paths:
+  - "**/*.snap"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/coverage/**"
+  - "**/*.min.js"
+  - "**/*.lock"
+
+model:
+  provider: anthropic
+  name: claude-sonnet-4-5
+  pricing:
+    input_per_1m: 3.00
+    output_per_1m: 15.00
+
+# Primary + challenger + conditional tie-break
+max_mode:
+  enabled: true
+  conflict_threshold: 35
+  high_risk_severity: high
+  challenger:
+    provider: openai
+    name: gpt-5.5
+  tie_break:
+    provider: gemini
+    name: gemini-2.5-pro
+
+budgets:
+  system_prompt: 3000
+  repo_profile: 1500
+  repo_additions: 1000
+  diff_hunks: 40000
+  surrounding_context: 15000
+  fetched_files_headroom: 20000
+  output: 8000
+  total_cap: 120000
+
+layered_context_enabled: true
+partial_review_mode_enabled: true
+partial_review_changed_lines_threshold: 600
+summarization_enabled: false
+max_summary_calls_per_review: 3
+
+generated_paths:
+  - "**/generated/**"
+  - "**/*.gen.*"
+vendor_paths:
+  - "**/vendor/**"
+  - "**/third_party/**"
+
+chunking:
+  enabled: true
+  proactive_threshold_tokens: 35000
+  target_chunk_tokens: 18000
+  max_chunks: 8
+  min_files_per_chunk: 1
+  include_file_classes:
+    - reviewable
+    - config_only
+    - test_only
+  max_total_prompt_tokens: 120000
+  max_latency_seconds: 240
+  output_headroom_tokens: 4096
