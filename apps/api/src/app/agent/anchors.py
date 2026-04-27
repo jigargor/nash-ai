@@ -1,9 +1,16 @@
 from app.agent.diff_parser import FileInDiff
 from app.agent.schema import Finding
+from typing import TypedDict
 
 
-def build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str, int], dict[str, int | None | str]]:
-    index: dict[tuple[str, int], dict[str, int | None | str]] = {}
+class DiffAnchorMetadata(TypedDict):
+    new_line_no: int | None
+    old_line_no: int | None
+    hunk_id: str
+
+
+def build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str, int], DiffAnchorMetadata]:
+    index: dict[tuple[str, int], DiffAnchorMetadata] = {}
     for file in files_in_diff:
         hunk_id = 0
         previous_line = -1
@@ -31,11 +38,14 @@ def attach_anchor_metadata(findings: list[Finding], files_in_diff: list[FileInDi
         if anchor is None:
             updated.append(finding)
             continue
-        finding.side = "RIGHT" if anchor["new_line_no"] is not None else "LEFT"
+        new_line_no = anchor["new_line_no"]
+        old_line_no = anchor["old_line_no"]
+        hunk_id = anchor["hunk_id"]
+        finding.side = "RIGHT" if new_line_no is not None else "LEFT"
         finding.start_side = finding.side
-        finding.old_line_no = anchor["old_line_no"]
-        finding.new_line_no = anchor["new_line_no"]
-        finding.patch_hunk = anchor["hunk_id"]
+        finding.old_line_no = old_line_no
+        finding.new_line_no = new_line_no
+        finding.patch_hunk = hunk_id
         updated.append(finding)
     return updated
 

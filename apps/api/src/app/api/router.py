@@ -37,6 +37,7 @@ from app.telemetry.finding_outcomes import list_review_finding_outcomes, summari
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -342,20 +343,6 @@ async def generate_repo_codereview_template(
     repo_normalized = _validate_repo_segment(repo, "repository name")
     repo_full_name = f"{owner_normalized}/{repo_normalized}"
 
-    async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
-        row = await session.scalar(
-            select(RepoConfig).where(
-                RepoConfig.installation_id == installation_id,
-                RepoConfig.repo_full_name == repo_full_name,
-            )
-        )
-        if row is not None and row.ai_generated_at is not None:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="AI .codereview.yml can only be generated once per repository.",
-            )
-
     gh = await GitHubClient.for_installation(installation_id)
     ref = await _resolve_repo_head_sha(gh, owner_normalized, repo_normalized)
     repo_profile = await profile_repo(gh, owner_normalized, repo_normalized, ref)
@@ -379,7 +366,13 @@ async def generate_repo_codereview_template(
         model_name=model_name,
     )
     payload_text = _extract_yaml_payload(raw_yaml)
-    parsed_payload = yaml.safe_load(payload_text)
+    try:
+        parsed_payload = yaml.safe_load(payload_text)
+    except yaml.YAMLError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Generated config was malformed YAML.",
+        ) from None
     if not isinstance(parsed_payload, dict):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -388,34 +381,53 @@ async def generate_repo_codereview_template(
     normalized_config = _normalize_generated_config(parsed_payload)
     normalized_yaml = _serialize_review_config_yaml(normalized_config)
 
-    normalized_payload = yaml.safe_load(normalized_yaml)
+    try:
+        normalized_payload = yaml.safe_load(normalized_yaml)
+    except yaml.YAMLError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Normalized YAML serialization failed.",
+        ) from None
     if not isinstance(normalized_payload, dict):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Normalized YAML serialization failed.")
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
-        row = await session.scalar(
-            select(RepoConfig).where(
-                RepoConfig.installation_id == installation_id,
-                RepoConfig.repo_full_name == repo_full_name,
+        try:
+            row = await session.scalar(
+                select(RepoConfig)
+                .where(
+                    RepoConfig.installation_id == installation_id,
+                    RepoConfig.repo_full_name == repo_full_name,
+                )
+                .with_for_update()
             )
-        )
-        if row is None:
-            row = RepoConfig(
-                installation_id=installation_id,
-                repo_full_name=repo_full_name,
-            )
-            session.add(row)
-        if row.ai_generated_at is not None:
+            if row is None:
+                row = RepoConfig(
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                )
+                session.add(row)
+                await session.flush()
+            if row.ai_generated_at is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="AI .codereview.yml can only be generated once per repository.",
+                )
+            row.config_yaml = cast(dict[str, object], normalized_payload)
+            row.ai_generated_yaml = normalized_yaml
+            row.ai_generated_at = now
+            row.updated_at = now
+            await session.commit()
+        except HTTPException:
+            await session.rollback()
+            raise
+        except IntegrityError:
+            await session.rollback()
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="AI .codereview.yml can only be generated once per repository.",
-            )
-        row.config_yaml = cast(dict[str, object], normalized_payload)
-        row.ai_generated_yaml = normalized_yaml
-        row.ai_generated_at = now
-        row.updated_at = now
-        await session.commit()
+                detail="AI .codereview.yml generation is already completed or in progress for this repository.",
+            ) from None
     return {
         "repo_full_name": repo_full_name,
         "generated_once": True,

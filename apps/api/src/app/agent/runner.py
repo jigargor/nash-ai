@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from fnmatch import fnmatch
 from time import monotonic
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 import redis.exceptions as redis_exc
@@ -15,7 +15,7 @@ from redis.asyncio import Redis
 from app.agent.acknowledgments import extract_todo_fixme_markers
 from app.agent.config_cache import get_cached_review_config, set_cached_review_config
 from app.agent.constants import PROMPT_VERSION, REPAIR_RETRY_DROP_RATE, REPAIR_SEARCH_WINDOW
-from app.agent.chunking import ChunkPlan, ChunkingPlannerConfig, PlannedChunk, plan_chunks
+from app.agent.chunking import ChunkPlan, ChunkingPlannerConfig, FileClass, PlannedChunk, plan_chunks
 from app.agent.chunked_runtime import (
     chunk_repo_segments,
     chunk_status,
@@ -57,6 +57,22 @@ logger = logging.getLogger(__name__)
 FULL_REGENERATE_RETRY_DROP_RATE = 0.50
 MIN_RECOVERY_RATIO_FOR_SUCCESS = 0.50
 SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+ALLOWED_CHUNK_FILE_CLASSES: set[FileClass] = {
+    "reviewable",
+    "generated",
+    "lockfile",
+    "test_only",
+    "config_only",
+    "docs_only",
+    "binary_unsupported",
+    "deleted_only",
+}
+
+
+class DiffAnchorMetadata(TypedDict):
+    new_line_no: int | None
+    old_line_no: int | None
+    hunk_id: str
 
 
 async def _mark_review_running(review_id: int, installation_id: int) -> None:
@@ -652,13 +668,20 @@ async def _run_chunked_review(
     pr_number = cast(int, context["pr_number"])
     head_sha = cast(str, context["head_sha"])
     files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
+    include_file_classes = tuple(
+        file_class
+        for file_class in review_config.chunking.include_file_classes
+        if file_class in ALLOWED_CHUNK_FILE_CLASSES
+    )
+    if not include_file_classes:
+        include_file_classes = ("reviewable", "config_only", "test_only")
     planner_config = ChunkingPlannerConfig(
         enabled=review_config.chunking.enabled,
         proactive_threshold_tokens=review_config.chunking.proactive_threshold_tokens,
         target_chunk_tokens=review_config.chunking.target_chunk_tokens,
         max_chunks=review_config.chunking.max_chunks,
         min_files_per_chunk=review_config.chunking.min_files_per_chunk,
-        include_file_classes=tuple(review_config.chunking.include_file_classes),
+        include_file_classes=include_file_classes,
         max_total_prompt_tokens=review_config.chunking.max_total_prompt_tokens,
         max_latency_seconds=review_config.chunking.max_latency_seconds,
         output_headroom_tokens=review_config.chunking.output_headroom_tokens,
@@ -900,17 +923,20 @@ def _attach_anchor_metadata(findings: list[Finding], files_in_diff: list[FileInD
         if anchor is None:
             updated.append(finding)
             continue
-        finding.side = "RIGHT" if anchor["new_line_no"] is not None else "LEFT"
+        new_line_no = anchor["new_line_no"]
+        old_line_no = anchor["old_line_no"]
+        hunk_id = anchor["hunk_id"]
+        finding.side = "RIGHT" if new_line_no is not None else "LEFT"
         finding.start_side = finding.side
-        finding.old_line_no = anchor["old_line_no"]
-        finding.new_line_no = anchor["new_line_no"]
-        finding.patch_hunk = anchor["hunk_id"]
+        finding.old_line_no = old_line_no
+        finding.new_line_no = new_line_no
+        finding.patch_hunk = hunk_id
         updated.append(finding)
     return updated
 
 
-def _build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str, int], dict[str, int | None | str]]:
-    index: dict[tuple[str, int], dict[str, int | None | str]] = {}
+def _build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str, int], DiffAnchorMetadata]:
+    index: dict[tuple[str, int], DiffAnchorMetadata] = {}
     for file in files_in_diff:
         hunk_id = 0
         previous_line = -1
