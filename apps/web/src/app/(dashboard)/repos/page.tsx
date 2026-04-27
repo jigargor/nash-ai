@@ -1,15 +1,32 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { useInstallations } from "@/hooks/use-installations";
+import { useGenerateRepoTemplate } from "@/hooks/use-repo-template";
 import { useRepos } from "@/hooks/use-repos";
+import { CODEREVIEW_TEMPLATE_EXAMPLE } from "@/lib/api/repos";
+
+function downloadTextFile(filename: string, content: string): void {
+  const blob = new Blob([content], { type: "text/yaml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
 
 export default function RepositoriesPage() {
   const installations = useInstallations();
   const repos = useRepos();
+  const generateTemplate = useGenerateRepoTemplate();
+  const [statusByRepo, setStatusByRepo] = useState<Record<string, string>>({});
 
   if (installations.isLoading || repos.isLoading) {
     return <StateBlock title="Loading repositories" description="Fetching installation accounts and status." />;
@@ -46,6 +63,8 @@ export default function RepositoriesPage() {
     <section style={{ display: "grid", gap: "1rem" }}>
       {repos.data.map((repo) => {
         const installation = installations.data.find((item) => item.installation_id === repo.installation_id);
+        const [owner, repoName] = repo.repo_full_name.split("/", 2);
+        const repoKey = `${repo.installation_id}:${repo.repo_full_name}`;
         return (
           <Panel key={`${repo.installation_id}:${repo.repo_full_name}`}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center" }}>
@@ -74,10 +93,53 @@ export default function RepositoriesPage() {
               >
                 Latest review
               </Link>
+              <button
+                type="button"
+                className="button button-ghost"
+                onClick={async () => {
+                  if (!owner || !repoName) {
+                    setStatusByRepo((prev) => ({ ...prev, [repoKey]: "Invalid repository name." }));
+                    return;
+                  }
+                  try {
+                    const generated = await generateTemplate.mutateAsync({
+                      owner,
+                      repo: repoName,
+                      installationId: repo.installation_id,
+                    });
+                    downloadTextFile(".codereview.yml", generated.config_yaml_text);
+                    setStatusByRepo((prev) => ({
+                      ...prev,
+                      [repoKey]: `Generated with ${generated.provider}/${generated.model} and downloaded.`,
+                    }));
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : "Failed to generate template.";
+                    setStatusByRepo((prev) => ({ ...prev, [repoKey]: message }));
+                  }
+                }}
+                disabled={repo.ai_template_generated || generateTemplate.isPending}
+              >
+                {repo.ai_template_generated ? "AI template already generated" : "Generate AI .codereview.yml"}
+              </button>
+              <button
+                type="button"
+                className="button button-ghost"
+                onClick={() => downloadTextFile(".codereview.yml.example", CODEREVIEW_TEMPLATE_EXAMPLE)}
+              >
+                Download example template
+              </button>
               <Link href="/settings" className="button button-ghost">
                 Manage settings
               </Link>
             </div>
+            {repo.ai_template_generated_at ? (
+              <p style={{ marginTop: "0.5rem", color: "var(--text-muted)" }}>
+                AI template generated at {new Date(repo.ai_template_generated_at).toLocaleString()}.
+              </p>
+            ) : null}
+            {statusByRepo[repoKey] ? (
+              <p style={{ marginTop: "0.5rem", color: "var(--text-muted)" }}>{statusByRepo[repoKey]}</p>
+            ) : null}
           </Panel>
         );
       })}

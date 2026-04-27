@@ -1,15 +1,37 @@
 import asyncio
 import hmac
 import json
+import re
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import datetime, timezone
+from dataclasses import asdict
 from decimal import Decimal
-from typing import TypedDict
+from typing import TypedDict, cast
 
+import yaml
+from app.agent.profiler import profile_repo
+from app.agent.provider_clients import create_openai_compatible_client, get_provider_api_key
+from app.agent.review_config import (
+    DEFAULT_MAX_FINDINGS_PER_PR,
+    ModelProvider,
+    ReviewConfig,
+    _normalize_path_patterns,
+    _normalize_positive_int,
+    _normalize_threshold,
+    _parse_budgets,
+    _parse_categories,
+    _parse_chunking,
+    _parse_max_mode,
+    _parse_model_config,
+    _parse_packaging,
+    _parse_severity_threshold,
+)
 from app.config import settings
-from app.db.models import Installation, Review, ReviewModelAudit
+from app.db.models import Installation, RepoConfig, Review, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
+from app.github.client import GitHubClient
 from app.github.utils import split_repo_full_name as _split_repo_full_name
+from app.observability import create_async_anthropic_client
 from app.queue.connection import require_app_redis
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -41,6 +63,133 @@ class RepoAccumulator(TypedDict):
     latest_pr_number: int
     latest_status: str
     last_review_at: datetime
+
+
+REPO_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+DEFAULT_TEMPLATE_PROMPT = """You generate .codereview.yml configuration files for a PR review agent.
+Return ONLY valid YAML (no markdown fences, no explanation).
+Optimize for practical defaults: medium-noise, strong correctness/security, bounded cost.
+Include keys: confidence_threshold, severity_threshold, categories, review_drafts, max_findings_per_pr,
+ignore_paths, model, max_mode, budgets, layered_context_enabled, partial_review_mode_enabled,
+partial_review_changed_lines_threshold, summarization_enabled, max_summary_calls_per_review,
+generated_paths, vendor_paths, chunking.
+"""
+
+
+def _validate_repo_segment(segment: str, label: str) -> str:
+    normalized = segment.strip()
+    if not normalized or not REPO_SEGMENT_PATTERN.fullmatch(normalized):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {label}")
+    return normalized
+
+
+def _extract_yaml_payload(raw_text: str) -> str:
+    candidate = raw_text.strip()
+    fenced = re.search(r"```ya?ml\s*(.*?)```", candidate, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        candidate = fenced.group(1).strip()
+    return candidate
+
+
+def _normalize_generated_config(raw_payload: dict[str, object]) -> ReviewConfig:
+    confidence_threshold = _normalize_threshold(raw_payload.get("confidence_threshold"))
+    severity_threshold = _parse_severity_threshold(raw_payload.get("severity_threshold"))
+    categories = _parse_categories(raw_payload.get("categories"))
+    ignore_paths = _normalize_path_patterns(raw_payload.get("ignore_paths"))
+    review_drafts = bool(raw_payload.get("review_drafts", False))
+    max_findings_per_pr = _normalize_positive_int(raw_payload.get("max_findings_per_pr"), DEFAULT_MAX_FINDINGS_PER_PR)
+    prompt_additions_raw = raw_payload.get("prompt_additions")
+    prompt_additions = str(prompt_additions_raw).strip() if isinstance(prompt_additions_raw, str) else None
+    if prompt_additions == "":
+        prompt_additions = None
+    model = _parse_model_config(raw_payload.get("model"))
+    max_mode = _parse_max_mode(raw_payload.get("max_mode"))
+    budgets = _parse_budgets(raw_payload.get("budgets"))
+    packaging = _parse_packaging(raw_payload)
+    chunking = _parse_chunking(raw_payload.get("chunking"))
+    return ReviewConfig(
+        confidence_threshold=confidence_threshold,
+        severity_threshold=severity_threshold,
+        categories=categories,
+        ignore_paths=ignore_paths,
+        review_drafts=review_drafts,
+        max_findings_per_pr=max_findings_per_pr,
+        prompt_additions=prompt_additions,
+        model=model,
+        max_mode=max_mode,
+        budgets=budgets,
+        packaging=packaging,
+        chunking=chunking,
+    )
+
+
+def _serialize_review_config_yaml(config: ReviewConfig) -> str:
+    payload = asdict(config)
+    payload["model"]["input_per_1m_usd"] = float(config.model.input_per_1m_usd)
+    payload["model"]["output_per_1m_usd"] = float(config.model.output_per_1m_usd)
+    payload["budgets"] = config.budgets.model_dump(mode="json")
+    payload["chunking"] = asdict(config.chunking)
+    return yaml.safe_dump(payload, sort_keys=False)
+
+
+async def _resolve_repo_head_sha(gh: GitHubClient, owner: str, repo: str) -> str:
+    repo_payload = await gh.get_json(f"/repos/{owner}/{repo}")
+    default_branch = str(repo_payload.get("default_branch") or "main")
+    branch_payload = await gh.get_json(f"/repos/{owner}/{repo}/branches/{default_branch}")
+    commit_obj = branch_payload.get("commit")
+    if isinstance(commit_obj, dict):
+        sha = commit_obj.get("sha")
+        if isinstance(sha, str) and sha.strip():
+            return sha
+    return default_branch
+
+
+async def _generate_yaml_with_model(
+    *,
+    owner: str,
+    repo: str,
+    frameworks: list[str],
+    model_provider: ModelProvider,
+    model_name: str,
+) -> str:
+    user_prompt = (
+        f"Repository: {owner}/{repo}\n"
+        f"Detected frameworks: {', '.join(frameworks) if frameworks else 'unknown'}\n"
+        "Generate a balanced .codereview.yml suitable for this repository."
+    )
+    if model_provider == "anthropic":
+        client = create_async_anthropic_client(get_provider_api_key("anthropic"))
+        anthropic_response = await client.messages.create(
+            model=model_name,
+            max_tokens=2200,
+            temperature=0,
+            system=[{"type": "text", "text": DEFAULT_TEMPLATE_PROMPT}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        text_blocks = [
+            str(getattr(block, "text", "")).strip()
+            for block in anthropic_response.content
+            if getattr(block, "type", "") == "text"
+        ]
+        raw_output = "\n".join(block for block in text_blocks if block)
+        if raw_output:
+            return raw_output
+        raise RuntimeError("Anthropic generation returned empty output")
+
+    if model_provider not in {"openai", "gemini"}:
+        raise RuntimeError(f"Unsupported provider for OpenAI-compatible generation: {model_provider}")
+    openai_client = create_openai_compatible_client(model_provider)
+    openai_response = await openai_client.chat.completions.create(
+        model=model_name,
+        temperature=0,
+        messages=[
+            {"role": "system", "content": DEFAULT_TEMPLATE_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+    if not openai_response.choices:
+        raise RuntimeError("OpenAI-compatible generation returned no choices")
+    return str(openai_response.choices[0].message.content or "").strip()
 
 
 async def _list_installation_rows(
@@ -142,6 +291,19 @@ async def list_repos(
                     repo["latest_status"] = review.status
                     repo["last_review_at"] = review.created_at
 
+        repo_generation_state: dict[tuple[int, str], tuple[bool, str | None]] = {}
+        for current_installation_id in installation_ids:
+            await set_installation_context(session, current_installation_id)
+            repo_rows = await session.scalars(
+                select(RepoConfig).where(RepoConfig.installation_id == current_installation_id)
+            )
+            for row in repo_rows:
+                key = (int(row.installation_id), row.repo_full_name)
+                repo_generation_state[key] = (
+                    row.ai_generated_at is not None,
+                    row.ai_generated_at.isoformat() if row.ai_generated_at is not None else None,
+                )
+
         sorted_repos = sorted(
             repos.values(),
             key=lambda item: item["last_review_at"],
@@ -150,11 +312,118 @@ async def list_repos(
         return [
             {
                 **repo,
+                "ai_template_generated": repo_generation_state.get(
+                    (repo["installation_id"], repo["repo_full_name"]),
+                    (False, None),
+                )[0],
+                "ai_template_generated_at": repo_generation_state.get(
+                    (repo["installation_id"], repo["repo_full_name"]),
+                    (False, None),
+                )[1],
                 "estimated_cost_usd": str(repo["estimated_cost_usd"]),
                 "last_review_at": repo["last_review_at"].isoformat(),
             }
             for repo in sorted_repos[:limit]
         ]
+
+
+@router.post("/repos/{owner}/{repo}/codereview-template/generate")
+async def generate_repo_codereview_template(
+    owner: str,
+    repo: str,
+    installation_id: int = Query(..., ge=1),
+) -> dict[str, object]:
+    if not settings.has_llm_api_key_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No LLM API key configured (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)",
+        )
+    owner_normalized = _validate_repo_segment(owner, "repository owner")
+    repo_normalized = _validate_repo_segment(repo, "repository name")
+    repo_full_name = f"{owner_normalized}/{repo_normalized}"
+
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        row = await session.scalar(
+            select(RepoConfig).where(
+                RepoConfig.installation_id == installation_id,
+                RepoConfig.repo_full_name == repo_full_name,
+            )
+        )
+        if row is not None and row.ai_generated_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="AI .codereview.yml can only be generated once per repository.",
+            )
+
+    gh = await GitHubClient.for_installation(installation_id)
+    ref = await _resolve_repo_head_sha(gh, owner_normalized, repo_normalized)
+    repo_profile = await profile_repo(gh, owner_normalized, repo_normalized, ref)
+
+    provider: ModelProvider
+    if settings.anthropic_api_key:
+        provider = "anthropic"
+        model_name = settings.anthropic_default_model
+    elif settings.openai_api_key:
+        provider = "openai"
+        model_name = settings.openai_default_model
+    else:
+        provider = "gemini"
+        model_name = settings.gemini_default_model
+
+    raw_yaml = await _generate_yaml_with_model(
+        owner=owner_normalized,
+        repo=repo_normalized,
+        frameworks=repo_profile.frameworks,
+        model_provider=provider,
+        model_name=model_name,
+    )
+    payload_text = _extract_yaml_payload(raw_yaml)
+    parsed_payload = yaml.safe_load(payload_text)
+    if not isinstance(parsed_payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Generated config was not valid YAML object.",
+        )
+    normalized_config = _normalize_generated_config(parsed_payload)
+    normalized_yaml = _serialize_review_config_yaml(normalized_config)
+
+    normalized_payload = yaml.safe_load(normalized_yaml)
+    if not isinstance(normalized_payload, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Normalized YAML serialization failed.")
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        row = await session.scalar(
+            select(RepoConfig).where(
+                RepoConfig.installation_id == installation_id,
+                RepoConfig.repo_full_name == repo_full_name,
+            )
+        )
+        if row is None:
+            row = RepoConfig(
+                installation_id=installation_id,
+                repo_full_name=repo_full_name,
+            )
+            session.add(row)
+        if row.ai_generated_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="AI .codereview.yml can only be generated once per repository.",
+            )
+        row.config_yaml = cast(dict[str, object], normalized_payload)
+        row.ai_generated_yaml = normalized_yaml
+        row.ai_generated_at = now
+        row.updated_at = now
+        await session.commit()
+    return {
+        "repo_full_name": repo_full_name,
+        "generated_once": True,
+        "generated_at": now.isoformat(),
+        "provider": provider,
+        "model": model_name,
+        "config_yaml_text": normalized_yaml,
+    }
 
 
 @router.get("/reviews")
