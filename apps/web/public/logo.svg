@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" role="img" aria-labelledby="title desc">
+  <title id="title">Nash AI Logo - Option 3</title>
+  <desc id="desc">Abstract gold motion figure passing a code ball, with Nash AI wordmark and subtitle.</desc>
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7D07A"/>
+      <stop offset="0.48" stop-color="#E5A93D"/>
+      <stop offset="1" stop-color="#8E6022"/>
+    </linearGradient>
+    <linearGradient id="cream" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFBEF"/>
+      <stop offset="1" stop-color="#E9DFC6"/>
+    </linearGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g fill="none" stroke="url(#gold)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" filter="url(#softGlow)">
+    <!-- head -->
+    <path d="M428 118c23-42 76-23 65 23-5 22-26 35-47 31-28-5-36-31-18-54Z"/>
+    <!-- body and motion -->
+    <path d="M404 190c-34 34-72 69-121 88"/>
+    <path d="M458 183c-14 48-39 91-76 131"/>
+    <path d="M357 206c-69 6-129 40-177 101"/>
+    <path d="M290 242c-49 38-91 83-126 134"/>
+    <path d="M519 192c64 19 108 18 166-2"/>
+    <path d="M519 222c61 24 108 25 167 4"/>
+    <path d="M357 318c58-8 106 0 148 25"/>
+    <path d="M286 404c48-43 93-75 142-97"/>
+    <path d="M463 393c39-16 71-34 96-58"/>
+    <path d="M507 368c24-2 45 1 63 11"/>
+  </g>
+  <g transform="translate(716 133)" filter="url(#softGlow)">
+    <circle cx="0" cy="0" r="45" fill="none" stroke="url(#gold)" stroke-width="12"/>
+    <path d="M-18-6l-15 14 15 14M18-6l15 14-15 14M7-19L-8 28" fill="none" stroke="url(#gold)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="480" y="438" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="112" font-weight="700" fill="url(#cream)">Nash AI</text>
+  <text x="480" y="505" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="36" font-weight="500" fill="#A7A0D8">AI review control center</text>
+</svg>

@@ -1,3 +1,5 @@
+import Image from "next/image";
+
 export default function LoginPage() {
   return (
     <main
@@ -17,6 +19,16 @@ export default function LoginPage() {
           padding: "1.5rem",
         }}
       >
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: "1.5rem" }}>
+          <Image
+            src="/logo.svg"
+            alt="Nash AI logo"
+            width={200}
+            height={200}
+            priority
+            style={{ width: "min(200px, 70vw)", height: "auto", display: "block" }}
+          />
+        </div>
         <h1 style={{ marginTop: 0, fontFamily: "var(--font-instrument-serif)" }}>Sign in</h1>
         <p style={{ color: "var(--text-muted)" }}>
           Authenticate with your GitHub account to access the review dashboard.

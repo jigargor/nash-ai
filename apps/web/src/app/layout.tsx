@@ -14,6 +14,11 @@ const instrumentSerif = Instrument_Serif({
 export const metadata: Metadata = {
   title: "AI Code Review",
   description: "Automated PR review powered by Claude",
+  icons: {
+    icon: "/logo.svg",
+    shortcut: "/logo.svg",
+    apple: "/logo.svg",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
