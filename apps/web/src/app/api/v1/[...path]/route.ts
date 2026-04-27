@@ -17,6 +17,7 @@ export const maxDuration = 30;
 
 /** Upstream fetch timeout — must stay below `maxDuration` (leave headroom for cookie/session work). */
 const UPSTREAM_TIMEOUT_MS = 25_000;
+const MAX_PROXY_BODY_BYTES = 1024 * 1024; // 1 MiB
 
 /**
  * Railway (and most hosts) speak HTTPS on the public URL. If `API_URL` uses `http://`,
@@ -90,11 +91,33 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   headers.set("X-Api-Key", apiAccessKey);
   headers.set("X-Dashboard-User-Token", dashboardUserToken);
 
+  let requestBody: ArrayBuffer | undefined;
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const contentLengthHeader = request.headers.get("content-length");
+    if (contentLengthHeader !== null) {
+      const declaredLength = Number(contentLengthHeader);
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_PROXY_BODY_BYTES) {
+        return NextResponse.json(
+          { detail: `Request body exceeds ${MAX_PROXY_BODY_BYTES} byte limit.` },
+          { status: 413 },
+        );
+      }
+    }
+
+    requestBody = await request.arrayBuffer();
+    if (requestBody.byteLength > MAX_PROXY_BODY_BYTES) {
+      return NextResponse.json(
+        { detail: `Request body exceeds ${MAX_PROXY_BODY_BYTES} byte limit.` },
+        { status: 413 },
+      );
+    }
+  }
+
   try {
     return await fetch(targetUrl, {
       method: request.method,
       headers,
-      body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
+      body: requestBody,
       cache: "no-store",
       redirect: "follow",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
@@ -121,5 +144,9 @@ export function PUT(request: Request, context: ApiProxyRouteContext): Promise<Re
 }
 
 export function DELETE(request: Request, context: ApiProxyRouteContext): Promise<Response> {
+  return proxyApiRequest(request, context);
+}
+
+export function PATCH(request: Request, context: ApiProxyRouteContext): Promise<Response> {
   return proxyApiRequest(request, context);
 }
