@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 _LANGFUSE_CLIENT: Any | None = None
 _SENTRY_READY = False
+_LANGFUSE_ANTHROPIC_SHIM_WARNED = False
 
 
 def init_observability(service_name: str) -> None:
@@ -66,11 +67,23 @@ def record_review_trace(metadata: dict[str, Any]) -> None:
 
 
 def create_async_anthropic_client(api_key: str) -> AsyncAnthropic:
+    """Return Anthropic async client; Langfuse auto-wrap only when available (removed in langfuse v4+)."""
+    global _LANGFUSE_ANTHROPIC_SHIM_WARNED
     if settings.langfuse_public_key and settings.langfuse_secret_key:
         try:
             from langfuse.anthropic import AsyncAnthropic as LangfuseAsyncAnthropic  # type: ignore[import-not-found]
-
-            return LangfuseAsyncAnthropic(api_key=api_key)
+        except ModuleNotFoundError:
+            # Langfuse 4.x dropped langfuse.anthropic; traces still work via Langfuse SDK / record_review_trace.
+            if not _LANGFUSE_ANTHROPIC_SHIM_WARNED:
+                logger.warning(
+                    "Langfuse Anthropic shim unavailable; using anthropic.AsyncAnthropic directly"
+                )
+                _LANGFUSE_ANTHROPIC_SHIM_WARNED = True
         except Exception:
-            logger.exception("Failed to initialize Langfuse Anthropic client, falling back to standard client")
+            logger.exception("Failed to import Langfuse Anthropic wrapper; using standard client")
+        else:
+            try:
+                return LangfuseAsyncAnthropic(api_key=api_key)
+            except Exception:
+                logger.exception("Failed to construct Langfuse Anthropic client; using standard client")
     return AsyncAnthropic(api_key=api_key)

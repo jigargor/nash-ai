@@ -1,9 +1,11 @@
 from collections import Counter
 from decimal import Decimal
 from types import SimpleNamespace
+from time import monotonic
 
 import pytest
 
+from app.agent.chunking import ChunkPlan, ClassifiedDiffFile, PlannedChunk
 from app.agent.context_builder import ContextTelemetry
 from app.agent.anchors import attach_anchor_metadata, filter_findings_with_valid_anchors
 from app.agent.dedupe import dedupe_findings
@@ -20,6 +22,7 @@ from app.agent.runner import (
     _repair_findings_from_files,
     _review_config_for_fast_path_decision,
     _run_fast_path_stage,
+    _run_chunked_review,
     _summarize_target_line_mismatch_subtypes,
     _validate_result,
     _validation_feedback,
@@ -532,3 +535,104 @@ def test_chunking_config_hash_changes_when_chunking_knobs_change() -> None:
     assert base_hash == _chunking_config_hash(base)
     assert len(base_hash) == 64
     assert _chunking_config_hash(base) != _chunking_config_hash(changed)
+
+
+@pytest.mark.anyio
+async def test_run_chunked_review_skips_failed_chunk_and_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    file_in_diff = FileInDiff(
+        path="src/example.py",
+        language="Python",
+        is_new=False,
+        is_deleted=False,
+        numbered_lines=[NumberedLine(new_line_no=1, old_line_no=1, kind="add", content="print('x')")],
+        context_window=[],
+    )
+    classified = ClassifiedDiffFile(
+        path=file_in_diff.path,
+        file_class="reviewable",
+        changed_lines=1,
+        estimated_diff_tokens=8,
+        integration_key="src/example.py",
+        touched_package="src",
+        dependency_hint=None,
+        file_in_diff=file_in_diff,
+    )
+    chunk_plan = ChunkPlan(
+        chunks=(PlannedChunk(chunk_id="chunk-1", files=(classified,), estimated_prompt_tokens=64, estimated_output_tokens=64),),
+        skipped_files=(),
+        is_partial=False,
+        coverage_note="Chunked coverage note.",
+        total_estimated_prompt_tokens=64,
+        total_estimated_output_tokens=64,
+        touched_packages=("src",),
+        dependency_hints=(),
+        full_manifest=("src/example.py",),
+    )
+
+    monkeypatch.setattr("app.agent.runner.parse_diff", lambda _diff: [file_in_diff])
+    monkeypatch.setattr("app.agent.runner._filter_diff_files", lambda files, _ignore: files)
+    monkeypatch.setattr("app.agent.runner.plan_chunks", lambda *_args, **_kwargs: chunk_plan)
+    async def _fake_profile_repo(*_args: object, **_kwargs: object) -> object:
+        return SimpleNamespace(frameworks=[])
+
+    monkeypatch.setattr("app.agent.runner.profile_repo", _fake_profile_repo)
+    monkeypatch.setattr("app.agent.runner._build_repo_segments", lambda *_args, **_kwargs: [])
+    async def _fake_load_chunk_state(*_args: object, **_kwargs: object) -> dict[str, dict[str, object]]:
+        return {}
+
+    monkeypatch.setattr("app.agent.runner.load_chunk_state", _fake_load_chunk_state)
+    monkeypatch.setattr("app.agent.runner.merge_chunk_state_with_plan", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("app.agent.runner.chunk_status", lambda *_args, **_kwargs: "pending")
+
+    async def _fake_build_context_bundle(*_args: object, **_kwargs: object) -> object:
+        return SimpleNamespace(
+            rendered="ctx",
+            fetched_files={file_in_diff.path: "print('x')"},
+            telemetry=ContextTelemetry(anchor_coverage=1.0),
+        )
+
+    monkeypatch.setattr("app.agent.runner.build_context_bundle", _fake_build_context_bundle)
+    monkeypatch.setattr("app.agent.runner.render_chunk_diff", lambda *_args, **_kwargs: "diff -- chunk")
+    monkeypatch.setattr("app.agent.runner.build_system_prompt", lambda *_args, **_kwargs: "system")
+    monkeypatch.setattr("app.agent.runner.build_initial_user_prompt", lambda *_args, **_kwargs: "user")
+    monkeypatch.setattr(
+        "app.agent.runner._resolve_runtime_model",
+        lambda *_args, **_kwargs: ModelResolution(
+            role="chunk_review",
+            provider="anthropic",
+            model="claude-sonnet-4-5",
+            tier="balanced",
+            status="active",
+            catalog_version_hash="hash",
+        ),
+    )
+    monkeypatch.setattr("app.agent.runner.count_tokens", lambda _text: 1)
+
+    async def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.agent.runner.persist_chunk_state", _noop)
+
+    async def _failing_run_agent(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        raise RuntimeError("finalize exploded")
+
+    monkeypatch.setattr("app.agent.runner.run_agent", _failing_run_agent)
+    async def _fake_synthesis(**_kwargs: object) -> ReviewResult:
+        return ReviewResult(findings=[], summary="Cross-chunk synthesis summary.")
+
+    monkeypatch.setattr("app.agent.runner._run_cross_chunk_synthesis", _fake_synthesis)
+    monkeypatch.setattr("app.agent.runner.dedupe_findings", lambda findings: findings)
+
+    result = await _run_chunked_review(
+        gh=SimpleNamespace(),
+        context={"owner": "o", "repo": "r", "pr_number": 1, "head_sha": "abc", "tokens_used": 0},
+        diff_text="diff --git a/src/example.py b/src/example.py\n+print('x')\n",
+        pr={"title": "T", "body": "B"},
+        commits=[],
+        review_config=ReviewConfig(),
+        started_at=monotonic(),
+    )
+
+    assert isinstance(result, ReviewResult)
+    assert result.findings == []
+    assert "Chunked coverage note." in result.summary
