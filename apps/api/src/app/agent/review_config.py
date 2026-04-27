@@ -71,6 +71,15 @@ class ChunkingConfig:
 
 
 @dataclass
+class FastPathConfig:
+    enabled: bool = True
+    skip_min_confidence: int = 90
+    light_review_min_confidence: int = 80
+    max_diff_excerpt_tokens: int = 3000
+    allow_skip: bool = True
+
+
+@dataclass
 class ReviewConfig:
     confidence_threshold: int = DEFAULT_CONFIDENCE_THRESHOLD
     severity_threshold: str = DEFAULT_SEVERITY_THRESHOLD
@@ -85,6 +94,7 @@ class ReviewConfig:
     packaging: ContextPackagingConfig = field(default_factory=ContextPackagingConfig)
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     models: ModelsRoutingConfig = field(default_factory=ModelsRoutingConfig)
+    fast_path: FastPathConfig = field(default_factory=FastPathConfig)
 
 
 async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: str) -> ReviewConfig:
@@ -116,6 +126,7 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
     budgets = _parse_budgets(parsed.get("budgets"))
     packaging = _parse_packaging(parsed)
     chunking = _parse_chunking(parsed.get("chunking"))
+    fast_path = _parse_fast_path(parsed.get("fast_path"))
     return ReviewConfig(
         confidence_threshold=threshold,
         severity_threshold=severity_threshold,
@@ -130,6 +141,7 @@ async def load_review_config(gh: _GitHubFileReader, owner: str, repo: str, ref: 
         budgets=budgets,
         packaging=packaging,
         chunking=chunking,
+        fast_path=fast_path,
     )
 
 
@@ -245,7 +257,7 @@ def _parse_model_ref(raw_value: object, *, default_provider: ModelProvider, defa
 def _normalize_provider(raw_value: object, *, default: ModelProvider = DEFAULT_MODEL_PROVIDER) -> ModelProvider:
     if not isinstance(raw_value, str):
         return default
-    normalized = cast(ModelProvider, raw_value.strip().lower())
+    normalized = raw_value.strip().lower()
     if normalized not in ALLOWED_MODEL_PROVIDERS:
         return default
     return normalized
@@ -372,6 +384,23 @@ def _parse_chunking(raw_value: object) -> ChunkingConfig:
     )
 
 
+def _parse_fast_path(raw_value: object) -> FastPathConfig:
+    if not isinstance(raw_value, Mapping):
+        return FastPathConfig()
+    return FastPathConfig(
+        enabled=bool(raw_value.get("enabled", True)),
+        skip_min_confidence=_normalize_bounded_int(raw_value.get("skip_min_confidence"), 90, minimum=0, maximum=100),
+        light_review_min_confidence=_normalize_bounded_int(
+            raw_value.get("light_review_min_confidence"),
+            80,
+            minimum=0,
+            maximum=100,
+        ),
+        max_diff_excerpt_tokens=_normalize_positive_int(raw_value.get("max_diff_excerpt_tokens"), 3000),
+        allow_skip=bool(raw_value.get("allow_skip", True)),
+    )
+
+
 def _parse_severity_threshold(raw_value: object) -> str:
     if not isinstance(raw_value, str):
         return DEFAULT_SEVERITY_THRESHOLD
@@ -409,6 +438,25 @@ def _normalize_positive_int(raw_value: object, default: int) -> int:
     else:
         return default
     if value <= 0:
+        return default
+    return value
+
+
+def _normalize_bounded_int(raw_value: object, default: int, *, minimum: int, maximum: int) -> int:
+    if isinstance(raw_value, bool):
+        return default
+    if isinstance(raw_value, int):
+        value = raw_value
+    elif isinstance(raw_value, float):
+        value = int(raw_value)
+    elif isinstance(raw_value, str):
+        try:
+            value = int(raw_value.strip())
+        except ValueError:
+            return default
+    else:
+        return default
+    if value < minimum or value > maximum:
         return default
     return value
 

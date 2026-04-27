@@ -7,6 +7,7 @@ from app.agent.review_config import (
     _parse_budgets,
     _parse_categories,
     _parse_chunking,
+    _parse_fast_path,
     _parse_max_mode,
     _parse_model_config,
     _parse_packaging,
@@ -28,6 +29,24 @@ def test_parse_model_config_accepts_custom_pricing_override() -> None:
     assert str(model.input_per_1m_usd) == "1.5"
     assert str(model.output_per_1m_usd) == "6.5"
     assert model.explicit is True
+
+
+def test_parse_fast_path_reads_thresholds_and_flags() -> None:
+    fast_path = _parse_fast_path(
+        {
+            "enabled": False,
+            "skip_min_confidence": 95,
+            "light_review_min_confidence": 82,
+            "max_diff_excerpt_tokens": 1200,
+            "allow_skip": False,
+        }
+    )
+
+    assert fast_path.enabled is False
+    assert fast_path.skip_min_confidence == 95
+    assert fast_path.light_review_min_confidence == 82
+    assert fast_path.max_diff_excerpt_tokens == 1200
+    assert fast_path.allow_skip is False
 
 
 def test_parse_model_config_accepts_legacy_direct_pricing_keys() -> None:

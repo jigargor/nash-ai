@@ -1,5 +1,6 @@
 import logging
 import json
+from dataclasses import replace
 from hashlib import sha256
 from collections import Counter
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ from redis.asyncio import Redis
 from app.agent.acknowledgments import extract_todo_fixme_markers
 from app.agent.config_cache import get_cached_review_config, set_cached_review_config
 from app.agent.constants import PROMPT_VERSION, REPAIR_RETRY_DROP_RATE, REPAIR_SEARCH_WINDOW
-from app.agent.chunking import ChunkPlan, ChunkingPlannerConfig, FileClass, PlannedChunk, plan_chunks
+from app.agent.chunking import ClassifiedDiffFile, ChunkPlan, ChunkingPlannerConfig, FileClass, PlannedChunk, plan_chunks
 from app.agent.chunked_runtime import (
     chunk_repo_segments,
     chunk_status,
@@ -37,11 +38,17 @@ from app.agent.anchors import attach_anchor_metadata, filter_findings_with_valid
 from app.agent.dedupe import dedupe_findings
 from app.agent.editor import run_editor
 from app.agent.finalize import finalize_review
+from app.agent.fast_path import (
+    FastPathDecision,
+    fallback_full_review,
+    fast_path_metadata,
+    run_fast_path_prepass,
+)
 from app.agent.loop import run_agent
 from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
 from app.agent.prompts import build_initial_user_prompt, build_system_prompt, load_verified_fact_ids
-from app.agent.review_config import ModelProvider, ReviewConfig, load_review_config
+from app.agent.review_config import ReviewConfig, load_review_config
 from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
 from app.agent.validator import FindingValidator
 from app.agent.vendor_detect import auto_tag_vendor_claims
@@ -51,6 +58,8 @@ from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
 from app.github.comments import post_review
 from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
+from app.llm.router import ModelRoleRoutingConfig
+from app.llm.types import ModelProvider
 from app.observability import record_review_trace
 from app.ratelimit import check_and_consume_daily_token_budget, current_daily_token_usage
 from app.telemetry.finding_outcomes import seed_pending_finding_outcomes
@@ -194,6 +203,91 @@ def _resolve_runtime_model(
     return resolution
 
 
+def _set_runtime_model_context(context: dict[str, Any], resolution: ModelResolution) -> None:
+    context["runtime_model_provider"] = resolution.provider
+    context["runtime_model"] = resolution.model
+    context["runtime_input_per_1m_usd"] = str(resolution.input_per_1m_usd) if resolution.input_per_1m_usd is not None else None
+    context["runtime_cached_input_per_1m_usd"] = (
+        str(resolution.cached_input_per_1m_usd) if resolution.cached_input_per_1m_usd is not None else None
+    )
+    context["runtime_output_per_1m_usd"] = str(resolution.output_per_1m_usd) if resolution.output_per_1m_usd is not None else None
+
+
+async def _run_fast_path_stage(
+    *,
+    context: dict[str, Any],
+    diff_text: str,
+    pr: dict[str, Any],
+    commits: list[dict[str, Any]],
+    review_config: ReviewConfig,
+    diff_tokens: int,
+) -> tuple[FastPathDecision, ModelResolution | None]:
+    if not review_config.fast_path.enabled:
+        return fallback_full_review("Fast-path pre-pass is disabled.", risk_labels=["disabled"]), None
+
+    files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
+    fast_resolution = _resolve_runtime_model(
+        context,
+        review_config,
+        "fast_path",
+        context_tokens=min(diff_tokens, review_config.fast_path.max_diff_excerpt_tokens),
+    )
+    token_snapshot = _token_snapshot(context)
+    classified: list[ClassifiedDiffFile] = []
+    fallback_reason: str | None = fast_resolution.fallback_reason
+    try:
+        decision, classified, _, _ = await run_fast_path_prepass(
+            files_in_diff=files_in_diff,
+            diff_text=diff_text,
+            pr=pr,
+            commits=commits,
+            generated_paths=review_config.packaging.generated_paths,
+            vendor_paths=review_config.packaging.vendor_paths,
+            config=review_config.fast_path,
+            context=context,
+            model_name=fast_resolution.model,
+            provider=fast_resolution.provider,
+        )
+    except Exception as exc:
+        logger.warning("Fast-path pre-pass failed; falling back to full review review_id=%s err=%s", context.get("review_id"), exc)
+        decision = fallback_full_review(f"Fast-path pre-pass failed: {exc}", risk_labels=["fast_path_error"])
+        fallback_reason = "fast_path_error"
+
+    metadata = fast_path_metadata(
+        decision,
+        classified=classified,
+        diff_tokens=diff_tokens,
+        fallback_reason=fallback_reason,
+    )
+    context.setdefault("debug_artifacts", {})
+    debug_artifacts = context.get("debug_artifacts")
+    if isinstance(debug_artifacts, dict):
+        debug_artifacts["fast_path_decision"] = metadata
+    await _record_model_audit(
+        context=context,
+        stage="fast_path",
+        provider=fast_resolution.provider,
+        model=fast_resolution.model,
+        token_before=token_snapshot,
+        findings_count=0,
+        decision=decision.decision,
+        model_resolution=fast_resolution,
+        extra_metadata=metadata,
+    )
+    return decision, fast_resolution
+
+
+def _review_config_for_fast_path_decision(review_config: ReviewConfig, decision: FastPathDecision) -> ReviewConfig:
+    if decision.decision != "light_review" or review_config.model.explicit:
+        return review_config
+    existing = review_config.models.roles.get("primary_review")
+    if existing is not None and existing.provider and existing.model:
+        return review_config
+    roles = dict(review_config.models.roles)
+    roles["primary_review"] = replace(existing, tier="economy") if existing is not None else ModelRoleRoutingConfig(tier="economy")
+    return replace(review_config, models=replace(review_config.models, roles=roles))
+
+
 async def run_review(
     review_id: int,
     installation_id: int,
@@ -236,6 +330,24 @@ async def run_review(
             await post_review(gh, owner, repo, pr_number, head_sha, result)
             await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
             return
+        fast_path_decision, fast_path_resolution = await _run_fast_path_stage(
+            context=context,
+            diff_text=diff_text,
+            pr=pr,
+            commits=commits,
+            review_config=review_config,
+            diff_tokens=diff_tokens,
+        )
+        if fast_path_decision.decision == "skip_review":
+            if fast_path_resolution is not None:
+                _set_runtime_model_context(context, fast_path_resolution)
+            result = ReviewResult(
+                findings=[],
+                summary="Skipped full review after low-risk fast-path classification.",
+            )
+            await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
+            return
+        effective_review_config = _review_config_for_fast_path_decision(review_config, fast_path_decision)
         if chunking_enabled:
             final_result = await _run_chunked_review(
                 gh=gh,
@@ -243,13 +355,13 @@ async def run_review(
                 diff_text=diff_text,
                 pr=pr,
                 commits=commits,
-                review_config=review_config,
+                review_config=effective_review_config,
                 started_at=started_at,
             )
             prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
             editor_resolution = _resolve_runtime_model(
                 context,
-                review_config,
+                effective_review_config,
                 "editor",
                 previous_provider=str(context.get("runtime_model_provider", "")) or None,
             )
@@ -267,7 +379,7 @@ async def run_review(
                 context=context,
             )
             final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
-            final_result = _apply_review_config_filters(final_result, review_config)
+            final_result = _apply_review_config_filters(final_result, effective_review_config)
             review_post_response = await post_review(gh, owner, repo, pr_number, head_sha, final_result)
             comment_ids = extract_review_comment_ids(review_post_response)
             await seed_pending_finding_outcomes(
@@ -276,7 +388,7 @@ async def run_review(
                 finding_count=len(final_result.findings),
                 github_comment_ids=comment_ids,
             )
-            await _mark_review_done(session_data=final_result, context=context, status="done", review_config=review_config)
+            await _mark_review_done(session_data=final_result, context=context, status="done", review_config=effective_review_config)
             logger.info(
                 "Chunked review completed review_id=%s duration_ms=%s",
                 review_id,
@@ -284,6 +396,7 @@ async def run_review(
             )
             return
 
+        review_config = effective_review_config
         files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt = await _assemble_context(
             gh, context, diff_text, review_config
         )
@@ -432,7 +545,7 @@ async def run_review(
         )
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
         debate_conflict_score: int | None = None
-        if review_config.max_mode.enabled:
+        if review_config.max_mode.enabled and fast_path_decision.decision != "light_review":
             challenger_resolution = _resolve_runtime_model(
                 context,
                 review_config,
@@ -1386,7 +1499,9 @@ def _attach_debug_artifacts(
         }
         for finding, reason, detail in validator_dropped
     ]
+    existing_debug_artifacts = context.get("debug_artifacts")
     context["debug_artifacts"] = {
+        **(existing_debug_artifacts if isinstance(existing_debug_artifacts, dict) else {}),
         "generated_findings_count": generated,
         "validator_dropped": validator_entries,
         "confidence_dropped": confidence_dropped,
@@ -1461,6 +1576,7 @@ async def _record_model_audit(
     decision: str | None = None,
     accepted_findings_count: int | None = None,
     model_resolution: ModelResolution | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> None:
     installation_id = cast(int, context["installation_id"])
     review_id = cast(int, context["review_id"])
@@ -1475,6 +1591,8 @@ async def _record_model_audit(
     }
     if model_resolution is not None:
         metadata["model_resolution"] = model_resolution.as_metadata()
+    if extra_metadata:
+        metadata.update(extra_metadata)
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
         session.add(
