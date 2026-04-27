@@ -19,6 +19,10 @@ class _FakeRedis:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
 
+    async def exists(self, *keys: object) -> int:
+        """Redis EXISTS shim: no keys stored in this fake, so circuit is never open."""
+        return 0
+
     async def enqueue_job(self, *args: object) -> _FakeJob:
         self.calls.append(args)
         return _FakeJob(job_id=f"job-{len(self.calls)}")
@@ -59,6 +63,13 @@ def _installation_payload(installation_id: int, action: str) -> GitHubInstallati
             },
         }
     )
+
+
+@pytest.fixture(autouse=True)
+async def _dispose_global_engine_after_test() -> None:
+    """Each AnyIO test can use a fresh asyncio loop; dispose the pool so later tests do not reuse dead connections."""
+    yield
+    await engine.dispose()
 
 
 @pytest.mark.anyio
