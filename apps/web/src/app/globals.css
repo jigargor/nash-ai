@@ -48,6 +48,7 @@ select {
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: var(--space-6);
+  min-width: 0;
 }
 
 .app-brand {
@@ -56,16 +57,25 @@ select {
   font-family: var(--font-instrument-serif), serif;
 }
 
+/* Middle row fills height for footer alignment; links must NOT stretch with extra space */
 .app-sidebar-nav {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  align-self: start;
+  width: 100%;
+  min-height: 0;
   gap: var(--space-2);
 }
 
 .app-sidebar-link {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
+  justify-content: flex-start;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-height: 0;
+  padding: 0.5rem var(--space-3);
   border-radius: var(--radius-md);
   color: var(--text-muted);
   border: 1px solid transparent;
@@ -289,7 +299,12 @@ select {
   }
 
   .app-sidebar-nav {
+    display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-content: start;
+    align-items: start;
+    align-self: stretch;
+    width: 100%;
   }
 
   .sidebar-foot {
@@ -312,7 +327,10 @@ select {
   }
 
   .app-sidebar-nav {
+    display: grid;
     grid-template-columns: 1fr;
+    align-content: start;
+    align-items: start;
   }
 
   .metrics-grid {

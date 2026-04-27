@@ -1020,7 +1020,16 @@ async def _run_chunked_review(
         except Exception as exc:
             _set_chunk_state(chunk_state, chunk.chunk_id, status="failed", error=str(exc))
             await persist_chunk_state(context, chunk_state)
-            raise
+            logger.warning(
+                "Chunk review failed and will be skipped chunk_id=%s owner=%s repo=%s pr=%s err=%s",
+                chunk.chunk_id,
+                owner,
+                repo,
+                pr_number,
+                exc,
+                exc_info=True,
+            )
+            continue
         await persist_chunk_state(context, chunk_state)
 
     synthesis_result = await _run_cross_chunk_synthesis(
