@@ -81,6 +81,7 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   if (contentType) headers.set("Content-Type", contentType);
   if (accept) headers.set("Accept", accept);
   headers.set("X-Api-Key", apiAccessKey);
+  headers.set("X-User-Github-Id", String(session.user.id));
 
   try {
     return await fetch(targetUrl, {
@@ -105,5 +106,13 @@ export function GET(request: Request, context: ApiProxyRouteContext): Promise<Re
 }
 
 export function POST(request: Request, context: ApiProxyRouteContext): Promise<Response> {
+  return proxyApiRequest(request, context);
+}
+
+export function PUT(request: Request, context: ApiProxyRouteContext): Promise<Response> {
+  return proxyApiRequest(request, context);
+}
+
+export function DELETE(request: Request, context: ApiProxyRouteContext): Promise<Response> {
   return proxyApiRequest(request, context);
 }

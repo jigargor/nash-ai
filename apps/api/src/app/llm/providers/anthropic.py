@@ -42,7 +42,8 @@ class AnthropicAdapter(BaseProviderAdapter):
         *,
         request: StructuredOutputRequest,
     ) -> StructuredOutputResult:
-        client = create_async_anthropic_client(get_provider_api_key(self.provider))
+        user_key_override: str | None = request.context.get("user_provider_keys", {}).get(self.provider)
+        client = create_async_anthropic_client(get_provider_api_key(self.provider, user_key_override=user_key_override))
         temp = 0.0 if request.temperature is None else float(request.temperature)
         response = await client.messages.create(  # type: ignore[call-overload]
             model=request.model_name,

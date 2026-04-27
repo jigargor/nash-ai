@@ -586,6 +586,7 @@ async def rerun_review(
     request: Request,
     review_id: int,
     installation_id: int | None = Query(default=None, ge=1),
+    x_user_github_id: int | None = Header(default=None),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
         if installation_id is not None:
@@ -615,10 +616,13 @@ async def rerun_review(
             repo,
             int(review.pr_number),
             review.pr_head_sha,
+            user_github_id=x_user_github_id,
         )
         review.status = "queued"
         review.started_at = None
         review.completed_at = None
+        if x_user_github_id is not None:
+            review.triggered_by_user_id = x_user_github_id
         await session.commit()
 
     return {"ok": True, "review_id": review_id, "job_id": job.job_id if job else None}

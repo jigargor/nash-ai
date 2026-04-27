@@ -34,7 +34,8 @@ async def _run_agent_anthropic(
     *,
     model_name: str,
 ) -> list[dict[str, Any]]:
-    client = create_async_anthropic_client(get_provider_api_key("anthropic"))
+    user_key_override: str | None = context.get("user_provider_keys", {}).get("anthropic")
+    client = create_async_anthropic_client(get_provider_api_key("anthropic", user_key_override=user_key_override))
     adapter = get_provider_adapter("anthropic")
     messages: list[dict[str, Any]] = [{"role": "user", "content": initial_user_message}]
     turns = 0
@@ -108,7 +109,8 @@ async def _run_agent_openai_compatible(
     model_name: str,
     provider: ModelProvider,
 ) -> list[dict[str, Any]]:
-    client = create_openai_compatible_client(provider)
+    user_key_override = context.get("user_provider_keys", {}).get(provider)
+    client = create_openai_compatible_client(provider, user_key_override=user_key_override)
     adapter = get_provider_adapter(provider)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},

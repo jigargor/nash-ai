@@ -53,7 +53,8 @@ from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
 from app.agent.validator import FindingValidator
 from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.config import settings
-from app.db.models import Review, ReviewModelAudit
+from app.crypto import decrypt_secret
+from app.db.models import Review, ReviewModelAudit, User, UserProviderKey
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
 from app.github.comments import post_review
@@ -232,6 +233,7 @@ async def _run_fast_path_stage(
         "fast_path",
         context_tokens=min(diff_tokens, review_config.fast_path.max_diff_excerpt_tokens),
     )
+    stage_started_at = monotonic()
     token_snapshot = _token_snapshot(context)
     classified: list[ClassifiedDiffFile] = []
     fallback_reason: str | None = fast_resolution.fallback_reason
@@ -273,6 +275,7 @@ async def _run_fast_path_stage(
         decision=decision.decision,
         model_resolution=fast_resolution,
         extra_metadata=metadata,
+        stage_started_at=stage_started_at,
     )
     return decision, fast_resolution
 
@@ -288,6 +291,27 @@ def _review_config_for_fast_path_decision(review_config: ReviewConfig, decision:
     return replace(review_config, models=replace(review_config.models, roles=roles))
 
 
+async def _load_user_provider_keys(github_id: int) -> dict[str, str]:
+    """Return a {provider: plaintext_key} dict for all keys stored by this user."""
+    from sqlalchemy import select as sa_select
+
+    async with AsyncSessionLocal() as session:
+        user = (await session.execute(sa_select(User).where(User.github_id == github_id))).scalar_one_or_none()
+        if user is None or user.deleted_at is not None:
+            return {}
+        rows = (
+            await session.execute(sa_select(UserProviderKey).where(UserProviderKey.user_id == user.id))
+        ).scalars().all()
+
+    result: dict[str, str] = {}
+    for row in rows:
+        try:
+            result[row.provider] = decrypt_secret(row.key_enc)
+        except Exception:
+            logger.warning("Failed to decrypt key for user %s provider %s — skipping", github_id, row.provider)
+    return result
+
+
 async def run_review(
     review_id: int,
     installation_id: int,
@@ -295,8 +319,14 @@ async def run_review(
     repo: str,
     pr_number: int,
     head_sha: str,
+    *,
+    user_github_id: int | None = None,
 ) -> None:
     await _mark_review_running(review_id, installation_id)
+
+    user_provider_keys: dict[str, str] = {}
+    if user_github_id is not None:
+        user_provider_keys = await _load_user_provider_keys(user_github_id)
 
     context: dict[str, Any] = {
         "run_id": str(uuid4()),
@@ -309,6 +339,8 @@ async def run_review(
         "input_tokens": 0,
         "output_tokens": 0,
         "tokens_used": 0,
+        "user_provider_keys": user_provider_keys,
+        "user_github_id": user_github_id,
     }
     started_at = monotonic()
 
@@ -406,6 +438,7 @@ async def run_review(
             "primary_review",
             context_tokens=count_tokens(system_prompt) + count_tokens(user_prompt),
         )
+        primary_stage_started_at = monotonic()
         token_snapshot = _token_snapshot(context)
         messages = await run_agent(
             system_prompt,
@@ -430,6 +463,7 @@ async def run_review(
             findings_count=len(result.findings),
             decision="generated",
             model_resolution=primary_resolution,
+            stage_started_at=primary_stage_started_at,
         )
         tools_called_per_file = extract_tool_usage_by_file(messages)
         tool_call_history = extract_tool_call_history(messages)
@@ -555,6 +589,7 @@ async def run_review(
             )
             challenger_prompt = _build_challenger_prompt(draft_result, final_summary_hint=result.summary)
             challenger_messages = [{"role": "user", "content": challenger_prompt}]
+            challenger_stage_started_at = monotonic()
             challenger_snapshot = _token_snapshot(context)
             challenger_result = await finalize_review(
                 system_prompt,
@@ -575,6 +610,7 @@ async def run_review(
                 conflict_score=debate_conflict_score,
                 decision="challenged",
                 model_resolution=challenger_resolution,
+                stage_started_at=challenger_stage_started_at,
             )
             tie_break_result: ReviewResult | None = None
             should_tie_break = debate_conflict_score >= review_config.max_mode.conflict_threshold or _has_high_risk_findings(
@@ -589,6 +625,7 @@ async def run_review(
                     previous_provider=challenger_resolution.provider,
                 )
                 tie_break_prompt = _build_tie_break_prompt(draft_result, challenger_result)
+                tie_break_stage_started_at = monotonic()
                 tie_break_snapshot = _token_snapshot(context)
                 tie_break_result = await finalize_review(
                     system_prompt,
@@ -608,6 +645,7 @@ async def run_review(
                     conflict_score=debate_conflict_score,
                     decision="tie_break",
                     model_resolution=tie_break_resolution,
+                    stage_started_at=tie_break_stage_started_at,
                 )
             draft_result = _merge_debate_results(
                 primary=draft_result,
@@ -622,6 +660,7 @@ async def run_review(
             "editor",
             previous_provider=primary_resolution.provider,
         )
+        editor_stage_started_at = monotonic()
         editor_snapshot = _token_snapshot(context)
         edited_result = await run_editor(
             draft=draft_result,
@@ -646,6 +685,7 @@ async def run_review(
             accepted_findings_count=len(edited_result.findings),
             decision="edited",
             model_resolution=editor_resolution,
+            stage_started_at=editor_stage_started_at,
         )
         final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
         final_result = _apply_review_config_filters(final_result, review_config)
@@ -775,6 +815,30 @@ async def _mark_review_done(
         review.cost_usd = float(cost)
         review.completed_at = datetime.now(timezone.utc)
         await session.commit()
+
+    # Stamp last_used_at for any user-supplied provider keys that were active
+    user_github_id: int | None = context.get("user_github_id")
+    user_provider_keys: dict[str, str] = context.get("user_provider_keys", {})
+    if user_github_id is not None and user_provider_keys and status == "done":
+        from sqlalchemy import select as sa_select
+
+        async with AsyncSessionLocal() as key_session:
+            user = (
+                await key_session.execute(sa_select(User).where(User.github_id == user_github_id))
+            ).scalar_one_or_none()
+            if user is not None:
+                rows = (
+                    await key_session.execute(
+                        sa_select(UserProviderKey).where(
+                            UserProviderKey.user_id == user.id,
+                            UserProviderKey.provider.in_(list(user_provider_keys.keys())),
+                        )
+                    )
+                ).scalars().all()
+                now = datetime.now(timezone.utc)
+                for row in rows:
+                    row.last_used_at = now
+                await key_session.commit()
 
 
 def _estimate_cost_usd(
@@ -1586,6 +1650,7 @@ async def _record_model_audit(
     accepted_findings_count: int | None = None,
     model_resolution: ModelResolution | None = None,
     extra_metadata: dict[str, Any] | None = None,
+    stage_started_at: float | None = None,
 ) -> None:
     installation_id = cast(int, context["installation_id"])
     review_id = cast(int, context["review_id"])
@@ -1604,6 +1669,7 @@ async def _record_model_audit(
         metadata.update(extra_metadata)
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
+        stage_duration_ms = int((monotonic() - stage_started_at) * 1000) if stage_started_at is not None else None
         session.add(
             ReviewModelAudit(
                 review_id=review_id,
@@ -1620,6 +1686,7 @@ async def _record_model_audit(
                 accepted_findings_count=accepted_findings_count,
                 conflict_score=conflict_score,
                 decision=decision,
+                stage_duration_ms=stage_duration_ms,
                 metadata_json=metadata,
             )
         )

@@ -11,7 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
 from app.admin.router import router as admin_router
+from app.api.benchmarks import router as benchmarks_router
+from app.api.benchmarks import telemetry_router
 from app.api.router import router as api_router
+from app.api.users import router as users_router
 from app.config import settings
 from app.db.session import engine
 from app.observability import init_observability
@@ -77,6 +80,9 @@ if settings.web_app_url:
 app.include_router(webhook_router, prefix="/webhooks")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(api_router)
+app.include_router(users_router)
+app.include_router(benchmarks_router)
+app.include_router(telemetry_router)
 
 
 @app.get("/health")

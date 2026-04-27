@@ -26,7 +26,7 @@ max_findings_per_pr: 25
 prompt_additions: null
 model:
   provider: anthropic
-  name: claude-sonnet-4-5
+  name: claude-sonnet-4-6
   input_per_1m_usd: 3.0
   output_per_1m_usd: 15.0
 max_mode:

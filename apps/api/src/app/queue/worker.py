@@ -49,8 +49,9 @@ async def review_pr(
     repo: str,
     pr_number: int,
     head_sha: str,
+    user_github_id: int | None = None,
 ) -> None:
-    await run_review(review_id, installation_id, owner, repo, pr_number, head_sha)
+    await run_review(review_id, installation_id, owner, repo, pr_number, head_sha, user_github_id=user_github_id)
 
 
 async def classify_pr_outcomes(

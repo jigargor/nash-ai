@@ -29,6 +29,18 @@ export async function GET(request: Request): Promise<NextResponse> {
     const token = await exchangeCodeForToken(code, callbackUrl(request.url));
     const user = await getGitHubUser(token.access_token);
     const sessionToken = await createSessionToken({ id: user.id, login: user.login });
+
+    // Upsert user record in the database — fire-and-forget, must not block login
+    const apiBase = process.env.API_URL ?? "http://localhost:8000";
+    fetch(`${apiBase}/api/v1/users/me`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Api-Key": process.env.API_ACCESS_KEY ?? "",
+      },
+      body: JSON.stringify({ github_id: user.id, login: user.login }),
+    }).catch((err: unknown) => console.error("[auth/callback] user upsert failed (non-fatal)", err));
+
     const response = NextResponse.redirect(new URL("/dashboard", request.url));
     response.cookies.set(AUTH_COOKIE_NAME, sessionToken, {
       httpOnly: true,
@@ -39,7 +51,8 @@ export async function GET(request: Request): Promise<NextResponse> {
     });
     response.cookies.delete(AUTH_STATE_COOKIE_NAME);
     return response;
-  } catch {
+  } catch (err) {
+    console.error("[auth/callback] OAuth exchange failed", err);
     return NextResponse.redirect(new URL("/login?error=oauth_failed", request.url));
   }
 }
