@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -191,6 +192,63 @@ async def test_request_with_retry_respects_retry_after_header(
     assert sleep_calls[0] == 5.0  # exact Retry-After value
 
 
+@pytest.mark.anyio
+async def test_request_with_retry_parses_retry_after_http_date() -> None:
+    retry_after = (datetime.now(UTC) + timedelta(seconds=30)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    call_count = 0
+
+    async def _fake_request(*_args: object, **_kwargs: object) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return httpx.Response(
+                429,
+                content=b"{}",
+                headers={"content-type": "application/json", "Retry-After": retry_after},
+                request=_FAKE_REQUEST,
+            )
+        return _json_response({"ok": True})
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.request = _fake_request
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    with patch("app.github.client.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.github.client.asyncio.sleep", side_effect=_fake_sleep):
+            await _request_with_retry("GET", "https://api.github.com/test", {})
+
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] >= 1.0
+
+
+@pytest.mark.anyio
+async def test_request_with_retry_does_not_retry_403_without_retry_after() -> None:
+    async def _fake_request(*_args: object, **_kwargs: object) -> httpx.Response:
+        return httpx.Response(
+            403,
+            content=b'{"message":"forbidden"}',
+            headers={"content-type": "application/json"},
+            request=_FAKE_REQUEST,
+        )
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.request = _fake_request
+
+    with patch("app.github.client.httpx.AsyncClient", return_value=mock_client):
+        with patch("app.github.client.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            with pytest.raises(httpx.HTTPStatusError):
+                await _request_with_retry("GET", "https://api.github.com/test", {})
+    sleep_mock.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # get_json and get_pull_request
 # ---------------------------------------------------------------------------
@@ -270,6 +328,31 @@ async def test_get_paginated_follows_link_header(monkeypatch: pytest.MonkeyPatch
     assert len(result) == 2
     assert result[0]["id"] == 1
     assert result[1]["id"] == 2
+
+
+@pytest.mark.anyio
+async def test_get_paginated_stops_on_non_list_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _fake_client()
+    page1 = _json_response(
+        {"message": "unexpected"},
+        link='<https://api.github.com/repos/a/b/pulls/1/files?page=2>; rel="next"',
+    )
+    monkeypatch.setattr("app.github.client._request_with_retry", AsyncMock(return_value=page1))
+    result = await client._get_paginated("/repos/a/b/pulls/1/files")
+    assert result == []
+
+
+@pytest.mark.anyio
+async def test_get_paginated_stops_after_max_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _fake_client()
+    page = _json_response(
+        [{"id": 1}],
+        link='<https://api.github.com/repos/a/b/pulls/1/files?page=next>; rel="next"',
+    )
+    monkeypatch.setattr("app.github.client._request_with_retry", AsyncMock(return_value=page))
+    monkeypatch.setattr("app.github.client._MAX_PAGINATION_PAGES", 2)
+    result = await client._get_paginated("/repos/a/b/pulls/1/files")
+    assert len(result) == 2
 
 
 @pytest.mark.anyio

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from arq.connections import ArqRedis
 from sqlalchemy import select
 
-from app.agent.review_config import DEFAULT_MODEL_NAME
+from app.agent.review_config import DEFAULT_MODEL_NAME, DEFAULT_MODEL_PROVIDER
 from app.config import settings
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, set_installation_context
@@ -16,6 +16,24 @@ logger = logging.getLogger(__name__)
 
 SKIP_REVIEW_TAG = "[skip-nash-review]"
 FORCE_REVIEW_TAG = "[force-nash-review]"
+
+
+def _primary_provider_for_circuit_breaker() -> str:
+    """Choose the provider used for pre-enqueue circuit checks."""
+    configured_providers = [
+        provider
+        for provider, key in (
+            ("anthropic", settings.anthropic_api_key),
+            ("openai", settings.openai_api_key),
+            ("gemini", settings.gemini_api_key),
+        )
+        if (key or "").strip()
+    ]
+    if not configured_providers:
+        return DEFAULT_MODEL_PROVIDER
+    if DEFAULT_MODEL_PROVIDER in configured_providers:
+        return DEFAULT_MODEL_PROVIDER
+    return configured_providers[0]
 
 
 def _pr_text_has_force_review_tag(title: str | None, body: str | None) -> bool:
@@ -98,13 +116,13 @@ async def queue_pull_request_review(
         )
         return
 
+    provider_for_circuit = _primary_provider_for_circuit_breaker()
     # Check circuit breaker before doing any DB work or enqueue.
-    # We check the primary provider (anthropic) as a proxy for overall availability;
-    # if the circuit is open a delay comment is posted on the PR instead.
-    if await is_circuit_open(redis, "anthropic"):
+    if await is_circuit_open(redis, provider_for_circuit):
         logger.warning(
-            "Circuit open for anthropic — posting delay comment instead of enqueuing "
+            "Circuit open for provider=%s — posting delay comment instead of enqueuing "
             "installation_id=%s repo=%s pr_number=%s",
+            provider_for_circuit,
             installation_id,
             repo_full_name,
             pr_number,

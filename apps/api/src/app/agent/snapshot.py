@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 
 
+class SnapshotSchemaError(ValueError):
+    """Raised when a stored snapshot cannot be decoded into the current schema."""
+
+
 # ---------------------------------------------------------------------------
 # Payload definition
 # ---------------------------------------------------------------------------
@@ -48,7 +52,7 @@ class SnapshotPayload:
     review_config: dict[str, Any]      # serialized ReviewConfig
     model_resolutions: dict[str, Any]  # context["llm_model_resolutions"]
     fetched_files: dict[str, str]      # {path: content}
-    chunk_plan: dict[str, Any] | None  # None for non-chunked reviews
+    chunk_plan: dict[str, Any] | None = None  # None for non-chunked reviews
 
     def to_bytes(self) -> bytes:
         payload = {
@@ -64,9 +68,33 @@ class SnapshotPayload:
     @classmethod
     def from_bytes(cls, data: bytes) -> "SnapshotPayload":
         raw = json.loads(gzip.decompress(data).decode("utf-8"))
-        raw.pop("schema_version", None)
+        schema_version_raw = raw.pop("schema_version", None)
         raw.pop("captured_at", None)
-        return cls(**{k: raw[k] for k in dataclasses.fields(cls) if k in raw})  # type: ignore[arg-type]
+        if isinstance(schema_version_raw, int) and schema_version_raw > SCHEMA_VERSION:
+            raise SnapshotSchemaError(
+                f"Snapshot schema version {schema_version_raw} is newer than supported {SCHEMA_VERSION}"
+            )
+        missing_required: list[str] = []
+        payload: dict[str, Any] = {}
+        for field in dataclasses.fields(cls):
+            if field.name in raw:
+                payload[field.name] = raw[field.name]
+                continue
+            if field.default is not dataclasses.MISSING:
+                payload[field.name] = field.default
+                continue
+            if field.default_factory is not dataclasses.MISSING:
+                payload[field.name] = field.default_factory()
+                continue
+            missing_required.append(field.name)
+        if missing_required:
+            raise SnapshotSchemaError(
+                "Snapshot payload is missing required fields: " + ", ".join(sorted(missing_required))
+            )
+        try:
+            return cls(**payload)
+        except TypeError as exc:
+            raise SnapshotSchemaError(f"Snapshot payload schema mismatch: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +137,11 @@ async def load_snapshot(review_id: int) -> SnapshotPayload | None:
         ).scalar_one_or_none()
     if row is None:
         return None
-    return SnapshotPayload.from_bytes(row.snapshot_gz)
+    try:
+        return SnapshotPayload.from_bytes(row.snapshot_gz)
+    except SnapshotSchemaError:
+        logger.warning("Failed to decode snapshot review_id=%s due to schema mismatch", review_id)
+        return None
 
 
 # ---------------------------------------------------------------------------

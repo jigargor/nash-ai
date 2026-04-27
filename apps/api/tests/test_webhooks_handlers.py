@@ -6,7 +6,11 @@ from uuid import uuid4
 
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
-from app.webhooks.handlers import queue_pull_request_review, sync_installation_from_webhook
+from app.webhooks.handlers import (
+    _primary_provider_for_circuit_breaker,
+    queue_pull_request_review,
+    sync_installation_from_webhook,
+)
 from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
 
 
@@ -249,3 +253,23 @@ async def test_queue_pull_request_review_skip_tag_case_insensitive(
 
     await queue_pull_request_review(redis, payload)
     assert not redis.calls
+
+
+@pytest.mark.anyio
+async def test_primary_provider_for_circuit_breaker_prefers_default_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.webhooks.handlers.settings.anthropic_api_key", "anthropic-key")
+    monkeypatch.setattr("app.webhooks.handlers.settings.openai_api_key", "openai-key")
+    monkeypatch.setattr("app.webhooks.handlers.settings.gemini_api_key", None)
+    assert _primary_provider_for_circuit_breaker() == "anthropic"
+
+
+@pytest.mark.anyio
+async def test_primary_provider_for_circuit_breaker_falls_back_to_first_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.webhooks.handlers.settings.anthropic_api_key", None)
+    monkeypatch.setattr("app.webhooks.handlers.settings.openai_api_key", "openai-key")
+    monkeypatch.setattr("app.webhooks.handlers.settings.gemini_api_key", "gemini-key")
+    assert _primary_provider_for_circuit_breaker() == "openai"

@@ -1,7 +1,9 @@
 import asyncio
 import base64
+import logging
 import random
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, cast
 
 import httpx
@@ -9,12 +11,14 @@ import httpx
 from app.github.auth import get_installation_token
 
 BASE = "https://api.github.com"
+logger = logging.getLogger(__name__)
 
 JsonDict = dict[str, Any]
 
 _TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=2.0)
 _RETRYABLE_STATUS = {403, 429, 500, 502, 503, 504}
 _MAX_RETRIES = 3
+_MAX_PAGINATION_PAGES = 100
 MAX_REVIEW_FILE_BYTES = 500_000  # 500 KB — files larger than this are skipped
 
 
@@ -46,19 +50,33 @@ async def _request_with_retry(
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         for attempt in range(_MAX_RETRIES + 1):
             response = await client.request(method, url, headers=headers, params=params, json=json)
+            if response.status_code == 403 and "Retry-After" not in response.headers:
+                response.raise_for_status()
             if response.status_code not in _RETRYABLE_STATUS:
                 response.raise_for_status()
                 return response
             if attempt == _MAX_RETRIES:
                 response.raise_for_status()
-            retry_after_raw = response.headers.get("Retry-After", "")
-            try:
-                retry_after = int(retry_after_raw)
-            except ValueError:
-                retry_after = 0
+            retry_after = _parse_retry_after_seconds(response.headers.get("Retry-After", ""))
             delay = retry_after if retry_after > 0 else (2**attempt + random.uniform(0, 1))
             await asyncio.sleep(min(delay, 60))
     raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def _parse_retry_after_seconds(retry_after_raw: str) -> float:
+    try:
+        return float(int(retry_after_raw))
+    except ValueError:
+        pass
+    if not retry_after_raw:
+        return 0.0
+    try:
+        retry_after_dt = parsedate_to_datetime(retry_after_raw)
+    except (TypeError, ValueError, IndexError):
+        return 0.0
+    if retry_after_dt.tzinfo is None:
+        retry_after_dt = retry_after_dt.replace(tzinfo=timezone.utc)
+    return max((retry_after_dt - datetime.now(timezone.utc)).total_seconds(), 0.0)
 
 
 class GitHubClient:
@@ -83,15 +101,35 @@ class GitHubClient:
     ) -> list[JsonDict]:
         """Collect all pages for a list endpoint, following Link rel="next"."""
         results: list[JsonDict] = []
+        visited_urls: set[str] = set()
         next_url: str | None = f"{BASE}{path}"
         next_params: dict[str, Any] | None = {"per_page": 100, **(params or {})}
-        while next_url:
+        page_count = 0
+        while next_url and page_count < _MAX_PAGINATION_PAGES:
+            if next_url in visited_urls:
+                logger.warning("Stopping pagination due to repeated next URL path=%s url=%s", path, next_url)
+                break
+            visited_urls.add(next_url)
+            page_count += 1
             response = await _request_with_retry("GET", next_url, self._headers, params=next_params)
             payload = response.json()
-            if isinstance(payload, list):
-                results.extend(item for item in payload if isinstance(item, dict))
+            if not isinstance(payload, list):
+                logger.warning(
+                    "Stopping pagination due to non-list payload path=%s page=%s payload_type=%s",
+                    path,
+                    page_count,
+                    type(payload).__name__,
+                )
+                break
+            results.extend(item for item in payload if isinstance(item, dict))
             next_url = _parse_next_link(response.headers.get("Link", ""))
             next_params = None  # subsequent pages use the full URL from the Link header
+        if next_url and page_count >= _MAX_PAGINATION_PAGES:
+            logger.warning(
+                "Stopping pagination after max pages path=%s max_pages=%s",
+                path,
+                _MAX_PAGINATION_PAGES,
+            )
         return results
 
     # ------------------------------------------------------------------
