@@ -14,7 +14,10 @@ def _is_live_test_enabled() -> bool:
     return os.getenv("RUN_LIVE_GITHUB_TESTS", "").lower() in {"1", "true", "yes"}
 
 
-@pytest.mark.skipif(not _is_live_test_enabled(), reason="Set RUN_LIVE_GITHUB_TESTS=1 to run live GitHub API auth test.")
+@pytest.mark.skipif(
+    not _is_live_test_enabled(),
+    reason="Set RUN_LIVE_GITHUB_TESTS=1 to run live GitHub API auth test.",
+)
 @pytest.mark.anyio
 async def test_installation_token_live_round_trip() -> None:
     app_jwt = create_jwt()
@@ -37,7 +40,9 @@ async def test_installation_token_live_round_trip() -> None:
         "X-GitHub-Api-Version": "2022-11-28",
     }
     async with httpx.AsyncClient() as client:
-        repos_response = await client.get("https://api.github.com/installation/repositories", headers=install_headers)
+        repos_response = await client.get(
+            "https://api.github.com/installation/repositories", headers=install_headers
+        )
         repos_response.raise_for_status()
         payload = repos_response.json()
 

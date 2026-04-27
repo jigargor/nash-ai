@@ -27,7 +27,11 @@ class OpenAIAdapter(BaseProviderAdapter):
         model_name: str,
         options: CacheRequestOptions | None = None,
     ) -> dict[str, Any]:
-        cache_key = options.cache_key if options and options.cache_key else _stable_cache_key(self.provider, model_name, system_prompt)
+        cache_key = (
+            options.cache_key
+            if options and options.cache_key
+            else _stable_cache_key(self.provider, model_name, system_prompt)
+        )
         body: dict[str, Any] = {"prompt_cache_key": cache_key}
         if options and options.retention in {"in_memory", "24h"}:
             body["prompt_cache_retention"] = options.retention
@@ -67,7 +71,9 @@ class OpenAIAdapter(BaseProviderAdapter):
                     cache_key=_optional_str(request.context.get("llm_prompt_cache_key")),
                     ttl=_optional_str(request.context.get("anthropic_cache_ttl")),
                     retention=_optional_str(request.context.get("openai_prompt_cache_retention")),
-                    cached_content_name=_optional_str(request.context.get("gemini_cached_content_name")),
+                    cached_content_name=_optional_str(
+                        request.context.get("gemini_cached_content_name")
+                    ),
                 ),
             ),
         )

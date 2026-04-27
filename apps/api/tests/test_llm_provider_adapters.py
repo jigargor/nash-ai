@@ -89,7 +89,9 @@ def test_record_usage_updates_context_and_preserves_cache_metrics() -> None:
 
 
 @pytest.mark.anyio
-async def test_anthropic_structured_output_extracts_tool_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_anthropic_structured_output_extracts_tool_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from app.llm.providers import anthropic as anthropic_module
 
     class _FakeClient:
@@ -98,12 +100,20 @@ async def test_anthropic_structured_output_extracts_tool_payload(monkeypatch: py
             async def create(**_kwargs: object) -> object:
                 return SimpleNamespace(
                     usage=SimpleNamespace(input_tokens=7, output_tokens=3, total_tokens=10),
-                    content=[SimpleNamespace(type="tool_use", name="submit_review", input={"summary": "ok", "findings": []})],
+                    content=[
+                        SimpleNamespace(
+                            type="tool_use",
+                            name="submit_review",
+                            input={"summary": "ok", "findings": []},
+                        )
+                    ],
                 )
 
         messages = _Messages()
 
-    monkeypatch.setattr(anthropic_module, "create_async_anthropic_client", lambda _api_key: _FakeClient())
+    monkeypatch.setattr(
+        anthropic_module, "create_async_anthropic_client", lambda _api_key: _FakeClient()
+    )
     monkeypatch.setattr(anthropic_module, "get_provider_api_key", lambda _provider: "test")
 
     adapter = get_provider_adapter("anthropic")
@@ -167,7 +177,9 @@ async def test_openai_compatible_structured_output_extracts_tool_payload(
     class _FakeClient:
         chat = SimpleNamespace(completions=_FakeCompletions())
 
-    monkeypatch.setattr(openai_module, "create_openai_compatible_client", lambda _provider: _FakeClient())
+    monkeypatch.setattr(
+        openai_module, "create_openai_compatible_client", lambda _provider: _FakeClient()
+    )
 
     adapter = get_provider_adapter(provider)
     context: dict[str, object] = {}

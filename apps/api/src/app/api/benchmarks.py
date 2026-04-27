@@ -15,11 +15,15 @@ logger = logging.getLogger(__name__)
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
     if settings.environment.lower() == "production" and not settings.api_access_key:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured"
+        )
     if not settings.api_access_key:
         return
     if not x_api_key or not hmac.compare_digest(x_api_key, settings.api_access_key):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key"
+        )
 
 
 router = APIRouter(prefix="/api/v1/benchmarks", dependencies=[Depends(_verify_api_access)])
@@ -30,10 +34,14 @@ async def list_benchmark_runs(limit: int = Query(default=20, ge=1, le=200)) -> l
     """List recent benchmark runs with summary totals."""
     async with AsyncSessionLocal() as session:
         rows = (
-            await session.execute(
-                select(BenchmarkRun).order_by(BenchmarkRun.started_at.desc()).limit(limit)
+            (
+                await session.execute(
+                    select(BenchmarkRun).order_by(BenchmarkRun.started_at.desc()).limit(limit)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     return [
         {
             "id": run.id,
@@ -58,10 +66,16 @@ async def get_benchmark_run(run_id: int) -> dict[str, Any]:
         if run is None:
             raise HTTPException(status_code=404, detail="Benchmark run not found")
         results = (
-            await session.execute(
-                select(BenchmarkResult).where(BenchmarkResult.run_id == run_id).order_by(BenchmarkResult.created_at)
+            (
+                await session.execute(
+                    select(BenchmarkResult)
+                    .where(BenchmarkResult.run_id == run_id)
+                    .order_by(BenchmarkResult.created_at)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     return {
         "id": run.id,
@@ -86,10 +100,16 @@ async def get_benchmark_run(run_id: int) -> dict[str, Any]:
                 "false_negatives": r.false_negatives,
                 "total_tokens": r.total_tokens,
                 "cost_usd": float(r.cost_usd) if r.cost_usd is not None else None,
-                "cost_per_tp_usd": float(r.cost_per_tp_usd) if r.cost_per_tp_usd is not None else None,
+                "cost_per_tp_usd": float(r.cost_per_tp_usd)
+                if r.cost_per_tp_usd is not None
+                else None,
                 "stage_timings": r.stage_timings_json,
-                "precision": r.true_positives / (r.true_positives + r.false_positives) if (r.true_positives + r.false_positives) > 0 else None,
-                "recall": r.true_positives / (r.true_positives + r.false_negatives) if (r.true_positives + r.false_negatives) > 0 else None,
+                "precision": r.true_positives / (r.true_positives + r.false_positives)
+                if (r.true_positives + r.false_positives) > 0
+                else None,
+                "recall": r.true_positives / (r.true_positives + r.false_negatives)
+                if (r.true_positives + r.false_negatives) > 0
+                else None,
             }
             for r in results
         ],
@@ -120,12 +140,24 @@ async def compare_benchmark_runs(
             return None
 
     return {
-        "run_a": {"id": run_a, "name": run_a_row.name, "prompt_version": run_a_row.prompt_version, "totals": totals_a},
-        "run_b": {"id": run_b, "name": run_b_row.name, "prompt_version": run_b_row.prompt_version, "totals": totals_b},
+        "run_a": {
+            "id": run_a,
+            "name": run_a_row.name,
+            "prompt_version": run_a_row.prompt_version,
+            "totals": totals_a,
+        },
+        "run_b": {
+            "id": run_b,
+            "name": run_b_row.name,
+            "prompt_version": run_b_row.prompt_version,
+            "totals": totals_b,
+        },
         "delta": {
             "precision": _safe_delta(totals_a.get("precision"), totals_b.get("precision")),
             "recall": _safe_delta(totals_a.get("recall"), totals_b.get("recall")),
-            "false_positive_rate": _safe_delta(totals_a.get("false_positive_rate"), totals_b.get("false_positive_rate")),
+            "false_positive_rate": _safe_delta(
+                totals_a.get("false_positive_rate"), totals_b.get("false_positive_rate")
+            ),
             "cost_usd": _safe_delta(totals_a.get("cost_usd"), totals_b.get("cost_usd")),
         },
     }

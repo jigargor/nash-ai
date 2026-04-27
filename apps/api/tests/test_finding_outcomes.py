@@ -66,13 +66,19 @@ async def _seed_review(
 
 
 class _FakeGitHubClient:
-    async def get_pull_review_comment_reactions(self, _owner: str, _repo: str, _comment_id: int | None) -> list[dict[str, object]]:
+    async def get_pull_review_comment_reactions(
+        self, _owner: str, _repo: str, _comment_id: int | None
+    ) -> list[dict[str, object]]:
         return []
 
-    async def get_pull_review_comment_replies(self, _owner: str, _repo: str, _comment_id: int | None) -> list[dict[str, object]]:
+    async def get_pull_review_comment_replies(
+        self, _owner: str, _repo: str, _comment_id: int | None
+    ) -> list[dict[str, object]]:
         return []
 
-    async def is_pull_review_thread_resolved(self, _owner: str, _repo: str, _pr_number: int, _comment_id: int | None) -> bool:
+    async def is_pull_review_thread_resolved(
+        self, _owner: str, _repo: str, _pr_number: int, _comment_id: int | None
+    ) -> bool:
         return False
 
     async def get_commits_touching_file(
@@ -109,8 +115,18 @@ async def test_summarize_finding_outcomes_excludes_pending_and_computes_useful_r
     review_id = await _seed_review(
         installation_id,
         findings=[
-            {"severity": "high", "category": "security", "evidence": "tool_verified", "confidence": 95},
-            {"severity": "low", "category": "performance", "evidence": "inference", "confidence": 55},
+            {
+                "severity": "high",
+                "category": "security",
+                "evidence": "tool_verified",
+                "confidence": 95,
+            },
+            {
+                "severity": "low",
+                "category": "performance",
+                "evidence": "inference",
+                "confidence": 55,
+            },
         ],
     )
 
@@ -139,7 +155,9 @@ async def test_summarize_finding_outcomes_excludes_pending_and_computes_useful_r
         )
         await session.commit()
 
-    summary = await summarize_finding_outcomes(installation_id=installation_id, repo_full_name="acme/repo")
+    summary = await summarize_finding_outcomes(
+        installation_id=installation_id, repo_full_name="acme/repo"
+    )
     assert summary["total_classified"] == 1
     assert summary["global_metrics"]["useful_rate"] == pytest.approx(1.0)
     assert summary["outcomes"][Outcome.APPLIED_DIRECTLY.value] == 1

@@ -15,7 +15,10 @@ def _payload_bytes(action: str = "opened") -> bytes:
     payload = {
         "action": action,
         "installation": {"id": 42},
-        "repository": {"full_name": "acme/repo", "owner": {"login": "acme", "type": "Organization"}},
+        "repository": {
+            "full_name": "acme/repo",
+            "owner": {"login": "acme", "type": "Organization"},
+        },
         "pull_request": {
             "number": 10,
             "head": {"sha": "a" * 40},

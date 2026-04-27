@@ -40,14 +40,22 @@ class FindingValidator:
         if finding.line_start < 1 or finding.line_start > len(lines):
             return False, "line_out_of_range", f"line_start {finding.line_start} out of range"
         if end_line < finding.line_start:
-            return False, "line_out_of_range", f"line_end {end_line} before line_start {finding.line_start}"
+            return (
+                False,
+                "line_out_of_range",
+                f"line_end {end_line} before line_start {finding.line_start}",
+            )
         if end_line > len(lines):
             return False, "line_out_of_range", f"line_end {end_line} out of range"
 
         actual_target_line = lines[finding.line_start - 1]
         if finding.target_line_content != actual_target_line:
             matched_line = _find_line_by_content(lines, finding.target_line_content)
-            if matched_line is not None and matched_line >= finding.line_start and matched_line <= end_line:
+            if (
+                matched_line is not None
+                and matched_line >= finding.line_start
+                and matched_line <= end_line
+            ):
                 pass
             else:
                 return (
@@ -67,17 +75,23 @@ class FindingValidator:
 
         if finding.suggestion:
             new_lines = (
-                lines[: finding.line_start - 1]
-                + finding.suggestion.split("\n")
-                + lines[end_line:]
+                lines[: finding.line_start - 1] + finding.suggestion.split("\n") + lines[end_line:]
             )
             new_content = "\n".join(new_lines)
             if not self._parses(finding.file_path, new_content):
-                return False, "syntax_invalid_suggestion", "Suggestion produces syntactically invalid code"
+                return (
+                    False,
+                    "syntax_invalid_suggestion",
+                    "Suggestion produces syntactically invalid code",
+                )
 
             replaced = "\n".join(lines[finding.line_start - 1 : end_line])
             if not self._suggestion_is_coherent(replaced, finding.suggestion, finding.message):
-                return False, "incoherent_suggestion", "Suggestion does not coherently replace the target region"
+                return (
+                    False,
+                    "incoherent_suggestion",
+                    "Suggestion does not coherently replace the target region",
+                )
 
         return True, None, None
 
@@ -132,7 +146,11 @@ class FindingValidator:
         normalized_suggestion = suggestion_clean.lower().replace("(", " ").replace(")", " ")
         replaced_tokens = {token for token in normalized_replaced.split() if len(token) > 2}
         suggestion_tokens = {token for token in normalized_suggestion.split() if len(token) > 2}
-        if replaced_tokens and suggestion_tokens and not replaced_tokens.intersection(suggestion_tokens):
+        if (
+            replaced_tokens
+            and suggestion_tokens
+            and not replaced_tokens.intersection(suggestion_tokens)
+        ):
             return False
         return True
 

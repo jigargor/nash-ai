@@ -10,7 +10,13 @@ from app.agent import profiler_cache
 
 
 class _FakeRedis:
-    def __init__(self, *, get_value: str | None = None, raise_on_get: bool = False, raise_on_set: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        get_value: str | None = None,
+        raise_on_get: bool = False,
+        raise_on_set: bool = False,
+    ) -> None:
         self.get_value = get_value
         self.raise_on_get = raise_on_get
         self.raise_on_set = raise_on_set
@@ -32,7 +38,9 @@ class _FakeRedis:
 
 
 @pytest.mark.anyio
-async def test_get_cached_repo_profile_returns_deserialized_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_cached_repo_profile_returns_deserialized_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = json.dumps({"frameworks": ["nextjs"], "conventions": {"lint": "ruff"}})
     fake_redis = _FakeRedis(get_value=payload)
     monkeypatch.setattr(profiler_cache.Redis, "from_url", lambda *args, **kwargs: fake_redis)
@@ -43,7 +51,9 @@ async def test_get_cached_repo_profile_returns_deserialized_profile(monkeypatch:
 
 
 @pytest.mark.anyio
-async def test_get_cached_repo_profile_returns_none_on_invalid_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_cached_repo_profile_returns_none_on_invalid_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_redis = _FakeRedis(get_value="{invalid-json")
     monkeypatch.setattr(profiler_cache.Redis, "from_url", lambda *args, **kwargs: fake_redis)
 
@@ -53,7 +63,9 @@ async def test_get_cached_repo_profile_returns_none_on_invalid_payload(monkeypat
 
 
 @pytest.mark.anyio
-async def test_set_cached_repo_profile_writes_payload_and_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_set_cached_repo_profile_writes_payload_and_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_redis = _FakeRedis()
     monkeypatch.setattr(profiler_cache.Redis, "from_url", lambda *args, **kwargs: fake_redis)
 
@@ -69,7 +81,9 @@ async def test_set_cached_repo_profile_writes_payload_and_ttl(monkeypatch: pytes
 
 
 @pytest.mark.anyio
-async def test_set_cached_repo_profile_swallow_redis_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_set_cached_repo_profile_swallow_redis_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_redis = _FakeRedis(raise_on_set=True)
     monkeypatch.setattr(profiler_cache.Redis, "from_url", lambda *args, **kwargs: fake_redis)
 

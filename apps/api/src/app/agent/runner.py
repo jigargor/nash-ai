@@ -17,7 +17,14 @@ from redis.asyncio import Redis
 from app.agent.acknowledgments import extract_todo_fixme_markers
 from app.agent.config_cache import get_cached_review_config, set_cached_review_config
 from app.agent.constants import PROMPT_VERSION, REPAIR_RETRY_DROP_RATE, REPAIR_SEARCH_WINDOW
-from app.agent.chunking import ClassifiedDiffFile, ChunkPlan, ChunkingPlannerConfig, FileClass, PlannedChunk, plan_chunks
+from app.agent.chunking import (
+    ClassifiedDiffFile,
+    ChunkPlan,
+    ChunkingPlannerConfig,
+    FileClass,
+    PlannedChunk,
+    plan_chunks,
+)
 from app.agent.chunked_runtime import (
     chunk_repo_segments,
     chunk_status,
@@ -168,7 +175,9 @@ async def _assemble_context(
     context["fetched_files"] = fetched_map
     context["frameworks"] = repo_profile.frameworks
     _warn_if_carriage_returns(fetched_map)
-    system_prompt = build_system_prompt(repo_profile.frameworks, diff_text, review_config.prompt_additions)
+    system_prompt = build_system_prompt(
+        repo_profile.frameworks, diff_text, review_config.prompt_additions
+    )
     user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
     return files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt
 
@@ -194,11 +203,17 @@ def _resolve_runtime_model(
     if role in {"primary_review", "chunk_review"}:
         context["runtime_model_provider"] = resolution.provider
         context["runtime_model"] = resolution.model
-        context["runtime_input_per_1m_usd"] = str(resolution.input_per_1m_usd) if resolution.input_per_1m_usd is not None else None
-        context["runtime_cached_input_per_1m_usd"] = (
-            str(resolution.cached_input_per_1m_usd) if resolution.cached_input_per_1m_usd is not None else None
+        context["runtime_input_per_1m_usd"] = (
+            str(resolution.input_per_1m_usd) if resolution.input_per_1m_usd is not None else None
         )
-        context["runtime_output_per_1m_usd"] = str(resolution.output_per_1m_usd) if resolution.output_per_1m_usd is not None else None
+        context["runtime_cached_input_per_1m_usd"] = (
+            str(resolution.cached_input_per_1m_usd)
+            if resolution.cached_input_per_1m_usd is not None
+            else None
+        )
+        context["runtime_output_per_1m_usd"] = (
+            str(resolution.output_per_1m_usd) if resolution.output_per_1m_usd is not None else None
+        )
     context.setdefault("anthropic_cache_ttl", "5m")
     context.setdefault("openai_prompt_cache_retention", "in_memory")
     return resolution
@@ -207,11 +222,17 @@ def _resolve_runtime_model(
 def _set_runtime_model_context(context: dict[str, Any], resolution: ModelResolution) -> None:
     context["runtime_model_provider"] = resolution.provider
     context["runtime_model"] = resolution.model
-    context["runtime_input_per_1m_usd"] = str(resolution.input_per_1m_usd) if resolution.input_per_1m_usd is not None else None
-    context["runtime_cached_input_per_1m_usd"] = (
-        str(resolution.cached_input_per_1m_usd) if resolution.cached_input_per_1m_usd is not None else None
+    context["runtime_input_per_1m_usd"] = (
+        str(resolution.input_per_1m_usd) if resolution.input_per_1m_usd is not None else None
     )
-    context["runtime_output_per_1m_usd"] = str(resolution.output_per_1m_usd) if resolution.output_per_1m_usd is not None else None
+    context["runtime_cached_input_per_1m_usd"] = (
+        str(resolution.cached_input_per_1m_usd)
+        if resolution.cached_input_per_1m_usd is not None
+        else None
+    )
+    context["runtime_output_per_1m_usd"] = (
+        str(resolution.output_per_1m_usd) if resolution.output_per_1m_usd is not None else None
+    )
 
 
 async def _run_fast_path_stage(
@@ -224,7 +245,9 @@ async def _run_fast_path_stage(
     diff_tokens: int,
 ) -> tuple[FastPathDecision, ModelResolution | None]:
     if not review_config.fast_path.enabled:
-        return fallback_full_review("Fast-path pre-pass is disabled.", risk_labels=["disabled"]), None
+        return fallback_full_review(
+            "Fast-path pre-pass is disabled.", risk_labels=["disabled"]
+        ), None
 
     files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
     fast_resolution = _resolve_runtime_model(
@@ -251,8 +274,14 @@ async def _run_fast_path_stage(
             provider=fast_resolution.provider,
         )
     except Exception as exc:
-        logger.warning("Fast-path pre-pass failed; falling back to full review review_id=%s err=%s", context.get("review_id"), exc)
-        decision = fallback_full_review(f"Fast-path pre-pass failed: {exc}", risk_labels=["fast_path_error"])
+        logger.warning(
+            "Fast-path pre-pass failed; falling back to full review review_id=%s err=%s",
+            context.get("review_id"),
+            exc,
+        )
+        decision = fallback_full_review(
+            f"Fast-path pre-pass failed: {exc}", risk_labels=["fast_path_error"]
+        )
         fallback_reason = "fast_path_error"
 
     metadata = fast_path_metadata(
@@ -280,14 +309,20 @@ async def _run_fast_path_stage(
     return decision, fast_resolution
 
 
-def _review_config_for_fast_path_decision(review_config: ReviewConfig, decision: FastPathDecision) -> ReviewConfig:
+def _review_config_for_fast_path_decision(
+    review_config: ReviewConfig, decision: FastPathDecision
+) -> ReviewConfig:
     if decision.decision != "light_review" or review_config.model.explicit:
         return review_config
     existing = review_config.models.roles.get("primary_review")
     if existing is not None and existing.provider and existing.model:
         return review_config
     roles = dict(review_config.models.roles)
-    roles["primary_review"] = replace(existing, tier="economy") if existing is not None else ModelRoleRoutingConfig(tier="economy")
+    roles["primary_review"] = (
+        replace(existing, tier="economy")
+        if existing is not None
+        else ModelRoleRoutingConfig(tier="economy")
+    )
     return replace(review_config, models=replace(review_config.models, roles=roles))
 
 
@@ -296,19 +331,29 @@ async def _load_user_provider_keys(github_id: int) -> dict[str, str]:
     from sqlalchemy import select as sa_select
 
     async with AsyncSessionLocal() as session:
-        user = (await session.execute(sa_select(User).where(User.github_id == github_id))).scalar_one_or_none()
+        user = (
+            await session.execute(sa_select(User).where(User.github_id == github_id))
+        ).scalar_one_or_none()
         if user is None or user.deleted_at is not None:
             return {}
         rows = (
-            await session.execute(sa_select(UserProviderKey).where(UserProviderKey.user_id == user.id))
-        ).scalars().all()
+            (
+                await session.execute(
+                    sa_select(UserProviderKey).where(UserProviderKey.user_id == user.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     result: dict[str, str] = {}
     for row in rows:
         try:
             result[row.provider] = decrypt_secret(row.key_enc)
         except Exception:
-            logger.warning("Failed to decrypt key for user %s provider %s — skipping", github_id, row.provider)
+            logger.warning(
+                "Failed to decrypt key for user %s provider %s — skipping", github_id, row.provider
+            )
     return result
 
 
@@ -349,18 +394,28 @@ async def run_review(
         context["chunking_config_hash"] = _chunking_config_hash(review_config)
 
         if pr.get("draft", False) and not review_config.review_drafts:
-            result = ReviewResult(findings=[], summary="Skipped automated review because this pull request is a draft.")
-            await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
+            result = ReviewResult(
+                findings=[],
+                summary="Skipped automated review because this pull request is a draft.",
+            )
+            await _mark_review_done(
+                session_data=result, context=context, status="done", review_config=review_config
+            )
             return
         diff_tokens = count_tokens(diff_text)
-        chunking_enabled = review_config.chunking.enabled and diff_tokens >= review_config.chunking.proactive_threshold_tokens
+        chunking_enabled = (
+            review_config.chunking.enabled
+            and diff_tokens >= review_config.chunking.proactive_threshold_tokens
+        )
         if is_diff_too_large(diff_text) and not chunking_enabled:
             result = ReviewResult(
                 findings=[],
                 summary="PR is too large for automated review. Please split it into smaller changes and re-run.",
             )
             await post_review(gh, owner, repo, pr_number, head_sha, result)
-            await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
+            await _mark_review_done(
+                session_data=result, context=context, status="done", review_config=review_config
+            )
             return
         fast_path_decision, fast_path_resolution = await _run_fast_path_stage(
             context=context,
@@ -377,9 +432,13 @@ async def run_review(
                 findings=[],
                 summary="Skipped full review after low-risk fast-path classification.",
             )
-            await _mark_review_done(session_data=result, context=context, status="done", review_config=review_config)
+            await _mark_review_done(
+                session_data=result, context=context, status="done", review_config=review_config
+            )
             return
-        effective_review_config = _review_config_for_fast_path_decision(review_config, fast_path_decision)
+        effective_review_config = _review_config_for_fast_path_decision(
+            review_config, fast_path_decision
+        )
         if chunking_enabled:
             final_result = await _run_chunked_review(
                 gh=gh,
@@ -402,7 +461,9 @@ async def run_review(
                 pr_context={
                     "title": pr.get("title", ""),
                     "description": pr.get("body", "") or "",
-                    "commits": [str((commit.get("commit") or {}).get("message", "")) for commit in commits],
+                    "commits": [
+                        str((commit.get("commit") or {}).get("message", "")) for commit in commits
+                    ],
                 },
                 prior_reviews=prior_reviews,
                 code_acknowledgments=[],
@@ -410,9 +471,13 @@ async def run_review(
                 provider=editor_resolution.provider,
                 context=context,
             )
-            final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
+            final_result = ReviewResult(
+                findings=edited_result.findings, summary=edited_result.summary
+            )
             final_result = _apply_review_config_filters(final_result, effective_review_config)
-            review_post_response = await post_review(gh, owner, repo, pr_number, head_sha, final_result)
+            review_post_response = await post_review(
+                gh, owner, repo, pr_number, head_sha, final_result
+            )
             comment_ids = extract_review_comment_ids(review_post_response)
             await seed_pending_finding_outcomes(
                 review_id=cast(int, context["review_id"]),
@@ -420,7 +485,12 @@ async def run_review(
                 finding_count=len(final_result.findings),
                 github_comment_ids=comment_ids,
             )
-            await _mark_review_done(session_data=final_result, context=context, status="done", review_config=effective_review_config)
+            await _mark_review_done(
+                session_data=final_result,
+                context=context,
+                status="done",
+                review_config=effective_review_config,
+            )
             logger.info(
                 "Chunked review completed review_id=%s duration_ms=%s",
                 review_id,
@@ -429,9 +499,13 @@ async def run_review(
             return
 
         review_config = effective_review_config
-        files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt = await _assemble_context(
-            gh, context, diff_text, review_config
-        )
+        (
+            files_in_diff,
+            fetched_map,
+            context_bundle,
+            system_prompt,
+            user_prompt,
+        ) = await _assemble_context(gh, context, diff_text, review_config)
         primary_resolution = _resolve_runtime_model(
             context,
             review_config,
@@ -495,7 +569,9 @@ async def run_review(
 
         dropped_count = len(validator_dropped)
         drop_rate = dropped_count / generated if generated else 0.0
-        mismatch_dropped = [entry for entry in validator_dropped if entry[1] == "target_line_mismatch"]
+        mismatch_dropped = [
+            entry for entry in validator_dropped if entry[1] == "target_line_mismatch"
+        ]
         if generated > 0 and drop_rate >= REPAIR_RETRY_DROP_RATE:
             if mismatch_dropped:
                 retry_triggered = True
@@ -571,11 +647,13 @@ async def run_review(
                 )
 
         threshold = review_config.confidence_threshold or 85
-        result, confidence_dropped, evidence_rejections, evidence_rejection_reasons = _apply_policy_filters(
-            result,
-            threshold=threshold,
-            tool_call_history=tool_call_history,
-            known_fact_ids=load_verified_fact_ids(),
+        result, confidence_dropped, evidence_rejections, evidence_rejection_reasons = (
+            _apply_policy_filters(
+                result,
+                threshold=threshold,
+                tool_call_history=tool_call_history,
+                known_fact_ids=load_verified_fact_ids(),
+            )
         )
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
         debate_conflict_score: int | None = None
@@ -584,10 +662,15 @@ async def run_review(
                 context,
                 review_config,
                 "challenger",
-                context_tokens=count_tokens(system_prompt) + count_tokens(_build_challenger_prompt(draft_result, final_summary_hint=result.summary)),
+                context_tokens=count_tokens(system_prompt)
+                + count_tokens(
+                    _build_challenger_prompt(draft_result, final_summary_hint=result.summary)
+                ),
                 previous_provider=primary_resolution.provider,
             )
-            challenger_prompt = _build_challenger_prompt(draft_result, final_summary_hint=result.summary)
+            challenger_prompt = _build_challenger_prompt(
+                draft_result, final_summary_hint=result.summary
+            )
             challenger_messages = [{"role": "user", "content": challenger_prompt}]
             challenger_stage_started_at = monotonic()
             challenger_snapshot = _token_snapshot(context)
@@ -599,7 +682,9 @@ async def run_review(
                 provider=challenger_resolution.provider,
                 allow_retry=False,
             )
-            debate_conflict_score = _calculate_conflict_score(draft_result.findings, challenger_result.findings)
+            debate_conflict_score = _calculate_conflict_score(
+                draft_result.findings, challenger_result.findings
+            )
             await _record_model_audit(
                 context=context,
                 stage="challenger",
@@ -613,15 +698,19 @@ async def run_review(
                 stage_started_at=challenger_stage_started_at,
             )
             tie_break_result: ReviewResult | None = None
-            should_tie_break = debate_conflict_score >= review_config.max_mode.conflict_threshold or _has_high_risk_findings(
-                draft_result.findings, review_config.max_mode.high_risk_severity
+            should_tie_break = (
+                debate_conflict_score >= review_config.max_mode.conflict_threshold
+                or _has_high_risk_findings(
+                    draft_result.findings, review_config.max_mode.high_risk_severity
+                )
             )
             if should_tie_break:
                 tie_break_resolution = _resolve_runtime_model(
                     context,
                     review_config,
                     "tie_break",
-                    context_tokens=count_tokens(system_prompt) + count_tokens(_build_tie_break_prompt(draft_result, challenger_result)),
+                    context_tokens=count_tokens(system_prompt)
+                    + count_tokens(_build_tie_break_prompt(draft_result, challenger_result)),
                     previous_provider=challenger_resolution.provider,
                 )
                 tie_break_prompt = _build_tie_break_prompt(draft_result, challenger_result)
@@ -667,7 +756,9 @@ async def run_review(
             pr_context={
                 "title": pr.get("title", ""),
                 "description": pr.get("body", "") or "",
-                "commits": [str((commit.get("commit") or {}).get("message", "")) for commit in commits],
+                "commits": [
+                    str((commit.get("commit") or {}).get("message", "")) for commit in commits
+                ],
             },
             prior_reviews=prior_reviews,
             code_acknowledgments=code_acknowledgments,
@@ -710,12 +801,18 @@ async def run_review(
             final_findings=len(final_result.findings),
             editor_actions=Counter(decision.action for decision in edited_result.decisions),
             editor_drop_reasons=Counter(
-                decision.reason for decision in edited_result.decisions if decision.action == "drop" and decision.reason
+                decision.reason
+                for decision in edited_result.decisions
+                if decision.action == "drop" and decision.reason
             ),
             severity_draft=Counter(finding.severity for finding in draft_result.findings),
             severity_final=Counter(finding.severity for finding in final_result.findings),
-            confidence_draft=Counter(_confidence_bucket(finding.confidence) for finding in draft_result.findings),
-            confidence_final=Counter(_confidence_bucket(finding.confidence) for finding in final_result.findings),
+            confidence_draft=Counter(
+                _confidence_bucket(finding.confidence) for finding in draft_result.findings
+            ),
+            confidence_final=Counter(
+                _confidence_bucket(finding.confidence) for finding in final_result.findings
+            ),
             evidence_distribution=Counter(finding.evidence for finding in final_result.findings),
             evidence_rejections_total=len(evidence_rejections),
             evidence_rejection_reasons=evidence_rejection_reasons,
@@ -752,7 +849,9 @@ async def run_review(
             finding_count=len(final_result.findings),
             github_comment_ids=comment_ids,
         )
-        await _mark_review_done(session_data=final_result, context=context, status="done", review_config=review_config)
+        await _mark_review_done(
+            session_data=final_result, context=context, status="done", review_config=review_config
+        )
         logger.info(
             "Review completed review_id=%s duration_ms=%s first_model_call_latency_ms=%s",
             review_id,
@@ -767,7 +866,11 @@ async def run_review(
             status="failed",
             review_config=review_config if "review_config" in locals() else None,
         )
-        logger.info("Review failed review_id=%s duration_ms=%s", review_id, int((monotonic() - started_at) * 1000))
+        logger.info(
+            "Review failed review_id=%s duration_ms=%s",
+            review_id,
+            int((monotonic() - started_at) * 1000),
+        )
         raise
 
 
@@ -803,7 +906,9 @@ async def _mark_review_done(
             return
         review.status = status
         if review_config is not None:
-            review.model_provider = str(context.get("runtime_model_provider") or review_config.model.provider)
+            review.model_provider = str(
+                context.get("runtime_model_provider") or review_config.model.provider
+            )
             review.model = str(context.get("runtime_model") or review_config.model.name)
         review.findings = session_data.model_dump(mode="json")
         current_artifacts = dict(review.debug_artifacts or {})
@@ -828,13 +933,17 @@ async def _mark_review_done(
             ).scalar_one_or_none()
             if user is not None:
                 rows = (
-                    await key_session.execute(
-                        sa_select(UserProviderKey).where(
-                            UserProviderKey.user_id == user.id,
-                            UserProviderKey.provider.in_(list(user_provider_keys.keys())),
+                    (
+                        await key_session.execute(
+                            sa_select(UserProviderKey).where(
+                                UserProviderKey.user_id == user.id,
+                                UserProviderKey.provider.in_(list(user_provider_keys.keys())),
+                            )
                         )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 now = datetime.now(timezone.utc)
                 for row in rows:
                     row.last_used_at = now
@@ -865,7 +974,11 @@ def _cached_input_tokens(context: dict[str, Any]) -> int:
     entries = context.get("llm_usage", [])
     if not isinstance(entries, list):
         return 0
-    return sum(int(entry.get("cached_input_tokens", 0) or 0) for entry in entries if isinstance(entry, dict))
+    return sum(
+        int(entry.get("cached_input_tokens", 0) or 0)
+        for entry in entries
+        if isinstance(entry, dict)
+    )
 
 
 def _decimal_from_context(value: object) -> Decimal | None:
@@ -919,7 +1032,9 @@ async def _record_token_budget_usage(installation_id: int, tokens_used: int) -> 
             pass
 
 
-async def _load_review_config_cached(gh: GitHubClient, owner: str, repo: str, head_sha: str) -> ReviewConfig:
+async def _load_review_config_cached(
+    gh: GitHubClient, owner: str, repo: str, head_sha: str
+) -> ReviewConfig:
     cached = await get_cached_review_config(owner, repo, head_sha)
     if cached is not None:
         return cached
@@ -988,10 +1103,14 @@ async def _run_chunked_review(
         vendor_paths=review_config.packaging.vendor_paths,
     )
     if not chunk_plan.chunks:
-        return ReviewResult(findings=[], summary=f"{chunk_plan.coverage_note} No findings generated.")
+        return ReviewResult(
+            findings=[], summary=f"{chunk_plan.coverage_note} No findings generated."
+        )
 
     repo_profile = await profile_repo(gh, owner, repo, head_sha)
-    base_repo_segments = _build_repo_segments(repo_profile.frameworks, review_config.prompt_additions)
+    base_repo_segments = _build_repo_segments(
+        repo_profile.frameworks, review_config.prompt_additions
+    )
     resume_state = await load_chunk_state(context)
     chunk_state = merge_chunk_state_with_plan(resume_state, chunk_plan)
     structured_findings: list[Finding] = []
@@ -1022,7 +1141,9 @@ async def _run_chunked_review(
             repo_segments=[*base_repo_segments, *chunk_repo_context],
         )
         chunk_diff = render_chunk_diff(chunk_files)
-        system_prompt = build_system_prompt(repo_profile.frameworks, chunk_diff, review_config.prompt_additions)
+        system_prompt = build_system_prompt(
+            repo_profile.frameworks, chunk_diff, review_config.prompt_additions
+        )
         user_prompt = build_initial_user_prompt(
             owner,
             repo,
@@ -1035,8 +1156,14 @@ async def _run_chunked_review(
             "chunk_review",
             context_tokens=count_tokens(system_prompt) + count_tokens(user_prompt),
         )
-        projected_prompt_cost = count_tokens(system_prompt) + count_tokens(user_prompt) + review_config.chunking.output_headroom_tokens
-        if (int(context.get("tokens_used", 0)) + projected_prompt_cost) > review_config.chunking.max_total_prompt_tokens:
+        projected_prompt_cost = (
+            count_tokens(system_prompt)
+            + count_tokens(user_prompt)
+            + review_config.chunking.output_headroom_tokens
+        )
+        if (
+            int(context.get("tokens_used", 0)) + projected_prompt_cost
+        ) > review_config.chunking.max_total_prompt_tokens:
             prompt_budget_exhausted = True
             break
 
@@ -1142,14 +1269,19 @@ async def _run_chunked_review(
 def _chunk_repo_segments(chunk_plan: ChunkPlan, chunk: PlannedChunk) -> list[str]:
     files = [entry.path for entry in chunk.files]
     chunk_packages = sorted({entry.touched_package for entry in chunk.files})
-    chunk_dep_hints = sorted({hint for entry in chunk.files if (hint := entry.dependency_hint) is not None})
+    chunk_dep_hints = sorted(
+        {hint for entry in chunk.files if (hint := entry.dependency_hint) is not None}
+    )
     return [
         "Full changed-file manifest:\n" + "\n".join(chunk_plan.full_manifest),
-        "Touched packages: " + (", ".join(chunk_plan.touched_packages) if chunk_plan.touched_packages else "none"),
-        "Dependency hints: " + (", ".join(chunk_plan.dependency_hints) if chunk_plan.dependency_hints else "none"),
+        "Touched packages: "
+        + (", ".join(chunk_plan.touched_packages) if chunk_plan.touched_packages else "none"),
+        "Dependency hints: "
+        + (", ".join(chunk_plan.dependency_hints) if chunk_plan.dependency_hints else "none"),
         f"Active chunk files ({len(files)}):\n" + "\n".join(files),
         "Active chunk package scope: " + (", ".join(chunk_packages) if chunk_packages else "none"),
-        "Active chunk dependency hints: " + (", ".join(chunk_dep_hints) if chunk_dep_hints else "none"),
+        "Active chunk dependency hints: "
+        + (", ".join(chunk_dep_hints) if chunk_dep_hints else "none"),
     ]
 
 
@@ -1208,7 +1340,13 @@ def _finding_dedupe_key(finding: Finding) -> tuple[str, int, str, str, str]:
     side = finding.side
     normalized_title = normalize_for_match(finding.message[:120])
     normalized_excerpt = normalize_for_match(finding.target_line_content[:240])
-    return (finding.file_path, line_value, side, normalized_title, f"{finding.category}:{normalized_excerpt}")
+    return (
+        finding.file_path,
+        line_value,
+        side,
+        normalized_title,
+        f"{finding.category}:{normalized_excerpt}",
+    )
 
 
 def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
@@ -1231,7 +1369,9 @@ def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
     )
 
 
-def _attach_anchor_metadata(findings: list[Finding], files_in_diff: list[FileInDiff]) -> list[Finding]:
+def _attach_anchor_metadata(
+    findings: list[Finding], files_in_diff: list[FileInDiff]
+) -> list[Finding]:
     index = _build_diff_anchor_index(files_in_diff)
     updated: list[Finding] = []
     for finding in findings:
@@ -1251,13 +1391,17 @@ def _attach_anchor_metadata(findings: list[Finding], files_in_diff: list[FileInD
     return updated
 
 
-def _build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str, int], DiffAnchorMetadata]:
+def _build_diff_anchor_index(
+    files_in_diff: list[FileInDiff],
+) -> dict[tuple[str, int], DiffAnchorMetadata]:
     index: dict[tuple[str, int], DiffAnchorMetadata] = {}
     for file in files_in_diff:
         hunk_id = 0
         previous_line = -1
         for numbered in file.numbered_lines:
-            anchor = numbered.new_line_no if numbered.new_line_no is not None else numbered.old_line_no
+            anchor = (
+                numbered.new_line_no if numbered.new_line_no is not None else numbered.old_line_no
+            )
             if anchor is None:
                 continue
             if previous_line != -1 and anchor > previous_line + 1:
@@ -1272,7 +1416,9 @@ def _build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str,
     return index
 
 
-def _filter_findings_with_valid_anchors(findings: list[Finding], files_in_diff: list[FileInDiff]) -> list[Finding]:
+def _filter_findings_with_valid_anchors(
+    findings: list[Finding], files_in_diff: list[FileInDiff]
+) -> list[Finding]:
     allowed = _build_diff_anchor_index(files_in_diff)
     filtered: list[Finding] = []
     for finding in findings:
@@ -1311,7 +1457,9 @@ async def _load_chunk_state(context: dict[str, Any]) -> dict[str, dict[str, obje
         return cast(dict[str, dict[str, object]], state)
 
 
-def _merge_chunk_state_with_plan(existing: dict[str, dict[str, object]], plan: ChunkPlan) -> dict[str, dict[str, object]]:
+def _merge_chunk_state_with_plan(
+    existing: dict[str, dict[str, object]], plan: ChunkPlan
+) -> dict[str, dict[str, object]]:
     merged = dict(existing)
     for chunk in plan.chunks:
         if chunk.chunk_id not in merged:
@@ -1368,7 +1516,9 @@ def _set_chunk_state(
         chunk_state["error"] = error
 
 
-async def _persist_chunk_state(context: dict[str, Any], chunk_state: dict[str, dict[str, object]]) -> None:
+async def _persist_chunk_state(
+    context: dict[str, Any], chunk_state: dict[str, dict[str, object]]
+) -> None:
     installation_id = cast(int, context["installation_id"])
     review_id = cast(int, context["review_id"])
     async with AsyncSessionLocal() as session:
@@ -1384,7 +1534,9 @@ async def _persist_chunk_state(context: dict[str, Any], chunk_state: dict[str, d
         await session.commit()
 
 
-def _filter_diff_files(files_in_diff: list[FileInDiff], ignore_paths: list[str]) -> list[FileInDiff]:
+def _filter_diff_files(
+    files_in_diff: list[FileInDiff], ignore_paths: list[str]
+) -> list[FileInDiff]:
     if not ignore_paths:
         return files_in_diff
     filtered: list[FileInDiff] = []
@@ -1404,7 +1556,9 @@ def _apply_review_config_filters(result: ReviewResult, review_config: ReviewConf
     allowed_categories = set(review_config.categories)
     filtered: list[Finding] = []
     for finding in result.findings:
-        if review_config.ignore_paths and any(fnmatch(finding.file_path, pattern) for pattern in review_config.ignore_paths):
+        if review_config.ignore_paths and any(
+            fnmatch(finding.file_path, pattern) for pattern in review_config.ignore_paths
+        ):
             continue
         if allowed_categories and finding.category not in allowed_categories:
             continue
@@ -1412,9 +1566,11 @@ def _apply_review_config_filters(result: ReviewResult, review_config: ReviewConf
             continue
         filtered.append(finding)
     if len(filtered) > review_config.max_findings_per_pr:
-        filtered = sorted(filtered, key=lambda finding: (SEVERITY_RANK[finding.severity], finding.confidence), reverse=True)[
-            : review_config.max_findings_per_pr
-        ]
+        filtered = sorted(
+            filtered,
+            key=lambda finding: (SEVERITY_RANK[finding.severity], finding.confidence),
+            reverse=True,
+        )[: review_config.max_findings_per_pr]
     result.findings = filtered
     return result
 
@@ -1439,7 +1595,9 @@ def _validate_result(
     return result, dropped, generated
 
 
-def _apply_confidence_threshold(result: ReviewResult, threshold: int) -> tuple[ReviewResult, list[dict[str, object]]]:
+def _apply_confidence_threshold(
+    result: ReviewResult, threshold: int
+) -> tuple[ReviewResult, list[dict[str, object]]]:
     kept_findings: list[Finding] = []
     dropped: list[dict[str, object]] = []
     for finding in result.findings:
@@ -1469,15 +1627,23 @@ def _apply_policy_filters(
 ) -> tuple[ReviewResult, list[dict[str, object]], list[tuple[Finding, str]], Counter[str]]:
     result, confidence_dropped = _apply_confidence_threshold(result, threshold)
     result.findings, auto_tag_vendor_rejected = auto_tag_vendor_claims(result.findings)
-    result.findings, evidence_tool_rejected = cross_check_tool_evidence(result.findings, tool_call_history)
+    result.findings, evidence_tool_rejected = cross_check_tool_evidence(
+        result.findings, tool_call_history
+    )
     result.findings, evidence_fact_rejected = cross_check_fact_ids(result.findings, known_fact_ids)
-    evidence_rejections = [*auto_tag_vendor_rejected, *evidence_tool_rejected, *evidence_fact_rejected]
+    evidence_rejections = [
+        *auto_tag_vendor_rejected,
+        *evidence_tool_rejected,
+        *evidence_fact_rejected,
+    ]
     evidence_rejection_reasons = Counter(reason for _, reason in evidence_rejections)
     return result, confidence_dropped, evidence_rejections, evidence_rejection_reasons
 
 
 def _validation_feedback(dropped: list[tuple[Finding, DropReason, str]]) -> str:
-    feedback_lines = ["Previous findings were dropped by validation. Regenerate using exact lines and coherent suggestions."]
+    feedback_lines = [
+        "Previous findings were dropped by validation. Regenerate using exact lines and coherent suggestions."
+    ]
     for finding, reason, detail in dropped[:10]:
         feedback_lines.append(
             f"- {finding.file_path}:{finding.line_start}-{finding.line_end or finding.line_start} "
@@ -1508,7 +1674,9 @@ def _log_quality_metrics(
     agent_metrics = context.get("agent_metrics", {})
     editor_actions = Counter(decision.action for decision in editor_result.decisions)
     editor_drop_reasons = Counter(
-        decision.reason for decision in editor_result.decisions if decision.action == "drop" and decision.reason
+        decision.reason
+        for decision in editor_result.decisions
+        if decision.action == "drop" and decision.reason
     )
 
     logger.info(
@@ -1630,7 +1798,9 @@ def _llm_usage_since(context: dict[str, Any], token_before: dict[str, int]) -> d
             cache_creation_input_tokens += int(entry.get("cache_creation_input_tokens", 0) or 0)
     return {
         "input_delta": max(0, int(context.get("input_tokens", 0)) - token_before["input_tokens"]),
-        "output_delta": max(0, int(context.get("output_tokens", 0)) - token_before["output_tokens"]),
+        "output_delta": max(
+            0, int(context.get("output_tokens", 0)) - token_before["output_tokens"]
+        ),
         "total_delta": max(0, int(context.get("tokens_used", 0)) - token_before["tokens_used"]),
         "cached_input_tokens_seen": cached_input_tokens,
         "cache_creation_input_tokens_seen": cache_creation_input_tokens,
@@ -1669,7 +1839,9 @@ async def _record_model_audit(
         metadata.update(extra_metadata)
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
-        stage_duration_ms = int((monotonic() - stage_started_at) * 1000) if stage_started_at is not None else None
+        stage_duration_ms = (
+            int((monotonic() - stage_started_at) * 1000) if stage_started_at is not None else None
+        )
         session.add(
             ReviewModelAudit(
                 review_id=review_id,
@@ -1758,7 +1930,10 @@ def _merge_debate_results(
     required_votes = 2 if len(candidates) >= 2 else 1
     merged: list[Finding] = []
     for key, finding_votes in votes.items():
-        if len(finding_votes) >= required_votes or SEVERITY_RANK.get(finding_votes[0].severity, 0) >= SEVERITY_RANK["high"]:
+        if (
+            len(finding_votes) >= required_votes
+            or SEVERITY_RANK.get(finding_votes[0].severity, 0) >= SEVERITY_RANK["high"]
+        ):
             best = max(finding_votes, key=lambda item: item.confidence)
             merged.append(best.model_copy(deep=True))
     merged.sort(key=lambda item: (SEVERITY_RANK[item.severity], item.confidence), reverse=True)
@@ -1827,9 +2002,7 @@ def cross_check_tool_evidence(
     tool_call_history: list[dict[str, object]],
 ) -> tuple[list[Finding], list[tuple[Finding, str]]]:
     actual_tool_names = {
-        str(call.get("name"))
-        for call in tool_call_history
-        if isinstance(call.get("name"), str)
+        str(call.get("name")) for call in tool_call_history if isinstance(call.get("name"), str)
     }
     actual_tool_signatures = {
         f"{call.get('name')}:{_stable_tool_input_repr(call.get('input'))}"
@@ -1946,12 +2119,16 @@ def _repair_finding(
     line_span = max(0, end_line - start_line)
     search_start = max(1, start_line - window)
     search_end = min(len(lines), end_line + window)
-    matched_line = _find_normalized_line(lines, finding.target_line_content, search_start, search_end)
+    matched_line = _find_normalized_line(
+        lines, finding.target_line_content, search_start, search_end
+    )
     if matched_line is None:
         return finding
 
     new_end_line = min(len(lines), matched_line + line_span)
-    if commentable_lines is not None and not _is_commentable_range(finding.file_path, matched_line, new_end_line, commentable_lines):
+    if commentable_lines is not None and not _is_commentable_range(
+        finding.file_path, matched_line, new_end_line, commentable_lines
+    ):
         return finding
 
     finding.line_start = matched_line
@@ -1960,7 +2137,9 @@ def _repair_finding(
     return finding
 
 
-def _find_normalized_line(lines: list[str], target_line_content: str, start_line: int, end_line: int) -> int | None:
+def _find_normalized_line(
+    lines: list[str], target_line_content: str, start_line: int, end_line: int
+) -> int | None:
     normalized_target = normalize_for_match(target_line_content)
     for line_no in range(start_line, end_line + 1):
         if normalize_for_match(lines[line_no - 1]) == normalized_target:
@@ -2027,9 +2206,12 @@ def _target_line_mismatch_subtype(
     end_line = finding.line_end or line_no
     search_start = max(1, line_no - window)
     search_end = min(len(lines), end_line + window)
-    matched_line = _find_normalized_line(lines, finding.target_line_content, search_start, search_end)
+    matched_line = _find_normalized_line(
+        lines, finding.target_line_content, search_start, search_end
+    )
     if matched_line is not None and (
-        commentable_lines is None or _is_commentable_range(finding.file_path, matched_line, matched_line, commentable_lines)
+        commentable_lines is None
+        or _is_commentable_range(finding.file_path, matched_line, matched_line, commentable_lines)
     ):
         return "target_line_mismatch_wrong_line"
     return "target_line_mismatch_hallucinated"

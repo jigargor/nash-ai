@@ -29,6 +29,7 @@ class RunContext(TypedDict, total=False):
     debug_artifacts: dict[str, Any]
     agent_metrics: dict[str, Any]
 
+
 Severity = Literal["critical", "high", "medium", "low"]
 Category = Literal["security", "performance", "correctness", "style", "maintainability"]
 Evidence = Literal["tool_verified", "diff_visible", "verified_fact", "inference"]

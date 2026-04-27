@@ -24,7 +24,7 @@ class _FakeRedis:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
 
-    async def enqueue_job(self, *args: object) -> _FakeJob:
+    async def enqueue_job(self, *args: object, **_kwargs: object) -> _FakeJob:
         self.calls.append(args)
         return _FakeJob(job_id=f"job-{len(self.calls)}")
 
@@ -101,7 +101,9 @@ async def client(test_app: FastAPI) -> httpx.AsyncIterator[httpx.AsyncClient]:
 
 
 @pytest.mark.anyio
-async def test_verify_api_access_allows_when_key_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_verify_api_access_allows_when_key_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(settings, "api_access_key", None)
 
@@ -143,7 +145,9 @@ async def test_list_installations_and_repos_include_template_state(
     assert installation_response.status_code == 200
     assert any(item["installation_id"] == installation_id for item in installation_response.json())
 
-    repos_response = await client.get(f"/api/v1/repos?installation_id={installation_id}", headers=_auth_headers())
+    repos_response = await client.get(
+        f"/api/v1/repos?installation_id={installation_id}", headers=_auth_headers()
+    )
     assert repos_response.status_code == 200
     payload = repos_response.json()
     assert len(payload) == 1
@@ -174,7 +178,9 @@ async def test_generate_template_success_and_once_limit(
     async def _fake_resolve_head_sha(_gh: object, _owner: str, _repo: str) -> str:
         return "main"
 
-    async def _fake_profile_repo(_gh: object, _owner: str, _repo: str, _ref: str) -> SimpleNamespace:
+    async def _fake_profile_repo(
+        _gh: object, _owner: str, _repo: str, _ref: str
+    ) -> SimpleNamespace:
         return SimpleNamespace(frameworks=["fastapi"])
 
     async def _fake_generate_yaml(**_kwargs: object) -> str:
@@ -235,7 +241,9 @@ async def test_generate_template_rejects_malformed_yaml(
     async def _fake_resolve_head_sha(_gh: object, _owner: str, _repo: str) -> str:
         return "main"
 
-    async def _fake_profile_repo(_gh: object, _owner: str, _repo: str, _ref: str) -> SimpleNamespace:
+    async def _fake_profile_repo(
+        _gh: object, _owner: str, _repo: str, _ref: str
+    ) -> SimpleNamespace:
         return SimpleNamespace(frameworks=["fastapi"])
 
     async def _bad_yaml(**_kwargs: object) -> str:
@@ -264,10 +272,16 @@ async def test_telemetry_outcomes_summary_uses_public_summarizer(
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
 
-    async def _fake_summary(*, installation_id: int | None = None, repo_full_name: str | None = None) -> dict[str, object]:
+    async def _fake_summary(
+        *, installation_id: int | None = None, repo_full_name: str | None = None
+    ) -> dict[str, object]:
         assert installation_id == 777
         assert repo_full_name == "acme/repo"
-        return {"total_classified": 3, "global_metrics": {"useful_rate": 2 / 3}, "outcomes": {"applied_directly": 2}}
+        return {
+            "total_classified": 3,
+            "global_metrics": {"useful_rate": 2 / 3},
+            "outcomes": {"applied_directly": 2},
+        }
 
     monkeypatch.setattr(api_router, "summarize_finding_outcomes", _fake_summary)
 

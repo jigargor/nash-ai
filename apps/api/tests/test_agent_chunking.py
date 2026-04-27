@@ -4,7 +4,12 @@ from app.agent.diff_parser import FileInDiff, NumberedLine
 
 def _file(path: str, *, added_lines: int, is_deleted: bool = False) -> FileInDiff:
     numbered_lines = [
-        NumberedLine(new_line_no=index + 1 if not is_deleted else None, old_line_no=index + 1, kind="add", content=f"line_{index}")
+        NumberedLine(
+            new_line_no=index + 1 if not is_deleted else None,
+            old_line_no=index + 1,
+            kind="add",
+            content=f"line_{index}",
+        )
         for index in range(added_lines)
     ]
     return FileInDiff(
@@ -23,7 +28,9 @@ def test_plan_chunks_is_deterministic_for_same_inputs() -> None:
         _file("apps/api/src/models/user.py", added_lines=20),
         _file("apps/web/src/app/page.tsx", added_lines=15),
     ]
-    config = ChunkingPlannerConfig(target_chunk_tokens=200, max_chunks=5, include_file_classes=("reviewable", "config_only"))
+    config = ChunkingPlannerConfig(
+        target_chunk_tokens=200, max_chunks=5, include_file_classes=("reviewable", "config_only")
+    )
     first = plan_chunks(
         files,
         config,
@@ -62,7 +69,10 @@ def test_prepass_classifies_generated_lockfile_deleted_and_docs() -> None:
 
 
 def test_plan_chunks_sets_partial_when_max_chunks_exceeded() -> None:
-    files = [_file(f"apps/api/src/domain_{index}/service_{index}.py", added_lines=25) for index in range(8)]
+    files = [
+        _file(f"apps/api/src/domain_{index}/service_{index}.py", added_lines=25)
+        for index in range(8)
+    ]
     config = ChunkingPlannerConfig(
         target_chunk_tokens=60,
         max_chunks=2,
@@ -83,7 +93,9 @@ def test_plan_chunks_sets_partial_when_max_chunks_exceeded() -> None:
 
 def test_huge_single_file_stays_reviewable_and_chunked() -> None:
     files = [_file("apps/api/src/heavy/module.py", added_lines=2000)]
-    config = ChunkingPlannerConfig(target_chunk_tokens=800, max_chunks=5, include_file_classes=("reviewable",))
+    config = ChunkingPlannerConfig(
+        target_chunk_tokens=800, max_chunks=5, include_file_classes=("reviewable",)
+    )
     plan = plan_chunks(
         files,
         config,

@@ -51,7 +51,9 @@ async def review_pr(
     head_sha: str,
     user_github_id: int | None = None,
 ) -> None:
-    await run_review(review_id, installation_id, owner, repo, pr_number, head_sha, user_github_id=user_github_id)
+    await run_review(
+        review_id, installation_id, owner, repo, pr_number, head_sha, user_github_id=user_github_id
+    )
 
 
 async def classify_pr_outcomes(
@@ -82,4 +84,7 @@ class WorkerSettings:
     job_timeout = 300
     keep_result = 3600
     on_startup = worker_startup
-    cron_jobs = [cron(classify_pending_outcomes, hour=3, minute=0), cron(refresh_llm_catalog, hour=2, minute=30)]
+    cron_jobs = [
+        cron(classify_pending_outcomes, hour=3, minute=0),
+        cron(refresh_llm_catalog, hour=2, minute=30),
+    ]

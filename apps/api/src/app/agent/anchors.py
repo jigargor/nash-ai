@@ -9,13 +9,17 @@ class DiffAnchorMetadata(TypedDict):
     hunk_id: str
 
 
-def build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str, int], DiffAnchorMetadata]:
+def build_diff_anchor_index(
+    files_in_diff: list[FileInDiff],
+) -> dict[tuple[str, int], DiffAnchorMetadata]:
     index: dict[tuple[str, int], DiffAnchorMetadata] = {}
     for file in files_in_diff:
         hunk_id = 0
         previous_line = -1
         for numbered in file.numbered_lines:
-            anchor = numbered.new_line_no if numbered.new_line_no is not None else numbered.old_line_no
+            anchor = (
+                numbered.new_line_no if numbered.new_line_no is not None else numbered.old_line_no
+            )
             if anchor is None:
                 continue
             if previous_line != -1 and anchor > previous_line + 1:
@@ -30,7 +34,9 @@ def build_diff_anchor_index(files_in_diff: list[FileInDiff]) -> dict[tuple[str, 
     return index
 
 
-def attach_anchor_metadata(findings: list[Finding], files_in_diff: list[FileInDiff]) -> list[Finding]:
+def attach_anchor_metadata(
+    findings: list[Finding], files_in_diff: list[FileInDiff]
+) -> list[Finding]:
     index = build_diff_anchor_index(files_in_diff)
     updated: list[Finding] = []
     for finding in findings:
@@ -50,7 +56,9 @@ def attach_anchor_metadata(findings: list[Finding], files_in_diff: list[FileInDi
     return updated
 
 
-def filter_findings_with_valid_anchors(findings: list[Finding], files_in_diff: list[FileInDiff]) -> list[Finding]:
+def filter_findings_with_valid_anchors(
+    findings: list[Finding], files_in_diff: list[FileInDiff]
+) -> list[Finding]:
     allowed = build_diff_anchor_index(files_in_diff)
     filtered: list[Finding] = []
     for finding in findings:

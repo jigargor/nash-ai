@@ -100,7 +100,10 @@ async def test_run_review_skips_draft_pr() -> None:
 
     with (
         patch("app.agent.runner.AsyncSessionLocal", return_value=_make_fake_session(review)),
-        patch("app.agent.runner.set_installation_context", new=AsyncMock(side_effect=_fake_set_installation_context)),
+        patch(
+            "app.agent.runner.set_installation_context",
+            new=AsyncMock(side_effect=_fake_set_installation_context),
+        ),
         patch("app.agent.runner.GitHubClient.for_installation", return_value=mock_gh),
         patch("app.agent.runner._record_token_budget_usage", new=AsyncMock()),
         patch("app.agent.runner.record_review_trace"),
@@ -128,7 +131,10 @@ async def test_run_review_full_pipeline_marks_done() -> None:
 
     with (
         patch("app.agent.runner.AsyncSessionLocal", return_value=_make_fake_session(review)),
-        patch("app.agent.runner.set_installation_context", new=AsyncMock(side_effect=_fake_set_installation_context)),
+        patch(
+            "app.agent.runner.set_installation_context",
+            new=AsyncMock(side_effect=_fake_set_installation_context),
+        ),
         patch("app.agent.runner.GitHubClient.for_installation", return_value=mock_gh),
         patch("app.agent.runner.run_agent", new=AsyncMock(return_value=[])),
         patch("app.agent.runner.finalize_review", new=AsyncMock(return_value=empty_result)),

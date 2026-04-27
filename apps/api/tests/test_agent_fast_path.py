@@ -16,7 +16,9 @@ def _file(path: str, *, added_lines: int = 2) -> FileInDiff:
         is_new=False,
         is_deleted=False,
         numbered_lines=[
-            NumberedLine(new_line_no=index + 1, old_line_no=index + 1, kind="add", content=f"line_{index}")
+            NumberedLine(
+                new_line_no=index + 1, old_line_no=index + 1, kind="add", content=f"line_{index}"
+            )
             for index in range(added_lines)
         ],
         context_window=[],
@@ -59,14 +61,18 @@ def test_low_confidence_skip_escalates_to_full_review() -> None:
         requires_full_context=False,
     )
 
-    decision = normalize_fast_path_decision(raw.model_dump(), FastPathConfig(skip_min_confidence=90), [])
+    decision = normalize_fast_path_decision(
+        raw.model_dump(), FastPathConfig(skip_min_confidence=90), []
+    )
 
     assert decision.decision == "full_review"
     assert "low_confidence" in decision.risk_labels
 
 
 def test_high_risk_path_prevents_skip_review() -> None:
-    classified = classify_diff_files([_file("apps/api/src/auth/session.py")], generated_paths=[], vendor_paths=[])
+    classified = classify_diff_files(
+        [_file("apps/api/src/auth/session.py")], generated_paths=[], vendor_paths=[]
+    )
     raw = FastPathDecision(
         decision="skip_review",
         risk_labels=["small_change"],

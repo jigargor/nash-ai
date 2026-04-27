@@ -43,7 +43,9 @@ def known_provider_ids(catalog: ModelCatalog | None = None) -> set[str]:
 
 def _read_baseline_text() -> str:
     try:
-        return resources.files(CATALOG_PACKAGE).joinpath(BASELINE_FILENAME).read_text(encoding="utf-8")
+        return (
+            resources.files(CATALOG_PACKAGE).joinpath(BASELINE_FILENAME).read_text(encoding="utf-8")
+        )
     except (FileNotFoundError, ModuleNotFoundError):
         fallback = Path(__file__).parent / BASELINE_FILENAME
         return fallback.read_text(encoding="utf-8")

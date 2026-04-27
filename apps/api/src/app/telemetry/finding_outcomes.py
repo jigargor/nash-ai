@@ -125,7 +125,9 @@ async def classify_review_outcomes(
                 pr_number=pr_number,
                 review=review,
                 finding=finding,
-                comment_id=int(row.github_comment_id) if row.github_comment_id is not None else None,
+                comment_id=int(row.github_comment_id)
+                if row.github_comment_id is not None
+                else None,
                 pr_state=pr_state,
             )
             row.outcome = decision.outcome.value
@@ -152,10 +154,16 @@ async def classify_finding_outcome(
     line_end = _coerce_int(finding.get("line_end", line_start) or line_start, line_start)
     suggestion = finding.get("suggestion")
 
-    signals["reactions"] = await gh.get_pull_review_comment_reactions(owner, repo, comment_id) if comment_id else []
-    signals["replies"] = await gh.get_pull_review_comment_replies(owner, repo, comment_id) if comment_id else []
+    signals["reactions"] = (
+        await gh.get_pull_review_comment_reactions(owner, repo, comment_id) if comment_id else []
+    )
+    signals["replies"] = (
+        await gh.get_pull_review_comment_replies(owner, repo, comment_id) if comment_id else []
+    )
     signals["resolved_conversation"] = (
-        await gh.is_pull_review_thread_resolved(owner, repo, pr_number, comment_id) if comment_id else False
+        await gh.is_pull_review_thread_resolved(owner, repo, pr_number, comment_id)
+        if comment_id
+        else False
     )
     since = review.completed_at or review.created_at
     signals["subsequent_commits_touching_file"] = await gh.get_commits_touching_file(
@@ -204,7 +212,9 @@ async def classify_finding_outcome(
 
     line_still_exists = bool(signals["line_still_exists_at_merge"])
     if not line_still_exists:
-        if commits_scoped_narrowly(_safe_commit_list(signals["subsequent_commits_touching_file"]), finding):
+        if commits_scoped_narrowly(
+            _safe_commit_list(signals["subsequent_commits_touching_file"]), finding
+        ):
             return OutcomeDecision(Outcome.APPLIED_MODIFIED, "medium", signals)
         return OutcomeDecision(Outcome.SUPERSEDED, "low", signals)
 
@@ -261,13 +271,19 @@ async def detect_suggestion_apply(
         if not isinstance(sha, str) or not sha:
             continue
         commit_files = await gh.get_commit_files(owner, repo, sha)
-        target_file = next((item for item in commit_files if item.get("filename") == file_path), None)
+        target_file = next(
+            (item for item in commit_files if item.get("filename") == file_path), None
+        )
         if target_file is None:
             continue
         patch = str(target_file.get("patch", "") or "")
         if not patch:
             continue
-        added_lines = [line[1:].strip() for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++")]
+        added_lines = [
+            line[1:].strip()
+            for line in patch.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
         if all(line in added_lines for line in normalized_suggestion_lines):
             if _has_bot_coauthor(commit):
                 return "exact"
@@ -385,7 +401,9 @@ def _has_bot_coauthor(commit: dict[str, object]) -> bool:
 def _looks_like_modified_apply(added_lines: list[str], suggestion_lines: list[str]) -> bool:
     if not added_lines or not suggestion_lines:
         return False
-    suggestion_tokens = {token for token in re.split(r"\W+", " ".join(suggestion_lines).lower()) if token}
+    suggestion_tokens = {
+        token for token in re.split(r"\W+", " ".join(suggestion_lines).lower()) if token
+    }
     added_tokens = {token for token in re.split(r"\W+", " ".join(added_lines).lower()) if token}
     if not suggestion_tokens or not added_tokens:
         return False
@@ -407,7 +425,9 @@ async def list_review_finding_outcomes(
         return [
             {
                 "finding_index": int(row.finding_index),
-                "github_comment_id": int(row.github_comment_id) if row.github_comment_id is not None else None,
+                "github_comment_id": int(row.github_comment_id)
+                if row.github_comment_id is not None
+                else None,
                 "outcome": row.outcome,
                 "outcome_confidence": row.outcome_confidence,
                 "detected_at": row.detected_at.isoformat() if row.detected_at else None,
@@ -461,14 +481,22 @@ async def summarize_finding_outcomes(
         _increment_breakdown(severity_breakdown, severity, outcome_row.outcome)
         _increment_breakdown(category_breakdown, category, outcome_row.outcome)
         _increment_breakdown(evidence_breakdown, evidence, outcome_row.outcome)
-        _increment_breakdown(confidence_bucket_breakdown, _confidence_bucket(confidence), outcome_row.outcome)
-        _increment_breakdown(vendor_claim_breakdown, "vendor" if is_vendor_claim else "non_vendor", outcome_row.outcome)
+        _increment_breakdown(
+            confidence_bucket_breakdown, _confidence_bucket(confidence), outcome_row.outcome
+        )
+        _increment_breakdown(
+            vendor_claim_breakdown,
+            "vendor" if is_vendor_claim else "non_vendor",
+            outcome_row.outcome,
+        )
         _increment_breakdown(model_breakdown, review.model, outcome_row.outcome)
         _increment_breakdown(provider_breakdown, str(review.model_provider), outcome_row.outcome)
         _increment_breakdown(repo_breakdown, review.repo_full_name, outcome_row.outcome)
         _increment_breakdown(prompt_version_breakdown, prompt_version, outcome_row.outcome)
 
-    applied = outcome_counts.get(Outcome.APPLIED_DIRECTLY.value, 0) + outcome_counts.get(Outcome.APPLIED_MODIFIED.value, 0)
+    applied = outcome_counts.get(Outcome.APPLIED_DIRECTLY.value, 0) + outcome_counts.get(
+        Outcome.APPLIED_MODIFIED.value, 0
+    )
     acknowledged = outcome_counts.get(Outcome.ACKNOWLEDGED.value, 0)
     dismissed = outcome_counts.get(Outcome.DISMISSED.value, 0)
     ignored = outcome_counts.get(Outcome.IGNORED.value, 0)

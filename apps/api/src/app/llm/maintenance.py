@@ -22,7 +22,9 @@ async def refresh_llm_catalog_snapshot(*, fetch_source_hashes: bool = False) -> 
     source_hashes = await _source_hashes(catalog_as_json(catalog), enabled=fetch_source_hashes)
     async with AsyncSessionLocal() as session:
         existing = await session.scalar(
-            select(LLMModelCatalogSnapshot).where(LLMModelCatalogSnapshot.version_hash == version_hash)
+            select(LLMModelCatalogSnapshot).where(
+                LLMModelCatalogSnapshot.version_hash == version_hash
+            )
         )
         if existing is None:
             session.add(
@@ -81,7 +83,10 @@ async def _source_hashes(catalog_json: dict[str, Any], *, enabled: bool) -> dict
         if isinstance(model, dict):
             _collect_urls(model.get("sources"), urls)
     if not enabled:
-        return {url: hashlib.sha1(url.encode("utf-8"), usedforsecurity=False).hexdigest() for url in sorted(urls)}
+        return {
+            url: hashlib.sha1(url.encode("utf-8"), usedforsecurity=False).hexdigest()
+            for url in sorted(urls)
+        }
 
     hashes: dict[str, str] = {}
     async with httpx.AsyncClient(timeout=20) as client:
@@ -89,7 +94,9 @@ async def _source_hashes(catalog_json: dict[str, Any], *, enabled: bool) -> dict
             try:
                 response = await client.get(url)
                 response.raise_for_status()
-                hashes[url] = hashlib.sha1(response.text.encode("utf-8"), usedforsecurity=False).hexdigest()
+                hashes[url] = hashlib.sha1(
+                    response.text.encode("utf-8"), usedforsecurity=False
+                ).hexdigest()
             except Exception as exc:
                 hashes[url] = f"fetch_failed:{type(exc).__name__}"
     return hashes

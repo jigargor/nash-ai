@@ -17,7 +17,9 @@ def anyio_backend() -> str:
 
 
 def _default_test_database_url() -> str:
-    database_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://dev:dev@localhost:5433/codereview")
+    database_url = os.getenv(
+        "DATABASE_URL", "postgresql+asyncpg://dev:dev@localhost:5433/codereview"
+    )
     parsed = urlparse(database_url)
     if parsed.path in {"", "/"}:
         return urlunparse(parsed._replace(path="/codereview_test"))
@@ -42,7 +44,9 @@ async def _ensure_database_exists(test_database_url: str) -> None:
     admin_url = _to_asyncpg_url(_replace_database(test_database_url, "postgres"))
     connection = await asyncpg.connect(admin_url)
     try:
-        exists = await connection.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", database_name)
+        exists = await connection.fetchval(
+            "SELECT 1 FROM pg_database WHERE datname = $1", database_name
+        )
         if exists:
             return
         await connection.execute(f'CREATE DATABASE "{database_name}"')

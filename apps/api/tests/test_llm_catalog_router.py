@@ -86,7 +86,9 @@ def test_router_supports_role_tier_config_without_model_pin() -> None:
         )
     )
 
-    resolution = resolve_model_for_role(config, "fast_path", available_providers={"openai", "anthropic"})
+    resolution = resolve_model_for_role(
+        config, "fast_path", available_providers={"openai", "anthropic"}
+    )
 
     assert resolution.provider == "openai"
     assert resolution.model == "gpt-5-mini"

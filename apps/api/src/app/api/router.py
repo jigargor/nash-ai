@@ -44,11 +44,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
     if settings.environment.lower() == "production" and not settings.api_access_key:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured"
+        )
     if not settings.api_access_key:
         return
     if not x_api_key or not hmac.compare_digest(x_api_key, settings.api_access_key):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key"
+        )
 
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(_verify_api_access)])
@@ -99,9 +103,13 @@ def _normalize_generated_config(raw_payload: dict[str, object]) -> ReviewConfig:
     categories = _parse_categories(raw_payload.get("categories"))
     ignore_paths = _normalize_path_patterns(raw_payload.get("ignore_paths"))
     review_drafts = bool(raw_payload.get("review_drafts", False))
-    max_findings_per_pr = _normalize_positive_int(raw_payload.get("max_findings_per_pr"), DEFAULT_MAX_FINDINGS_PER_PR)
+    max_findings_per_pr = _normalize_positive_int(
+        raw_payload.get("max_findings_per_pr"), DEFAULT_MAX_FINDINGS_PER_PR
+    )
     prompt_additions_raw = raw_payload.get("prompt_additions")
-    prompt_additions = str(prompt_additions_raw).strip() if isinstance(prompt_additions_raw, str) else None
+    prompt_additions = (
+        str(prompt_additions_raw).strip() if isinstance(prompt_additions_raw, str) else None
+    )
     if prompt_additions == "":
         prompt_additions = None
     model = _parse_model_config(raw_payload.get("model"))
@@ -179,7 +187,9 @@ async def _generate_yaml_with_model(
         raise RuntimeError("Anthropic generation returned empty output")
 
     if model_provider not in {"openai", "gemini"}:
-        raise RuntimeError(f"Unsupported provider for OpenAI-compatible generation: {model_provider}")
+        raise RuntimeError(
+            f"Unsupported provider for OpenAI-compatible generation: {model_provider}"
+        )
     openai_client = create_openai_compatible_client(model_provider)
     openai_response = await openai_client.chat.completions.create(
         model=model_name,
@@ -219,7 +229,9 @@ def _review_list_item(review: Review) -> dict[str, object]:
         "tokens_used": int(review.tokens_used) if review.tokens_used is not None else None,
         "cost_usd": str(review.cost_usd) if review.cost_usd is not None else None,
         "created_at": review.created_at.isoformat(),
-        "completed_at": review.completed_at.isoformat() if review.completed_at is not None else None,
+        "completed_at": review.completed_at.isoformat()
+        if review.completed_at is not None
+        else None,
     }
 
 
@@ -236,7 +248,9 @@ async def list_installations(
                 "account_login": item.account_login,
                 "account_type": item.account_type,
                 "active": item.suspended_at is None,
-                "suspended_at": item.suspended_at.isoformat() if item.suspended_at is not None else None,
+                "suspended_at": item.suspended_at.isoformat()
+                if item.suspended_at is not None
+                else None,
             }
             for item in installations
         ]
@@ -252,7 +266,9 @@ async def list_repos(
         if installation_id is not None:
             installation_ids = [installation_id]
         else:
-            installations = await _list_installation_rows(session, active_only=active_only, limit=100)
+            installations = await _list_installation_rows(
+                session, active_only=active_only, limit=100
+            )
             installation_ids = [int(item.installation_id) for item in installations]
 
         repos: dict[tuple[int, str], RepoAccumulator] = {}
@@ -383,7 +399,9 @@ async def generate_repo_codereview_template(
             detail="Normalized YAML serialization failed.",
         ) from None
     if not isinstance(normalized_payload, dict):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Normalized YAML serialization failed.")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="Normalized YAML serialization failed."
+        )
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
@@ -465,7 +483,9 @@ async def list_reviews(
 
 
 @router.get("/reviews/{review_id}")
-async def get_review(review_id: int, installation_id: int | None = Query(default=None, ge=1)) -> dict[str, object]:
+async def get_review(
+    review_id: int, installation_id: int | None = Query(default=None, ge=1)
+) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
         if installation_id is not None:
             await set_installation_context(session, installation_id)
@@ -476,7 +496,9 @@ async def get_review(review_id: int, installation_id: int | None = Query(default
             installation_id = int(review.installation_id)
             await set_installation_context(session, installation_id)
         elif int(review.installation_id) != installation_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
 
         return {
             "id": int(review.id),
@@ -491,8 +513,12 @@ async def get_review(review_id: int, installation_id: int | None = Query(default
             "tokens_used": int(review.tokens_used) if review.tokens_used is not None else None,
             "cost_usd": str(review.cost_usd) if review.cost_usd is not None else None,
             "created_at": review.created_at.isoformat(),
-            "completed_at": review.completed_at.isoformat() if review.completed_at is not None else None,
-            "finding_outcomes": await list_review_finding_outcomes(int(review.id), int(review.installation_id)),
+            "completed_at": review.completed_at.isoformat()
+            if review.completed_at is not None
+            else None,
+            "finding_outcomes": await list_review_finding_outcomes(
+                int(review.id), int(review.installation_id)
+            ),
         }
 
 
@@ -511,11 +537,15 @@ async def get_review_outcomes(
             installation_id = int(review.installation_id)
             await set_installation_context(session, installation_id)
         elif int(review.installation_id) != installation_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
 
         return {
             "review_id": int(review.id),
-            "finding_outcomes": await list_review_finding_outcomes(int(review.id), int(review.installation_id)),
+            "finding_outcomes": await list_review_finding_outcomes(
+                int(review.id), int(review.installation_id)
+            ),
         }
 
 
@@ -534,7 +564,9 @@ async def get_review_model_audits(
             installation_id = int(review.installation_id)
             await set_installation_context(session, installation_id)
         elif int(review.installation_id) != installation_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
         rows = await session.scalars(
             select(ReviewModelAudit)
             .where(ReviewModelAudit.review_id == review_id)
@@ -551,11 +583,17 @@ async def get_review_model_audits(
                 "input_tokens": int(row.input_tokens),
                 "output_tokens": int(row.output_tokens),
                 "total_tokens": int(row.total_tokens),
-                "findings_count": int(row.findings_count) if row.findings_count is not None else None,
+                "findings_count": int(row.findings_count)
+                if row.findings_count is not None
+                else None,
                 "accepted_findings_count": (
-                    int(row.accepted_findings_count) if row.accepted_findings_count is not None else None
+                    int(row.accepted_findings_count)
+                    if row.accepted_findings_count is not None
+                    else None
                 ),
-                "conflict_score": int(row.conflict_score) if row.conflict_score is not None else None,
+                "conflict_score": int(row.conflict_score)
+                if row.conflict_score is not None
+                else None,
                 "decision": row.decision,
                 "metadata_json": row.metadata_json,
                 "created_at": row.created_at.isoformat() if row.created_at is not None else None,
@@ -598,7 +636,9 @@ async def rerun_review(
             installation_id = int(review.installation_id)
             await set_installation_context(session, installation_id)
         elif int(review.installation_id) != installation_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
 
         if not settings.has_llm_api_key_configured():
             raise HTTPException(
@@ -644,7 +684,9 @@ async def dismiss_finding(
             installation_id = int(review.installation_id)
             await set_installation_context(session, installation_id)
         elif int(review.installation_id) != installation_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
 
         debug_artifacts = review.debug_artifacts or {}
         dismissed = list(debug_artifacts.get("dismissed_findings", []))

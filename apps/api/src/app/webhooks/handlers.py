@@ -63,7 +63,9 @@ async def sync_installation_from_webhook(payload: GitHubInstallationWebhookPaylo
     )
 
 
-async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestWebhookPayload) -> None:
+async def queue_pull_request_review(
+    redis: ArqRedis, payload: GitHubPullRequestWebhookPayload
+) -> None:
     if not settings.enable_reviews:
         logger.warning("Skipping review enqueue because ENABLE_REVIEWS is false")
         return
@@ -82,7 +84,9 @@ async def queue_pull_request_review(redis: ArqRedis, payload: GitHubPullRequestW
     pr_title = payload.pull_request.title or ""
     pr_body = payload.pull_request.body or ""
 
-    if not _pr_text_has_force_review_tag(pr_title, pr_body) and _pr_text_has_skip_review_tag(pr_title, pr_body):
+    if not _pr_text_has_force_review_tag(pr_title, pr_body) and _pr_text_has_skip_review_tag(
+        pr_title, pr_body
+    ):
         logger.warning(
             "Skipping review enqueue: PR title/body contains %s (override with %s) installation_id=%s repo=%s pr_number=%s",
             SKIP_REVIEW_TAG,

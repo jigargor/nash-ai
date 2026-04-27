@@ -91,14 +91,18 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/health/queue")
-async def health_queue(request: Request, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
+async def health_queue(
+    request: Request, x_api_key: str | None = Header(default=None)
+) -> dict[str, Any]:
     """Debug: ARQ queue depth. If this grows but the worker stays idle, Redis URL or worker process is wrong."""
     if (
         not settings.api_access_key
         or not x_api_key
         or not hmac.compare_digest(x_api_key, settings.api_access_key)
     ):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key"
+        )
     redis = require_app_redis(request)
     queued_jobs = await redis.zcard(redis.default_queue_name)
     return {

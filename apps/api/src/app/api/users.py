@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import settings
-from app.crypto import InvalidToken, decrypt_secret, encrypt_secret
+from app.crypto import encrypt_secret
 from app.db.models import User, UserKeyAuditLog, UserProviderKey
 from app.db.session import AsyncSessionLocal
 
@@ -22,11 +22,15 @@ SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "gemini"
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
     if settings.environment.lower() == "production" and not settings.api_access_key:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API key auth is not configured"
+        )
     if not settings.api_access_key:
         return
     if not x_api_key or not hmac.compare_digest(x_api_key, settings.api_access_key):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-Api-Key"
+        )
 
 
 router = APIRouter(prefix="/api/v1/users", dependencies=[Depends(_verify_api_access)])
@@ -38,7 +42,9 @@ router = APIRouter(prefix="/api/v1/users", dependencies=[Depends(_verify_api_acc
 
 async def _resolve_user(github_id: int) -> User:
     async with AsyncSessionLocal() as session:
-        row = (await session.execute(select(User).where(User.github_id == github_id))).scalar_one_or_none()
+        row = (
+            await session.execute(select(User).where(User.github_id == github_id))
+        ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     if row.deleted_at is not None:
@@ -57,7 +63,10 @@ async def _validate_api_key(provider: str, api_key: str) -> None:
                         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
                     )
                     if resp.status_code == 401:
-                        raise HTTPException(status_code=422, detail="API key validation failed: invalid Anthropic key")
+                        raise HTTPException(
+                            status_code=422,
+                            detail="API key validation failed: invalid Anthropic key",
+                        )
             elif provider in {"openai", "gemini"}:
                 base_url = (
                     "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -78,7 +87,9 @@ async def _validate_api_key(provider: str, api_key: str) -> None:
         raise
     except Exception as exc:
         logger.warning("Key validation probe failed for provider %s: %s", provider, exc)
-        raise HTTPException(status_code=422, detail="API key validation failed: could not reach provider")
+        raise HTTPException(
+            status_code=422, detail="API key validation failed: could not reach provider"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -179,22 +190,30 @@ async def list_user_keys(
     user = await _resolve_user(x_user_github_id)
     async with AsyncSessionLocal() as session:
         rows = (
-            await session.execute(
-                select(UserProviderKey).where(UserProviderKey.user_id == user.id)
+            (
+                await session.execute(
+                    select(UserProviderKey).where(UserProviderKey.user_id == user.id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     stored = {row.provider: row for row in rows}
-    return [
-        KeyStatusResponse(
-            provider=provider,
-            has_key=provider in stored,
-            created_at=stored[provider].created_at.isoformat() if provider in stored else None,
-            updated_at=stored[provider].updated_at.isoformat() if provider in stored else None,
-            last_used_at=stored[provider].last_used_at.isoformat() if provider in stored and stored[provider].last_used_at else None,
+    result = []
+    for provider in sorted(SUPPORTED_PROVIDERS):
+        row = stored.get(provider)
+        last_used = row.last_used_at if row is not None else None
+        result.append(
+            KeyStatusResponse(
+                provider=provider,
+                has_key=row is not None,
+                created_at=row.created_at.isoformat() if row is not None else None,
+                updated_at=row.updated_at.isoformat() if row is not None else None,
+                last_used_at=last_used.isoformat() if last_used is not None else None,
+            )
         )
-        for provider in sorted(SUPPORTED_PROVIDERS)
-    ]
+    return result
 
 
 @router.put("/me/keys/{provider}")
@@ -206,7 +225,10 @@ async def upsert_user_key(
 ) -> dict[str, str]:
     """Store (or replace) a Fernet-encrypted API key for the given provider."""
     if provider not in SUPPORTED_PROVIDERS:
-        raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}. Must be one of {sorted(SUPPORTED_PROVIDERS)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported provider: {provider}. Must be one of {sorted(SUPPORTED_PROVIDERS)}",
+        )
     if x_user_github_id is None:
         raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
 

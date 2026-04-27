@@ -26,11 +26,14 @@ async def github_webhook_probe() -> dict[str, str]:
 
 
 def verify_signature(payload: bytes, signature: str) -> bool:
-    expected = "sha256=" + hmac.new(
-        settings.github_webhook_secret.encode(),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
+    expected = (
+        "sha256="
+        + hmac.new(
+            settings.github_webhook_secret.encode(),
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
+    )
     return hmac.compare_digest(expected, signature)
 
 
@@ -50,12 +53,18 @@ async def github_webhook(request: Request) -> dict[str, bool]:
     )
 
     if not verify_signature(payload_bytes, signature):
-        logger.warning("GitHub webhook signature verification failed event=%s delivery_id=%s", event, delivery_id)
+        logger.warning(
+            "GitHub webhook signature verification failed event=%s delivery_id=%s",
+            event,
+            delivery_id,
+        )
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     if event == "installation":
         try:
-            installation_payload = GitHubInstallationWebhookPayload.model_validate_json(payload_bytes)
+            installation_payload = GitHubInstallationWebhookPayload.model_validate_json(
+                payload_bytes
+            )
         except ValidationError as exc:
             logger.warning(
                 "GitHub installation webhook payload validation failed delivery_id=%s errors=%s",
@@ -64,7 +73,13 @@ async def github_webhook(request: Request) -> dict[str, bool]:
             )
             raise HTTPException(status_code=400, detail="Invalid payload")
 
-        if installation_payload.action in {"created", "deleted", "suspend", "unsuspend", "new_permissions_accepted"}:
+        if installation_payload.action in {
+            "created",
+            "deleted",
+            "suspend",
+            "unsuspend",
+            "new_permissions_accepted",
+        }:
             await sync_installation_from_webhook(installation_payload)
         else:
             logger.warning(
@@ -112,5 +127,9 @@ async def github_webhook(request: Request) -> dict[str, bool]:
             delivery_id,
         )
 
-    logger.info("Webhook processed delivery_id=%s ack_latency_ms=%s", delivery_id, int((monotonic() - started_at) * 1000))
+    logger.info(
+        "Webhook processed delivery_id=%s ack_latency_ms=%s",
+        delivery_id,
+        int((monotonic() - started_at) * 1000),
+    )
     return {"ok": True}

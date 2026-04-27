@@ -47,7 +47,9 @@ class ModelRoleRoutingConfig:
 @dataclass
 class ModelsRoutingConfig:
     policy: ModelTier = "balanced"
-    provider_order: list[ModelProvider] = field(default_factory=lambda: ["anthropic", "openai", "gemini"])
+    provider_order: list[ModelProvider] = field(
+        default_factory=lambda: ["anthropic", "openai", "gemini"]
+    )
     roles: dict[str, ModelRoleRoutingConfig] = field(default_factory=dict)
     allow_auto_fallback: bool = True
     allow_default_model_promotion: bool = False
@@ -80,11 +82,17 @@ class ModelResolution:
             "fallback_reason": self.fallback_reason,
             "cache_strategy": self.cache_strategy,
             "pricing": {
-                "input_per_1m_usd": str(self.input_per_1m_usd) if self.input_per_1m_usd is not None else None,
+                "input_per_1m_usd": str(self.input_per_1m_usd)
+                if self.input_per_1m_usd is not None
+                else None,
                 "cached_input_per_1m_usd": (
-                    str(self.cached_input_per_1m_usd) if self.cached_input_per_1m_usd is not None else None
+                    str(self.cached_input_per_1m_usd)
+                    if self.cached_input_per_1m_usd is not None
+                    else None
                 ),
-                "output_per_1m_usd": str(self.output_per_1m_usd) if self.output_per_1m_usd is not None else None,
+                "output_per_1m_usd": str(self.output_per_1m_usd)
+                if self.output_per_1m_usd is not None
+                else None,
             },
         }
 
@@ -108,7 +116,9 @@ def resolve_model_for_role(
         if record is not None and _model_usable(record, role_config, context_tokens=context_tokens):
             return _resolution_from_record(role, record, explicit_pin=True, catalog=active_catalog)
         if not routing.allow_auto_fallback:
-            return _resolution_from_unknown_pin(role, provider, model, active_catalog, fallback_reason=None)
+            return _resolution_from_unknown_pin(
+                role, provider, model, active_catalog, fallback_reason=None
+            )
         fallback = _select_best_candidate(
             active_catalog,
             role=role,
@@ -119,9 +129,15 @@ def resolve_model_for_role(
             previous_provider=previous_provider,
         )
         if fallback is not None:
-            reason = "explicit_pin_unavailable" if record is None else f"explicit_pin_{record.status}"
-            return _resolution_from_record(role, fallback, explicit_pin=False, catalog=active_catalog, fallback_reason=reason)
-        return _resolution_from_unknown_pin(role, provider, model, active_catalog, fallback_reason="no_catalog_fallback")
+            reason = (
+                "explicit_pin_unavailable" if record is None else f"explicit_pin_{record.status}"
+            )
+            return _resolution_from_record(
+                role, fallback, explicit_pin=False, catalog=active_catalog, fallback_reason=reason
+            )
+        return _resolution_from_unknown_pin(
+            role, provider, model, active_catalog, fallback_reason="no_catalog_fallback"
+        )
 
     candidate = _select_best_candidate(
         active_catalog,
@@ -137,7 +153,13 @@ def resolve_model_for_role(
 
     default_model = getattr(getattr(review_config, "model", None), "name", "claude-sonnet-4-5")
     default_provider = getattr(getattr(review_config, "model", None), "provider", "anthropic")
-    return _resolution_from_unknown_pin(role, str(default_provider), str(default_model), active_catalog, fallback_reason="no_candidate")
+    return _resolution_from_unknown_pin(
+        role,
+        str(default_provider),
+        str(default_model),
+        active_catalog,
+        fallback_reason="no_candidate",
+    )
 
 
 def _routing_config_from_review_config(review_config: object | None) -> ModelsRoutingConfig:
@@ -160,9 +182,13 @@ def _explicit_model_for_role(
             return str(getattr(model_config, "provider")), str(getattr(model_config, "name"))
     max_mode = getattr(review_config, "max_mode", None)
     if role == "challenger" and max_mode is not None:
-        return str(getattr(max_mode, "challenger_provider")), str(getattr(max_mode, "challenger_model"))
+        return str(getattr(max_mode, "challenger_provider")), str(
+            getattr(max_mode, "challenger_model")
+        )
     if role == "tie_break" and max_mode is not None:
-        return str(getattr(max_mode, "tie_break_provider")), str(getattr(max_mode, "tie_break_model"))
+        return str(getattr(max_mode, "tie_break_provider")), str(
+            getattr(max_mode, "tie_break_model")
+        )
     return None
 
 
@@ -177,7 +203,9 @@ def _select_best_candidate(
     previous_provider: str | None,
 ) -> ModelRecord | None:
     provider_order = routing.provider_order or ["anthropic", "openai", "gemini"]
-    available = available_providers if available_providers is not None else _configured_provider_ids()
+    available = (
+        available_providers if available_providers is not None else _configured_provider_ids()
+    )
     scored: list[tuple[int, int, ModelRecord]] = []
     desired_tier = role_config.tier or ROLE_DEFAULT_TIERS[role]
     active_providers = catalog.active_provider_ids()
@@ -188,12 +216,20 @@ def _select_best_candidate(
             continue
         if role_config.provider and record.provider != role_config.provider:
             continue
-        if role_config.require_provider_diversity and previous_provider and record.provider == previous_provider:
+        if (
+            role_config.require_provider_diversity
+            and previous_provider
+            and record.provider == previous_provider
+        ):
             continue
         if not _model_usable(record, role_config, context_tokens=context_tokens):
             continue
         score = _score_model(record, desired_tier)
-        provider_preference = provider_order.index(record.provider) if record.provider in provider_order else len(provider_order)
+        provider_preference = (
+            provider_order.index(record.provider)
+            if record.provider in provider_order
+            else len(provider_order)
+        )
         scored.append((score, -provider_preference, record))
     if not scored:
         return None
@@ -203,7 +239,9 @@ def _select_best_candidate(
     return scored[0][2]
 
 
-def _model_usable(record: ModelRecord, role_config: ModelRoleRoutingConfig, *, context_tokens: int) -> bool:
+def _model_usable(
+    record: ModelRecord, role_config: ModelRoleRoutingConfig, *, context_tokens: int
+) -> bool:
     if record.status in {"retired", "deprecated"}:
         return False
     if role_config.require_tool_calling and not record.capabilities.tool_calling:
@@ -212,7 +250,11 @@ def _model_usable(record: ModelRecord, role_config: ModelRoleRoutingConfig, *, c
         return False
     if role_config.require_prompt_caching and record.capabilities.prompt_caching == "none":
         return False
-    if context_tokens > 0 and record.capabilities.max_context_tokens > 0 and context_tokens > record.capabilities.max_context_tokens:
+    if (
+        context_tokens > 0
+        and record.capabilities.max_context_tokens > 0
+        and context_tokens > record.capabilities.max_context_tokens
+    ):
         return False
     if record.shutdown_at and record.shutdown_at <= datetime.now(timezone.utc):
         return False

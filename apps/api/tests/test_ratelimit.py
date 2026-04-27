@@ -12,7 +12,9 @@ class _FakePipeline:
         self.redis = redis
 
     def zremrangebyscore(self, key: str, _start: float, cutoff: float) -> "_FakePipeline":
-        self.redis.sorted_values[key] = [value for value in self.redis.sorted_values.get(key, []) if value > cutoff]
+        self.redis.sorted_values[key] = [
+            value for value in self.redis.sorted_values.get(key, []) if value > cutoff
+        ]
         return self
 
     def zcard(self, key: str) -> "_FakePipeline":
@@ -48,7 +50,9 @@ class _FakeRedis:
     async def expire(self, _key: str, _ttl: int) -> None:
         return None
 
-    async def eval(self, _script: str, _numkeys: int, key: str, tokens: str, limit: str, _ttl: str) -> int:
+    async def eval(
+        self, _script: str, _numkeys: int, key: str, tokens: str, limit: str, _ttl: str
+    ) -> int:
         """Simulate the budget Lua script: atomic check-and-increment."""
         current = int(self.values.get(key, 0))
         if current + int(tokens) > int(limit):

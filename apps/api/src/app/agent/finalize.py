@@ -61,9 +61,14 @@ async def finalize_review(
             )
         )
     except RuntimeError as exc:
-        logger.warning("submit_review tool missing or malformed; returning safe empty result: %s", exc)
+        logger.warning(
+            "submit_review tool missing or malformed; returning safe empty result: %s", exc
+        )
         return _safe_partial_review_result(
-            {"findings": [], "summary": "Review output was incomplete; returned a safe empty result."},
+            {
+                "findings": [],
+                "summary": "Review output was incomplete; returned a safe empty result.",
+            },
             reason="submit_review_tool_missing",
         )
 
@@ -151,7 +156,12 @@ def _coerce_finding_payload(finding: dict[str, Any]) -> dict[str, Any]:
         d["severity"] = "medium"
         sev = "medium"
     ev = d.get("evidence")
-    if not isinstance(ev, str) or ev not in {"tool_verified", "diff_visible", "verified_fact", "inference"}:
+    if not isinstance(ev, str) or ev not in {
+        "tool_verified",
+        "diff_visible",
+        "verified_fact",
+        "inference",
+    }:
         d["evidence"] = "diff_visible"
         ev = "diff_visible"
 
@@ -252,5 +262,3 @@ def _build_schema_feedback(exc: ValidationError) -> str:
         message = issue.get("msg", "Validation error")
         lines.append(f"- {location}: {message}")
     return "\n".join(lines)
-
-

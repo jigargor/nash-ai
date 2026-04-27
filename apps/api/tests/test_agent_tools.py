@@ -12,11 +12,16 @@ class _FakeGitHubClient:
         assert ref == "deadbeef"
         return f"content:{path}"
 
-    async def search_code(self, _owner: str, _repo: str, pattern: str, _path_glob: str | None = None) -> list[dict]:
+    async def search_code(
+        self, _owner: str, _repo: str, pattern: str, _path_glob: str | None = None
+    ) -> list[dict]:
         return [{"path": "a.py", "sha": "123"}, {"path": f"{pattern}.py", "sha": "456"}]
 
     async def get_file_history(self, _owner: str, _repo: str, _path: str) -> list[dict]:
-        return [{"sha": "123", "commit": {"message": "feat: update"}}, {"sha": "456", "commit": {"message": "fix: bug"}}]
+        return [
+            {"sha": "123", "commit": {"message": "feat: update"}},
+            {"sha": "456", "commit": {"message": "fix: bug"}},
+        ]
 
 
 def _context() -> dict[str, object]:

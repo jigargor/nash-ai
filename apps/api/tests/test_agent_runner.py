@@ -79,7 +79,9 @@ def test_validation_feedback_contains_reason_and_location() -> None:
 
 
 def test_apply_confidence_threshold_tracks_dropped_metadata() -> None:
-    result = ReviewResult(findings=[_finding("ok.py", 90), _finding("low.py", 70)], summary="Summary")
+    result = ReviewResult(
+        findings=[_finding("ok.py", 90), _finding("low.py", 70)], summary="Summary"
+    )
     filtered, dropped = _apply_confidence_threshold(result, threshold=85)
     assert len(filtered.findings) == 1
     assert filtered.findings[0].file_path == "ok.py"
@@ -93,7 +95,15 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
         context=context,
         generated=4,
         validator_dropped=[(_finding("bad.py"), "line_out_of_range", "invalid range")],
-        confidence_dropped=[{"file_path": "low.py", "line_start": 1, "line_end": 1, "confidence": 50, "threshold": 85}],
+        confidence_dropped=[
+            {
+                "file_path": "low.py",
+                "line_start": 1,
+                "line_end": 1,
+                "confidence": 50,
+                "threshold": 85,
+            }
+        ],
         draft_findings=3,
         final_findings=2,
         editor_actions=Counter({"keep": 1, "drop": 1, "modify": 1}),
@@ -167,7 +177,13 @@ def test_summarize_target_line_mismatch_subtypes_breaks_down_reasons() -> None:
     mismatch = _finding("a.py")
     mismatch.line_start = 1
     mismatch.target_line_content = "value = int(user_input)\t"
-    dropped = [(mismatch, "target_line_mismatch", "target_line_content does not match file content at line_start")]
+    dropped = [
+        (
+            mismatch,
+            "target_line_mismatch",
+            "target_line_content does not match file content at line_start",
+        )
+    ]
     counts = _summarize_target_line_mismatch_subtypes(
         dropped,
         {"a.py": "value = int(user_input)"},
@@ -234,7 +250,9 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
 
 
 @pytest.mark.anyio
-async def test_run_fast_path_stage_records_audit_and_debug_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_fast_path_stage_records_audit_and_debug_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     resolution = ModelResolution(
         role="fast_path",
         provider="openai",
@@ -301,7 +319,9 @@ async def test_run_fast_path_stage_records_audit_and_debug_metadata(monkeypatch:
 
 
 @pytest.mark.anyio
-async def test_run_fast_path_stage_falls_back_to_full_review_on_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_fast_path_stage_falls_back_to_full_review_on_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     resolution = ModelResolution(
         role="fast_path",
         provider="openai",
@@ -353,7 +373,11 @@ async def test_run_fast_path_stage_falls_back_to_full_review_on_provider_error(m
 
 
 def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> None:
-    config = ReviewConfig(models=ModelsRoutingConfig(roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}))
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
+        )
+    )
     decision = FastPathDecision(
         decision="light_review",
         risk_labels=["low_risk"],
@@ -371,7 +395,9 @@ def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> N
 def test_light_review_keeps_explicit_primary_model_pin() -> None:
     config = ReviewConfig(
         model=ReviewModelConfig(provider="openai", name="gpt-5.5", explicit=True),
-        models=ModelsRoutingConfig(roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}),
+        models=ModelsRoutingConfig(
+            roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
+        ),
     )
     decision = FastPathDecision(
         decision="light_review",
@@ -439,7 +465,9 @@ def test_apply_review_config_filters_enforces_category_severity_ignore_and_cap()
     ignored_file.severity = "high"
     ignored_file.category = "security"
 
-    result = ReviewResult(findings=[high_security, medium_correctness, ignored_file], summary="Summary")
+    result = ReviewResult(
+        findings=[high_security, medium_correctness, ignored_file], summary="Summary"
+    )
     config = ReviewConfig(
         severity_threshold="medium",
         categories=["security", "correctness"],
@@ -490,7 +518,9 @@ def test_anchor_metadata_and_validation_drop_invalid_anchor_lines() -> None:
             is_new=False,
             is_deleted=False,
             numbered_lines=[
-                NumberedLine(new_line_no=8, old_line_no=7, kind="add", content="value = transform(raw)"),
+                NumberedLine(
+                    new_line_no=8, old_line_no=7, kind="add", content="value = transform(raw)"
+                ),
                 NumberedLine(new_line_no=9, old_line_no=8, kind="ctx", content="return value"),
             ],
             context_window=[],
@@ -524,7 +554,9 @@ def test_policy_filters_contract_equivalence_for_same_raw_findings() -> None:
         tool_call_history=[],
         known_fact_ids=set(),
     )
-    assert [item.model_dump(mode="json") for item in left.findings] == [item.model_dump(mode="json") for item in right.findings]
+    assert [item.model_dump(mode="json") for item in left.findings] == [
+        item.model_dump(mode="json") for item in right.findings
+    ]
 
 
 def test_chunking_config_hash_changes_when_chunking_knobs_change() -> None:
@@ -538,13 +570,17 @@ def test_chunking_config_hash_changes_when_chunking_knobs_change() -> None:
 
 
 @pytest.mark.anyio
-async def test_run_chunked_review_skips_failed_chunk_and_returns_result(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_chunked_review_skips_failed_chunk_and_returns_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     file_in_diff = FileInDiff(
         path="src/example.py",
         language="Python",
         is_new=False,
         is_deleted=False,
-        numbered_lines=[NumberedLine(new_line_no=1, old_line_no=1, kind="add", content="print('x')")],
+        numbered_lines=[
+            NumberedLine(new_line_no=1, old_line_no=1, kind="add", content="print('x')")
+        ],
         context_window=[],
     )
     classified = ClassifiedDiffFile(
@@ -558,7 +594,14 @@ async def test_run_chunked_review_skips_failed_chunk_and_returns_result(monkeypa
         file_in_diff=file_in_diff,
     )
     chunk_plan = ChunkPlan(
-        chunks=(PlannedChunk(chunk_id="chunk-1", files=(classified,), estimated_prompt_tokens=64, estimated_output_tokens=64),),
+        chunks=(
+            PlannedChunk(
+                chunk_id="chunk-1",
+                files=(classified,),
+                estimated_prompt_tokens=64,
+                estimated_output_tokens=64,
+            ),
+        ),
         skipped_files=(),
         is_partial=False,
         coverage_note="Chunked coverage note.",
@@ -572,16 +615,22 @@ async def test_run_chunked_review_skips_failed_chunk_and_returns_result(monkeypa
     monkeypatch.setattr("app.agent.runner.parse_diff", lambda _diff: [file_in_diff])
     monkeypatch.setattr("app.agent.runner._filter_diff_files", lambda files, _ignore: files)
     monkeypatch.setattr("app.agent.runner.plan_chunks", lambda *_args, **_kwargs: chunk_plan)
+
     async def _fake_profile_repo(*_args: object, **_kwargs: object) -> object:
         return SimpleNamespace(frameworks=[])
 
     monkeypatch.setattr("app.agent.runner.profile_repo", _fake_profile_repo)
     monkeypatch.setattr("app.agent.runner._build_repo_segments", lambda *_args, **_kwargs: [])
-    async def _fake_load_chunk_state(*_args: object, **_kwargs: object) -> dict[str, dict[str, object]]:
+
+    async def _fake_load_chunk_state(
+        *_args: object, **_kwargs: object
+    ) -> dict[str, dict[str, object]]:
         return {}
 
     monkeypatch.setattr("app.agent.runner.load_chunk_state", _fake_load_chunk_state)
-    monkeypatch.setattr("app.agent.runner.merge_chunk_state_with_plan", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        "app.agent.runner.merge_chunk_state_with_plan", lambda *_args, **_kwargs: {}
+    )
     monkeypatch.setattr("app.agent.runner.chunk_status", lambda *_args, **_kwargs: "pending")
 
     async def _fake_build_context_bundle(*_args: object, **_kwargs: object) -> object:
@@ -592,9 +641,13 @@ async def test_run_chunked_review_skips_failed_chunk_and_returns_result(monkeypa
         )
 
     monkeypatch.setattr("app.agent.runner.build_context_bundle", _fake_build_context_bundle)
-    monkeypatch.setattr("app.agent.runner.render_chunk_diff", lambda *_args, **_kwargs: "diff -- chunk")
+    monkeypatch.setattr(
+        "app.agent.runner.render_chunk_diff", lambda *_args, **_kwargs: "diff -- chunk"
+    )
     monkeypatch.setattr("app.agent.runner.build_system_prompt", lambda *_args, **_kwargs: "system")
-    monkeypatch.setattr("app.agent.runner.build_initial_user_prompt", lambda *_args, **_kwargs: "user")
+    monkeypatch.setattr(
+        "app.agent.runner.build_initial_user_prompt", lambda *_args, **_kwargs: "user"
+    )
     monkeypatch.setattr(
         "app.agent.runner._resolve_runtime_model",
         lambda *_args, **_kwargs: ModelResolution(
@@ -621,6 +674,7 @@ async def test_run_chunked_review_skips_failed_chunk_and_returns_result(monkeypa
 
     monkeypatch.setattr("app.agent.runner.run_agent", _ok_run_agent)
     monkeypatch.setattr("app.agent.runner.finalize_review", _failing_finalize)
+
     async def _fake_synthesis(**_kwargs: object) -> ReviewResult:
         return ReviewResult(findings=[], summary="Cross-chunk synthesis summary.")
 

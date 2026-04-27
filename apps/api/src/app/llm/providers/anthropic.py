@@ -17,7 +17,9 @@ from app.observability import create_async_anthropic_client
 class AnthropicAdapter(BaseProviderAdapter):
     provider = "anthropic"
 
-    def render_anthropic_system(self, system_prompt: str, options: CacheRequestOptions | None = None) -> list[dict[str, Any]]:
+    def render_anthropic_system(
+        self, system_prompt: str, options: CacheRequestOptions | None = None
+    ) -> list[dict[str, Any]]:
         cache_control: dict[str, str] = {"type": "ephemeral"}
         if options and options.ttl in {"5m", "1h"}:
             cache_control["ttl"] = options.ttl
@@ -31,7 +33,9 @@ class AnthropicAdapter(BaseProviderAdapter):
 
     def parse_usage(self, usage: object) -> LLMUsage:
         parsed = super().parse_usage(usage)
-        parsed.cached_input_tokens = int(getattr(usage, "cache_read_input_tokens", parsed.cached_input_tokens) or 0)
+        parsed.cached_input_tokens = int(
+            getattr(usage, "cache_read_input_tokens", parsed.cached_input_tokens) or 0
+        )
         parsed.cache_creation_input_tokens = int(
             getattr(usage, "cache_creation_input_tokens", parsed.cache_creation_input_tokens) or 0
         )
@@ -42,8 +46,11 @@ class AnthropicAdapter(BaseProviderAdapter):
         *,
         request: StructuredOutputRequest,
     ) -> StructuredOutputResult:
-        user_key_override: str | None = request.context.get("user_provider_keys", {}).get(self.provider)
-        client = create_async_anthropic_client(get_provider_api_key(self.provider, user_key_override=user_key_override))
+        user_key_override: str | None = request.context.get("user_provider_keys", {}).get(
+            self.provider
+        )
+        api_key = user_key_override or get_provider_api_key(self.provider)
+        client = create_async_anthropic_client(api_key)
         temp = 0.0 if request.temperature is None else float(request.temperature)
         response = await client.messages.create(  # type: ignore[call-overload]
             model=request.model_name,
@@ -55,7 +62,9 @@ class AnthropicAdapter(BaseProviderAdapter):
                     cache_key=_optional_str(request.context.get("llm_prompt_cache_key")),
                     ttl=_optional_str(request.context.get("anthropic_cache_ttl")),
                     retention=_optional_str(request.context.get("openai_prompt_cache_retention")),
-                    cached_content_name=_optional_str(request.context.get("gemini_cached_content_name")),
+                    cached_content_name=_optional_str(
+                        request.context.get("gemini_cached_content_name")
+                    ),
                 ),
             ),
             tools=[

@@ -22,7 +22,9 @@ def _require_admin_key(x_admin_api_key: str | None) -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Admin retry endpoint is not configured",
         )
-    if not x_admin_api_key or not hmac.compare_digest(x_admin_api_key, settings.admin_retry_api_key):
+    if not x_admin_api_key or not hmac.compare_digest(
+        x_admin_api_key, settings.admin_retry_api_key
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
 
 
@@ -66,7 +68,9 @@ async def retry_review(
         if installation_id is None:
             await set_installation_context(session, int(review.installation_id))
         elif int(review.installation_id) != installation_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
 
         if review.status != "failed" and not force:
             raise HTTPException(
@@ -78,7 +82,9 @@ async def retry_review(
             owner, repo = _split_repo_full_name(review.repo_full_name)
         except ValueError as exc:
             logger.exception("Invalid review repo name review_id=%s", review_id)
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+            ) from exc
 
         if not settings.has_llm_api_key_configured():
             raise HTTPException(
@@ -97,7 +103,10 @@ async def retry_review(
             review.pr_head_sha,
         )
         if job is None:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to enqueue retry job")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to enqueue retry job",
+            )
 
         review.status = "queued"
         review.started_at = None
@@ -126,7 +135,9 @@ async def get_review_debug(
         if installation_id is None:
             await set_installation_context(session, int(review.installation_id))
         elif int(review.installation_id) != installation_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
 
         findings_payload = review.findings if isinstance(review.findings, dict) else {}
         findings_list = findings_payload.get("findings")

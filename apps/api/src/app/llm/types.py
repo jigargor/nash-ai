@@ -9,7 +9,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 ModelProvider = str
 ModelTier = Literal["frontier", "balanced", "economy", "fallback"]
 ModelStatus = Literal["active", "legacy", "deprecated", "retired", "unknown"]
-PromptCachingStrategy = Literal["none", "explicit_breakpoint", "automatic_prefix", "implicit", "explicit_cached_content"]
+PromptCachingStrategy = Literal[
+    "none", "explicit_breakpoint", "automatic_prefix", "implicit", "explicit_cached_content"
+]
 
 
 class ModelCapabilities(BaseModel):

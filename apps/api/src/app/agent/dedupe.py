@@ -9,7 +9,13 @@ def finding_dedupe_key(finding: Finding) -> tuple[str, int, str, str, str]:
     side = finding.side
     normalized_title = normalize_for_match(finding.message[:120])
     normalized_excerpt = normalize_for_match(finding.target_line_content[:240])
-    return (finding.file_path, line_value, side, normalized_title, f"{finding.category}:{normalized_excerpt}")
+    return (
+        finding.file_path,
+        line_value,
+        side,
+        normalized_title,
+        f"{finding.category}:{normalized_excerpt}",
+    )
 
 
 def dedupe_findings(findings: list[Finding]) -> list[Finding]:

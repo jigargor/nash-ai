@@ -22,7 +22,9 @@ async def resolve_installation_id() -> int:
         installations = response.json()
 
     if not installations:
-        raise RuntimeError("No GitHub App installations found. Set GITHUB_INSTALLATION_ID explicitly.")
+        raise RuntimeError(
+            "No GitHub App installations found. Set GITHUB_INSTALLATION_ID explicitly."
+        )
 
     return int(installations[0]["id"])
 
@@ -38,7 +40,9 @@ async def main() -> None:
     }
 
     async with httpx.AsyncClient() as client:
-        response = await client.get("https://api.github.com/installation/repositories", headers=headers)
+        response = await client.get(
+            "https://api.github.com/installation/repositories", headers=headers
+        )
         response.raise_for_status()
         data = response.json()
 
