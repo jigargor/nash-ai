@@ -41,11 +41,9 @@ CI runs the harness on pull requests labeled **`prompt-change`** (see `.github/w
 
 ### Test coverage note
 
-- The backend CI coverage floor is temporarily set to **55%** while ongoing multi-model and template-generation work stabilizes.
-- Revisit and raise this threshold after adding targeted tests for:
-  - repo template generation/rate limiting paths,
-  - max-mode branch/tie-break behavior,
-  - model audit and outcome scoring flows.
+- The backend CI coverage floor is set to **60%** for `src/app/agent`, `src/app/telemetry`, and `src/app/api`.
+- Keep package-level monitoring in addition to aggregate coverage so weak spots in API or telemetry do not hide behind strong agent totals.
+- `src/app/llm` tests are maintained separately and are intentionally excluded from the current CI coverage denominator until a dedicated baseline recalibration.
 
 ## How PR review works end-to-end
 

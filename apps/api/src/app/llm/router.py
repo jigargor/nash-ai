@@ -197,7 +197,9 @@ def _select_best_candidate(
         scored.append((score, -provider_preference, record))
     if not scored:
         return None
-    scored.sort(key=lambda item: (item[0], item[1], item[2].score), reverse=True)
+    # Provider order is an explicit policy control; when candidates are usable,
+    # honor it before tie-breaking on score.
+    scored.sort(key=lambda item: (item[1], item[0], item[2].score), reverse=True)
     return scored[0][2]
 
 

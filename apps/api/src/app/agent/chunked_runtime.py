@@ -1,5 +1,5 @@
 import json
-from hashlib import sha1
+from hashlib import sha256
 from typing import Any, cast
 
 from app.agent.chunking import ChunkPlan, PlannedChunk
@@ -38,7 +38,7 @@ def chunk_state_key(context: dict[str, Any]) -> str:
         "head_sha": context["head_sha"],
         "config_hash": context.get("chunking_config_hash", "default"),
     }
-    digest = sha1(json.dumps(payload, sort_keys=True).encode("utf-8"), usedforsecurity=False).hexdigest()
+    digest = sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return f"chunking:{digest}"
 
 

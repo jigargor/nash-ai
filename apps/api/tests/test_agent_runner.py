@@ -369,4 +369,7 @@ def test_chunking_config_hash_changes_when_chunking_knobs_change() -> None:
     base = ReviewConfig()
     changed = ReviewConfig()
     changed.chunking.max_chunks = base.chunking.max_chunks + 1
+    base_hash = _chunking_config_hash(base)
+    assert base_hash == _chunking_config_hash(base)
+    assert len(base_hash) == 64
     assert _chunking_config_hash(base) != _chunking_config_hash(changed)

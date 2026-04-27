@@ -588,10 +588,7 @@ def _render_package(package: LayeredContextPackage) -> str:
 
 
 def _summarize_context_segment(path: str, context_text: str) -> str:
-    digest = hashlib.sha1(
-        f"{path}:{context_text}".encode("utf-8"),
-        usedforsecurity=False,
-    ).hexdigest()
+    digest = hashlib.sha256(f"{path}:{context_text}".encode("utf-8")).hexdigest()
     if digest in SUMMARY_CACHE:
         return SUMMARY_CACHE[digest]
     lines = [line.strip() for line in context_text.splitlines() if line.strip()]

@@ -1,6 +1,6 @@
 import logging
 import json
-from hashlib import sha1
+from hashlib import sha256
 from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -766,7 +766,7 @@ def _chunking_config_hash(review_config: ReviewConfig) -> str:
         }
     }
     serialized = json.dumps(payload, sort_keys=True)
-    return sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return sha256(serialized.encode("utf-8")).hexdigest()
 
 
 async def _run_chunked_review(
@@ -1104,7 +1104,7 @@ def _chunk_state_key(context: dict[str, Any]) -> str:
         "head_sha": context["head_sha"],
         "config_hash": context.get("chunking_config_hash", "default"),
     }
-    digest = sha1(json.dumps(payload, sort_keys=True).encode("utf-8"), usedforsecurity=False).hexdigest()
+    digest = sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     return f"chunking:{digest}"
 
 
