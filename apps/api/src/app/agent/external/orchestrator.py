@@ -96,7 +96,9 @@ async def run_external_eval_prepass(*, eval_id: int, redis: Any | None = None) -
             "target_ref": repo_ref.ref,
         }
         evaluation.estimated_tokens = max(len(files) * 220, 800)
-        evaluation.estimated_cost_usd = Decimal(evaluation.estimated_tokens) * Decimal("0.00000015")
+        evaluation.estimated_cost_usd = float(
+            (Decimal(evaluation.estimated_tokens) * Decimal("0.00000015")).quantize(Decimal("0.000001"))
+        )
 
         shard_rows: list[ExternalEvaluationShard] = []
         for shard_key, shard_files in shards.items():
@@ -214,7 +216,7 @@ async def run_external_eval_shard(*, shard_id: int, redis: Any | None = None) ->
                         findings.append(finding)
 
         shard.tokens_used = estimated_tokens
-        shard.cost_usd = estimated_cost
+        shard.cost_usd = float(estimated_cost)
         shard.findings_count = len(findings)
         shard.status = "done"
         shard.completed_at = datetime.now(timezone.utc)
@@ -302,7 +304,7 @@ async def run_external_eval_synthesize(*, eval_id: int) -> None:
         )
         tokens_sum, cost_sum = shard_totals.one()
         evaluation.tokens_used = int(tokens_sum or 0)
-        evaluation.cost_usd = Decimal(str(cost_sum or 0))
+        evaluation.cost_usd = float(cost_sum or 0)
         evaluation.summary = (
             f"Completed external evaluation with {len(deduped)} critical findings."
             if deduped

@@ -39,9 +39,16 @@ def is_critical_finding(candidate: ExternalCriticalFinding) -> bool:
         return False
     excerpt = str(evidence.get("excerpt") or "").strip()
     confidence_raw = evidence.get("confidence")
-    try:
+    if isinstance(confidence_raw, bool):
+        confidence = 0.0
+    elif isinstance(confidence_raw, int | float):
         confidence = float(confidence_raw)
-    except (TypeError, ValueError):
+    elif isinstance(confidence_raw, str):
+        try:
+            confidence = float(confidence_raw.strip())
+        except ValueError:
+            confidence = 0.0
+    else:
         confidence = 0.0
     # Require meaningful supporting signal.
     return len(excerpt) >= 20 and confidence >= 0.8
