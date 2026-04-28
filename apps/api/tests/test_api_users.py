@@ -122,6 +122,28 @@ async def test_users_routes_wrong_audience_returns_401(client: httpx.AsyncClient
 
 
 @pytest.mark.anyio
+async def test_users_routes_expired_token_returns_401(client: httpx.AsyncClient) -> None:
+    github_id = _rand_github_id()
+    expired_token = _dashboard_token(github_id, expires_in_seconds=-60)
+    response = await client.get(
+        "/api/v1/users/me/keys",
+        headers={**_auth_headers(), "X-Dashboard-User-Token": expired_token},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_users_routes_forged_signature_returns_401(client: httpx.AsyncClient) -> None:
+    github_id = _rand_github_id()
+    forged_token = _dashboard_token(github_id, secret="forged-secret-that-should-not-verify")
+    response = await client.get(
+        "/api/v1/users/me/keys",
+        headers={**_auth_headers(), "X-Dashboard-User-Token": forged_token},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
 async def test_upsert_current_user_ignores_spoofed_body_github_id(client: httpx.AsyncClient) -> None:
     token_user_id = _rand_github_id()
     spoofed_body_id = _rand_github_id()
