@@ -188,6 +188,7 @@ async def queue_pull_request_review(
             head_sha,
         )
         return
+    requeued_failed_review = False
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
         installation = await session.scalar(
@@ -214,35 +215,42 @@ async def queue_pull_request_review(
             .where(Review.repo_full_name == repo_full_name)
             .where(Review.pr_number == pr_number)
             .where(Review.pr_head_sha == head_sha)
-            .where(Review.status != "failed")
             .order_by(Review.id.desc())
             .limit(1)
         )
         if existing_review is not None:
-            existing_review_id = existing_review.id
-            await session.rollback()
-            logger.warning(
-                "Skipping duplicate review enqueue for installation_id=%s repo=%s pr_number=%s head_sha=%s existing_review_id=%s",
-                installation_id,
-                repo_full_name,
-                pr_number,
-                head_sha,
-                existing_review_id,
+            if existing_review.status == "failed":
+                existing_review.status = "queued"
+                existing_review.started_at = None
+                existing_review.completed_at = None
+                await session.commit()
+                review_id = int(existing_review.id)
+                requeued_failed_review = True
+            else:
+                existing_review_id = existing_review.id
+                await session.rollback()
+                logger.warning(
+                    "Skipping duplicate review enqueue for installation_id=%s repo=%s pr_number=%s head_sha=%s existing_review_id=%s",
+                    installation_id,
+                    repo_full_name,
+                    pr_number,
+                    head_sha,
+                    existing_review_id,
+                )
+                return
+        else:
+            review = Review(
+                installation_id=installation_id,
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                pr_head_sha=head_sha,
+                model=DEFAULT_MODEL_NAME,
+                status="queued",
             )
-            return
-
-        review = Review(
-            installation_id=installation_id,
-            repo_full_name=repo_full_name,
-            pr_number=pr_number,
-            pr_head_sha=head_sha,
-            model=DEFAULT_MODEL_NAME,
-            status="queued",
-        )
-        session.add(review)
-        await session.flush()
-        review_id = review.id
-        await session.commit()
+            session.add(review)
+            await session.flush()
+            review_id = review.id
+            await session.commit()
 
     job = await redis.enqueue_job(
         "review_pr",
@@ -260,6 +268,14 @@ async def queue_pull_request_review(
         repo_full_name,
         pr_number,
     )
+    if requeued_failed_review:
+        logger.warning(
+            "Requeued failed review review_id=%s job_id=%s repo=%s pr_number=%s",
+            review_id,
+            job.job_id if job else "unknown",
+            repo_full_name,
+            pr_number,
+        )
 
 
 async def queue_pull_request_outcome_classification(

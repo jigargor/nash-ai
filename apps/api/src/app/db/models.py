@@ -130,7 +130,10 @@ class RepoConfig(Base):
 
 class Review(Base):
     __tablename__ = "reviews"
-    __table_args__ = (Index("reviews_repo_pr", "repo_full_name", "pr_number"),)
+    __table_args__ = (
+        UniqueConstraint("installation_id", "pr_number", "pr_head_sha"),
+        Index("reviews_repo_pr", "repo_full_name", "pr_number"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
     installation_id: Mapped[int] = mapped_column(
