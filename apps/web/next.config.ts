@@ -25,8 +25,8 @@ loadEnvConfig(
 
 /**
  * CSP `form-action` applies to form submission navigations, **including redirect targets**. The
- * login POST returns 307 → `https://github.com/login/oauth/authorize`, so `'self'` alone blocks
- * the OAuth handoff. We always allow GitHub plus optional origins from WEB_APP_URL (www/apex, etc.).
+ * login POST redirects to `https://github.com/login/oauth/authorize`, so `'self'` alone blocks the
+ * OAuth handoff. We always allow GitHub plus optional origins from WEB_APP_URL (www/apex, etc.).
  */
 function expandWwwApexOrigins(canonicalInput: string): string[] {
   let url: URL;

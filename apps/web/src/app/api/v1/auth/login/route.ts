@@ -26,13 +26,15 @@ function oauthNotConfiguredResponse(): NextResponse {
   );
 }
 
-async function redirectToGitHub(request: Request): Promise<NextResponse> {
+async function redirectToGitHub(request: Request, statusCode?: number): Promise<NextResponse> {
   const state = createOAuthState();
   const codeVerifier = createPkceCodeVerifier();
   const codeChallenge = await derivePkceCodeChallenge(codeVerifier);
   const redirectUri = callbackUrl(request.url);
   const authorizeUrl = buildGitHubAuthorizeUrl(state, redirectUri, codeChallenge);
-  const response = NextResponse.redirect(authorizeUrl);
+  const response = statusCode
+    ? NextResponse.redirect(authorizeUrl, statusCode)
+    : NextResponse.redirect(authorizeUrl);
   response.cookies.set(AUTH_STATE_COOKIE_NAME, state, {
     httpOnly: true,
     sameSite: "lax",
@@ -75,10 +77,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   const formData = await request.formData();
   const acceptTerms = formData.get("accept_terms");
   if (acceptTerms !== "on") {
-    return NextResponse.redirect(new URL("/login?error=terms", request.url));
+    return NextResponse.redirect(new URL("/login?error=terms", request.url), 303);
   }
 
-  const response = await redirectToGitHub(request);
+  const response = await redirectToGitHub(request, 303);
   response.cookies.set(TERMS_ACCEPTANCE_COOKIE_NAME, "1", {
     httpOnly: true,
     sameSite: "lax",
