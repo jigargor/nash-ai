@@ -453,7 +453,7 @@ async def summarize_finding_outcomes(
             stmt = stmt.where(Review.installation_id == installation_id)
             if repo_full_name:
                 stmt = stmt.where(Review.repo_full_name == repo_full_name)
-            rows = list((await session.execute(stmt)).all())
+            rows = list((await session.execute(stmt)).tuples().all())
         else:
             installation_rows = await session.scalars(select(Review.installation_id).distinct())
             installation_ids = [int(item) for item in installation_rows]
@@ -463,7 +463,7 @@ async def summarize_finding_outcomes(
                 stmt = stmt.where(Review.installation_id == scoped_installation_id)
                 if repo_full_name:
                     stmt = stmt.where(Review.repo_full_name == repo_full_name)
-                rows.extend((await session.execute(stmt)).all())
+                rows.extend((await session.execute(stmt)).tuples().all())
 
     total_classified = 0
     outcome_counts: dict[str, int] = {}
