@@ -58,6 +58,7 @@ async def _request_with_retry(
             if attempt == _MAX_RETRIES:
                 response.raise_for_status()
             retry_after = _parse_retry_after_seconds(response.headers.get("Retry-After", ""))
+            # Use secrets for jitter to avoid weak RNG usage in retry backoff paths.
             jitter = secrets.randbelow(1_000_000) / 1_000_000
             delay = retry_after if retry_after > 0 else (2**attempt + jitter)
             await asyncio.sleep(min(delay, 60))
