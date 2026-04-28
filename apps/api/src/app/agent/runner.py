@@ -24,7 +24,6 @@ from app.agent.chunking import (
     ChunkPlan,
     ChunkingPlannerConfig,
     FileClass,
-    PlannedChunk,
     plan_chunks,
 )
 from app.agent.chunked_runtime import (
@@ -1399,35 +1398,6 @@ async def _run_chunked_review(
     )
 
 
-def _chunk_repo_segments(chunk_plan: ChunkPlan, chunk: PlannedChunk) -> list[str]:
-    files = [entry.path for entry in chunk.files]
-    chunk_packages = sorted({entry.touched_package for entry in chunk.files})
-    chunk_dep_hints = sorted(
-        {hint for entry in chunk.files if (hint := entry.dependency_hint) is not None}
-    )
-    return [
-        "Full changed-file manifest:\n" + "\n".join(chunk_plan.full_manifest),
-        "Touched packages: "
-        + (", ".join(chunk_plan.touched_packages) if chunk_plan.touched_packages else "none"),
-        "Dependency hints: "
-        + (", ".join(chunk_plan.dependency_hints) if chunk_plan.dependency_hints else "none"),
-        f"Active chunk files ({len(files)}):\n" + "\n".join(files),
-        "Active chunk package scope: " + (", ".join(chunk_packages) if chunk_packages else "none"),
-        "Active chunk dependency hints: "
-        + (", ".join(chunk_dep_hints) if chunk_dep_hints else "none"),
-    ]
-
-
-def _render_chunk_diff(files_in_diff: list[FileInDiff]) -> str:
-    rendered: list[str] = []
-    for file in files_in_diff:
-        rendered.append(f"diff -- {file.path}")
-        for line in file.numbered_lines:
-            marker = {"add": "+", "del": "-", "ctx": " "}[line.kind]
-            rendered.append(f"{marker}{line.content}")
-    return "\n".join(rendered)
-
-
 async def _run_cross_chunk_synthesis(
     *,
     chunk_plan: ChunkPlan,
@@ -1465,40 +1435,6 @@ async def _run_cross_chunk_synthesis(
         model_name=synthesis_resolution.model,
         provider=synthesis_resolution.provider,
         allow_retry=False,
-    )
-
-
-def _finding_dedupe_key(finding: Finding) -> tuple[str, int, str, str, str]:
-    line_value = finding.line_end or finding.line_start
-    side = finding.side
-    normalized_title = normalize_for_match(finding.message[:120])
-    normalized_excerpt = normalize_for_match(finding.target_line_content[:240])
-    return (
-        finding.file_path,
-        line_value,
-        side,
-        normalized_title,
-        f"{finding.category}:{normalized_excerpt}",
-    )
-
-
-def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
-    merged: dict[tuple[str, int, str, str, str], Finding] = {}
-    for finding in findings:
-        key = _finding_dedupe_key(finding)
-        existing = merged.get(key)
-        if existing is None:
-            merged[key] = finding
-            continue
-        if SEVERITY_RANK[finding.severity] > SEVERITY_RANK[existing.severity]:
-            merged[key] = finding
-            continue
-        if finding.confidence > existing.confidence:
-            merged[key] = finding
-    return sorted(
-        merged.values(),
-        key=lambda item: (SEVERITY_RANK[item.severity], item.confidence),
-        reverse=True,
     )
 
 
