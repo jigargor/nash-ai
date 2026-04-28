@@ -35,6 +35,11 @@ _logger.warning(
 
 from app.agent.runner import run_review  # noqa: E402
 from app.agent.snapshot import archive_expired_snapshots  # noqa: E402
+from app.agent.external.orchestrator import (  # noqa: E402
+    run_external_eval_prepass,
+    run_external_eval_shard,
+    run_external_eval_synthesize,
+)
 from app.llm.maintenance import refresh_llm_catalog  # noqa: E402
 from app.telemetry.finding_outcomes import (  # noqa: E402
     classify_pending_outcomes_nightly,
@@ -83,6 +88,18 @@ async def archive_review_snapshots(ctx: dict[str, Any]) -> None:
     ctx["archived_review_snapshots"] = archived
 
 
+async def external_eval_prepass(ctx: dict[str, Any], external_eval_id: int) -> None:
+    await run_external_eval_prepass(eval_id=external_eval_id, redis=ctx.get("redis"))
+
+
+async def external_eval_shard(ctx: dict[str, Any], shard_id: int) -> None:
+    await run_external_eval_shard(shard_id=shard_id, redis=ctx.get("redis"))
+
+
+async def external_eval_synthesize(ctx: dict[str, Any], external_eval_id: int) -> None:
+    await run_external_eval_synthesize(eval_id=external_eval_id)
+
+
 async def worker_startup(ctx: dict[str, Any]) -> None:
     init_observability("worker")
     recovered = await recover_stale_running_reviews()
@@ -96,6 +113,9 @@ class WorkerSettings:
         classify_pending_outcomes,
         archive_review_snapshots,
         refresh_llm_catalog,
+        external_eval_prepass,
+        external_eval_shard,
+        external_eval_synthesize,
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = default_queue_name

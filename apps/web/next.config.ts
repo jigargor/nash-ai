@@ -55,6 +55,26 @@ function expandWwwApexOrigins(canonicalInput: string): string[] {
   return [...out];
 }
 
+function extractOriginTokens(raw: string): string[] {
+  return raw
+    .split(/[\s,]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function sanitizeOriginToken(token: string): string | null {
+  // Drop unresolved placeholders (for example "$VERCEL_URL") from hosting dashboards.
+  if (token.includes("$")) return null;
+  let url: URL;
+  try {
+    url = new URL(token);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  return `${url.protocol}//${url.host}`;
+}
+
 function buildFormActionDirective(): string {
   const origins = new Set<string>(["https://github.com"]);
 
@@ -65,10 +85,12 @@ function buildFormActionDirective(): string {
     process.env.VERCEL === "1" && process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "",
   ]
     .filter(Boolean)
-    .flatMap((s) => String(s).trim().split(/\s+/));
+    .flatMap((value) => extractOriginTokens(String(value)));
 
   for (const token of tokens) {
-    for (const o of expandWwwApexOrigins(token)) {
+    const sanitizedOrigin = sanitizeOriginToken(token);
+    if (!sanitizedOrigin) continue;
+    for (const o of expandWwwApexOrigins(sanitizedOrigin)) {
       if (o) origins.add(o);
     }
   }

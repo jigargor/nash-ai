@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { Button } from "@/components/ui/button";
+import { useUsageSummary } from "@/hooks/use-usage-summary";
 import { useOutcomeSummary } from "@/hooks/use-outcome-summary";
 import { useInstallations } from "@/hooks/use-installations";
 import { useRerunReview } from "@/hooks/use-review-actions";
@@ -16,10 +17,16 @@ export default function DashboardHomePage() {
   const activeInstallations = installations.data?.filter((installation) => installation.active) ?? [];
   const installationId = activeInstallations[0]?.installation_id;
   const reviews = useReviews(installationId);
+  const usageSummary = useUsageSummary(installationId);
   const outcomeSummary = useOutcomeSummary(installationId);
   const retryReview = useRerunReview();
   const totalTokens = (reviews.data ?? []).reduce((sum, review) => sum + (review.tokens_used ?? 0), 0);
   const totalCost = (reviews.data ?? []).reduce((sum, review) => sum + Number(review.cost_usd ?? 0), 0);
+  const dailyUsageRequests = usageSummary.data?.daily_requests.at(-1)?.requests ?? 0;
+  const weeklyUsageRequests = usageSummary.data?.weekly_requests.at(-1)?.requests ?? 0;
+  const capState = usageSummary.data?.session_cap.state ?? "safe";
+  const capLabel =
+    capState === "capped" ? "Cap reached" : capState === "near-cap" ? "Near cap" : "Within cap";
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
@@ -35,6 +42,18 @@ export default function DashboardHomePage() {
         <article className="metric-card">
           <p className="metric-label">Estimated cost</p>
           <p className="metric-value">${totalCost.toFixed(6)}</p>
+        </article>
+        <article className="metric-card">
+          <p className="metric-label">Service requests (24h)</p>
+          <p className="metric-value">{dailyUsageRequests}</p>
+        </article>
+        <article className="metric-card">
+          <p className="metric-label">Service requests (7d)</p>
+          <p className="metric-value">{weeklyUsageRequests}</p>
+        </article>
+        <article className="metric-card">
+          <p className="metric-label">Session cap</p>
+          <p className="metric-value">{capLabel}</p>
         </article>
       </div>
 
@@ -114,6 +133,18 @@ export default function DashboardHomePage() {
             ))}
           </div>
         ) : null}
+      </Panel>
+
+      <Panel>
+        <h2 style={{ marginTop: 0, marginBottom: "0.45rem" }}>Evaluate External</h2>
+        <p style={{ margin: 0, color: "var(--text-muted)" }}>
+          Run critical-only analysis on a public GitHub repository with cost controls and staged execution.
+        </p>
+        <div style={{ marginTop: "0.75rem" }}>
+          <Link href="/evaluate-external" className="button button-primary">
+            Open Evaluate External
+          </Link>
+        </div>
       </Panel>
     </section>
   );

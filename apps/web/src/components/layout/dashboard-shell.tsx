@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard" },
   { label: "All Reviews", href: "/reviews" },
   { label: "Repositories", href: "/repos" },
+  { label: "Evaluate External", href: "/evaluate-external" },
   { label: "Settings", href: "/settings" },
 ];
 
@@ -32,6 +33,7 @@ function pageTitle(pathname: string): string {
   if (pathname.startsWith("/reviews")) return "All Reviews";
   if (isPullRequestReviewRoute(pathname)) return "All Reviews";
   if (pathname.startsWith("/repos")) return "Repositories";
+  if (pathname.startsWith("/evaluate-external")) return "Evaluate External";
   if (pathname.startsWith("/settings")) return "Settings";
   return "Dashboard";
 }
@@ -44,6 +46,9 @@ function isActive(pathname: string, href: string): boolean {
   if (href === "/repos") {
     if (isPullRequestReviewRoute(pathname)) return false;
     return pathname === "/repos" || pathname.startsWith("/repos/");
+  }
+  if (href === "/evaluate-external") {
+    return pathname === "/evaluate-external" || pathname.startsWith("/evaluate-external/");
   }
   if (href === "/settings") return pathname === "/settings" || pathname.startsWith("/settings/");
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -99,7 +104,7 @@ export function DashboardShell({ children }: PropsWithChildren) {
           <div className="app-topbar-row">
             <div>
               <h2 className="app-topbar-title">{pageTitle(pathname)}</h2>
-              <p className="app-topbar-subtitle">Track reviews, findings, and deployment health.</p>
+              <p className="app-topbar-subtitle">Track usage, findings, and external evaluation risk.</p>
             </div>
             <div className="app-topbar-actions">
               <input

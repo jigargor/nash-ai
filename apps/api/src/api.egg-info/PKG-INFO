@@ -22,6 +22,7 @@ Requires-Dist: tree-sitter-language-pack>=1.6.2
 Requires-Dist: langfuse>=2.60.0
 Requires-Dist: sentry-sdk[fastapi]>=2.20.0
 Requires-Dist: openai>=2.32.0
+Requires-Dist: boto3>=1.40.0
 Provides-Extra: dev
 Requires-Dist: pytest>=9.0.0; extra == "dev"
 Requires-Dist: pytest-cov>=6.0.0; extra == "dev"

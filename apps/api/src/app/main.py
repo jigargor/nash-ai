@@ -9,14 +9,19 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
+from starlette.responses import Response
 
 from app.admin.router import router as admin_router
 from app.api.benchmarks import router as benchmarks_router
 from app.api.benchmarks import telemetry_router
+from app.api.external_evals import router as external_evals_router
 from app.api.router import router as api_router
+from app.api.usage import router as usage_router
 from app.api.users import router as users_router
 from app.config import settings
+from app.db.models import ApiUsageEvent
 from app.db.session import engine
+from app.db.session import AsyncSessionLocal, set_installation_context
 from app.observability import init_observability
 from app.queue.connection import create_redis_pool, format_redis_target, require_app_redis
 from app.webhooks.router import router as webhook_router
@@ -79,6 +84,57 @@ app.include_router(api_router)
 app.include_router(users_router)
 app.include_router(benchmarks_router)
 app.include_router(telemetry_router)
+app.include_router(usage_router)
+app.include_router(external_evals_router)
+
+
+async def _record_usage_event(
+    *,
+    installation_id: int,
+    service: str,
+    endpoint: str,
+    method: str,
+    status_code: int,
+) -> None:
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        session.add(
+            ApiUsageEvent(
+                installation_id=installation_id,
+                service=service,
+                endpoint=endpoint,
+                method=method,
+                status_code=status_code,
+            )
+        )
+        await session.commit()
+
+
+@app.middleware("http")
+async def usage_event_middleware(request: Request, call_next: Any) -> Response:
+    response = await call_next(request)
+    if not request.url.path.startswith("/api/v1/"):
+        return response
+    if request.url.path.startswith("/api/v1/usage/"):
+        return response
+    installation_id_raw = request.query_params.get("installation_id")
+    if installation_id_raw is None:
+        return response
+    try:
+        installation_id = int(installation_id_raw)
+    except ValueError:
+        return response
+    if installation_id <= 0:
+        return response
+    service = (request.headers.get("X-Usage-Service") or "dashboard-bff").strip() or "dashboard-bff"
+    await _record_usage_event(
+        installation_id=installation_id,
+        service=service,
+        endpoint=request.url.path,
+        method=request.method,
+        status_code=response.status_code,
+    )
+    return response
 
 
 @app.get("/health")

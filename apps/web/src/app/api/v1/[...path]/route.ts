@@ -88,6 +88,7 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   }
   headers.set("X-Api-Key", apiAccessKey);
   headers.set("X-Dashboard-User-Token", dashboardUserToken);
+  headers.set("X-Usage-Service", "dashboard-bff");
 
   let requestBody: ArrayBuffer | undefined;
   if (request.method !== "GET" && request.method !== "HEAD") {

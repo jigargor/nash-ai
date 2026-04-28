@@ -334,3 +334,133 @@ class BenchmarkResult(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now()
     )
+
+
+class ApiUsageEvent(Base):
+    __tablename__ = "api_usage_events"
+    __table_args__ = (
+        Index("api_usage_events_installation_service_time", "installation_id", "service", "occurred_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("installations.installation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    service: Mapped[str] = mapped_column(Text, nullable=False)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    method: Mapped[str] = mapped_column(Text, nullable=False)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExternalEvaluation(Base):
+    __tablename__ = "external_evaluations"
+    __table_args__ = (
+        Index("external_evaluations_installation_created", "installation_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("installations.installation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    repo_url: Mapped[str] = mapped_column(Text, nullable=False)
+    owner: Mapped[str] = mapped_column(Text, nullable=False)
+    repo: Mapped[str] = mapped_column(Text, nullable=False)
+    target_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    estimated_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    estimated_cost_usd: Mapped[float] = mapped_column(
+        Numeric(10, 6), nullable=False, server_default=text("0")
+    )
+    token_budget_cap: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    cost_budget_cap_usd: Mapped[float] = mapped_column(
+        Numeric(10, 6), nullable=False, server_default=text("0")
+    )
+    ack_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    ack_confirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    summary: Mapped[str | None] = mapped_column(Text)
+    findings_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    tokens_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), nullable=False, server_default=text("0"))
+    prepass_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExternalEvaluationShard(Base):
+    __tablename__ = "external_evaluation_shards"
+    __table_args__ = (
+        Index("external_evaluation_shards_eval_status", "external_evaluation_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    external_evaluation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("external_evaluations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    installation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    shard_key: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    model_tier: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'economy'"))
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    findings_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    tokens_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), nullable=False, server_default=text("0"))
+    meta_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExternalEvaluationFinding(Base):
+    __tablename__ = "external_evaluation_findings"
+    __table_args__ = (
+        Index("external_evaluation_findings_eval_severity", "external_evaluation_id", "severity"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    external_evaluation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("external_evaluations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    installation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    file_path: Mapped[str | None] = mapped_column(Text)
+    line_start: Mapped[int | None] = mapped_column(Integer)
+    line_end: Mapped[int | None] = mapped_column(Integer)
+    evidence: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )

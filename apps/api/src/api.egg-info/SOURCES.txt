@@ -40,6 +40,15 @@ src/app/agent/text_sanitizer.py
 src/app/agent/tools.py
 src/app/agent/validator.py
 src/app/agent/vendor_detect.py
+src/app/agent/external/__init__.py
+src/app/agent/external/analyzer.py
+src/app/agent/external/github_public.py
+src/app/agent/external/orchestrator.py
+src/app/agent/external/planner.py
+src/app/agent/external/prepass.py
+src/app/agent/external/sharding.py
+src/app/agent/external/synthesis.py
+src/app/agent/external/types.py
 src/app/agent/prompts/__init__.py
 src/app/agent/prompts/editor_system.md
 src/app/agent/prompts/fewshot_examples.md
@@ -53,8 +62,11 @@ src/app/agent/prompts/stacks/nextjs.md
 src/app/agent/prompts/stacks/prisma.md
 src/app/agent/prompts/stacks/react.md
 src/app/agent/prompts/stacks/supabase.md
+src/app/api/auth.py
 src/app/api/benchmarks.py
+src/app/api/external_evals.py
 src/app/api/router.py
+src/app/api/usage.py
 src/app/api/users.py
 src/app/db/__init__.py
 src/app/db/models.py
@@ -80,8 +92,10 @@ src/app/llm/providers/base.py
 src/app/llm/providers/gemini.py
 src/app/llm/providers/openai.py
 src/app/queue/connection.py
+src/app/queue/idempotency.py
 src/app/queue/recovery.py
 src/app/queue/worker.py
+src/app/storage/r2_snapshots.py
 src/app/telemetry/finding_outcomes.py
 src/app/webhooks/__init__.py
 src/app/webhooks/handlers.py
@@ -114,6 +128,7 @@ tests/test_database_transaction_isolation.py
 tests/test_database_url_tls.py
 tests/test_db_url.py
 tests/test_diff_parser.py
+tests/test_external_eval_modules.py
 tests/test_finding_outcomes.py
 tests/test_github_auth.py
 tests/test_github_client.py
@@ -123,6 +138,7 @@ tests/test_integration_review_flow.py
 tests/test_llm_catalog_router.py
 tests/test_llm_provider_adapters.py
 tests/test_queue_recovery.py
+tests/test_queue_worker.py
 tests/test_ratelimit.py
 tests/test_snapshot.py
 tests/test_telemetry_audit.py
