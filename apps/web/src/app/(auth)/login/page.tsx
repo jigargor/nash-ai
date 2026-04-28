@@ -13,6 +13,7 @@ function errorMessage(code: string | undefined): string | null {
     return "Please accept the Terms & Conditions to continue.";
   }
   if (code === "state_mismatch") return "Sign-in session expired. Please try again.";
+  if (code === "pkce_mismatch") return "Sign-in verification failed. Please try again.";
   if (code === "oauth_failed") return "GitHub sign-in failed. Please try again.";
   return "Something went wrong. Please try again.";
 }

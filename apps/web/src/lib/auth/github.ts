@@ -29,17 +29,27 @@ function getGitHubClientSecret(): string {
   return value;
 }
 
-export function buildGitHubAuthorizeUrl(state: string, redirectUri: string): string {
+export function buildGitHubAuthorizeUrl(
+  state: string,
+  redirectUri: string,
+  codeChallenge: string,
+): string {
   const params = new URLSearchParams({
     client_id: getGitHubClientId(),
     redirect_uri: redirectUri,
     scope: "read:user read:org",
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
   });
   return `https://github.com/login/oauth/authorize?${params.toString()}`;
 }
 
-export async function exchangeCodeForToken(code: string, redirectUri: string): Promise<GitHubOAuthTokenResponse> {
+export async function exchangeCodeForToken(
+  code: string,
+  redirectUri: string,
+  codeVerifier: string,
+): Promise<GitHubOAuthTokenResponse> {
   const response = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
     headers: {
@@ -51,6 +61,7 @@ export async function exchangeCodeForToken(code: string, redirectUri: string): P
       client_secret: getGitHubClientSecret(),
       code,
       redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
     }),
     cache: "no-store",
   });

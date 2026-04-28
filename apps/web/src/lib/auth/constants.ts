@@ -4,6 +4,7 @@
 // Note: most browsers accept Secure cookies on localhost for dev purposes.
 export const AUTH_COOKIE_NAME = "__Host-nash_session";
 export const AUTH_STATE_COOKIE_NAME = "__Host-nash_oauth_state";
+export const AUTH_PKCE_VERIFIER_COOKIE_NAME = "__Host-nash_oauth_pkce_verifier";
 export const AUTH_COOKIE_TTL_SECONDS = 60 * 60 * 24;
 
 /** Set when the user submits the login form with terms accepted; required before OAuth redirect. */

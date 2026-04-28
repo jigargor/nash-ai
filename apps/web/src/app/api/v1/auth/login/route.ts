@@ -3,12 +3,13 @@ import { NextResponse } from "next/server";
 
 import {
   AUTH_COOKIE_TTL_SECONDS,
+  AUTH_PKCE_VERIFIER_COOKIE_NAME,
   AUTH_STATE_COOKIE_NAME,
   TERMS_ACCEPTANCE_COOKIE_NAME,
   TERMS_ACCEPTANCE_COOKIE_TTL_SECONDS,
 } from "@/lib/auth/constants";
 import { buildGitHubAuthorizeUrl } from "@/lib/auth/github";
-import { createOAuthState } from "@/lib/auth/session";
+import { createOAuthState, createPkceCodeVerifier, derivePkceCodeChallenge } from "@/lib/auth/session";
 
 function callbackUrl(requestUrl: string): string {
   const url = new URL("/api/v1/auth/callback", requestUrl);
@@ -25,12 +26,21 @@ function oauthNotConfiguredResponse(): NextResponse {
   );
 }
 
-function redirectToGitHub(request: Request): NextResponse {
+async function redirectToGitHub(request: Request): Promise<NextResponse> {
   const state = createOAuthState();
+  const codeVerifier = createPkceCodeVerifier();
+  const codeChallenge = await derivePkceCodeChallenge(codeVerifier);
   const redirectUri = callbackUrl(request.url);
-  const authorizeUrl = buildGitHubAuthorizeUrl(state, redirectUri);
+  const authorizeUrl = buildGitHubAuthorizeUrl(state, redirectUri, codeChallenge);
   const response = NextResponse.redirect(authorizeUrl);
   response.cookies.set(AUTH_STATE_COOKIE_NAME, state, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+    path: "/",
+    maxAge: AUTH_COOKIE_TTL_SECONDS,
+  });
+  response.cookies.set(AUTH_PKCE_VERIFIER_COOKIE_NAME, codeVerifier, {
     httpOnly: true,
     sameSite: "lax",
     secure: true,
@@ -54,7 +64,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.redirect(new URL("/login?error=terms_required", request.url));
   }
 
-  return redirectToGitHub(request);
+  return await redirectToGitHub(request);
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -68,7 +78,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.redirect(new URL("/login?error=terms", request.url));
   }
 
-  const response = redirectToGitHub(request);
+  const response = await redirectToGitHub(request);
   response.cookies.set(TERMS_ACCEPTANCE_COOKIE_NAME, "1", {
     httpOnly: true,
     sameSite: "lax",
