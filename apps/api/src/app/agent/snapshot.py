@@ -242,6 +242,11 @@ def _json_default(obj: Any) -> Any:
         return str(obj)
     if isinstance(obj, datetime):
         return obj.isoformat()
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return dataclasses.asdict(obj)
+    model_dump = getattr(obj, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serialisable")
 
 

@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.agent import snapshot as snapshot_module
 from app.agent.snapshot import SCHEMA_VERSION, SnapshotPayload, SnapshotSchemaError
+from app.agent.schema import ContextBudgets
 from app.config import settings
 from app.db.models import ReviewContextSnapshot
 from app.db.session import AsyncSessionLocal, set_installation_context
@@ -77,6 +78,24 @@ def test_snapshot_to_bytes_redacts_sensitive_fields_and_tokens() -> None:
     assert "[REDACTED]" in raw["diff_text"]
     assert "[REDACTED]" in raw["user_prompt"]
     assert raw["fetched_files"]["sample.txt"] == "[REDACTED]"
+
+
+def test_snapshot_to_bytes_serializes_pydantic_context_budgets() -> None:
+    payload = SnapshotPayload(
+        review_id=77,
+        pr_metadata={"owner": "acme", "repo": "repo", "pr_number": 8, "head_sha": "abc"},
+        diff_text="diff --git a/x.py b/x.py",
+        system_prompt="system",
+        user_prompt="user",
+        context_telemetry={},
+        review_config={"budgets": ContextBudgets(total_cap=54321)},
+        model_resolutions={},
+        fetched_files={},
+        chunk_plan=None,
+    )
+
+    raw = json.loads(gzip.decompress(payload.to_bytes()).decode("utf-8"))
+    assert raw["review_config"]["budgets"]["total_cap"] == 54321
 
 
 @pytest.mark.anyio
