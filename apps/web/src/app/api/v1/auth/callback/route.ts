@@ -57,7 +57,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         "X-Api-Key": process.env.API_ACCESS_KEY ?? "",
         "X-Dashboard-User-Token": dashboardUserToken,
       },
-      body: JSON.stringify({ login: user.login }),
+      body: JSON.stringify({ login: user.login, oauth_token: token.access_token }),
     }).catch((err: unknown) => console.error("[auth/callback] user upsert failed (non-fatal)", err));
     fetch(`${apiBase}/api/v1/users/me/installations-sync`, {
       method: "POST",

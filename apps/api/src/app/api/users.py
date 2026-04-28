@@ -107,6 +107,15 @@ async def _validate_api_key(provider: str, api_key: str) -> None:
 
 class UpsertUserRequest(BaseModel):
     login: str | None = None
+    oauth_token: str | None = None
+
+    @field_validator("oauth_token")
+    @classmethod
+    def normalize_oauth_token(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class UserResponse(BaseModel):
@@ -159,19 +168,26 @@ async def upsert_current_user(
     login = body.login or current_user.login
     if not login:
         raise HTTPException(status_code=422, detail="login is required")
+    token_enc = encrypt_secret(body.oauth_token) if body.oauth_token else None
+    insert_values = {
+        "github_id": current_user.github_id,
+        "login": login,
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if token_enc is not None:
+        insert_values["token_enc"] = token_enc
+    update_values = {
+        "login": login,
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if token_enc is not None:
+        update_values["token_enc"] = token_enc
     stmt = (
         pg_insert(User)
-        .values(
-            github_id=current_user.github_id,
-            login=login,
-            updated_at=datetime.now(timezone.utc),
-        )
+        .values(**insert_values)
         .on_conflict_do_update(
             index_elements=["github_id"],
-            set_={
-                "login": login,
-                "updated_at": datetime.now(timezone.utc),
-            },
+            set_=update_values,
         )
         .returning(User)
     )

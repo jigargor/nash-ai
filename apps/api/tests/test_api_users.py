@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api import users as users_module
 from app.config import settings
+from app.crypto import decrypt_secret
 from app.db.models import Installation, InstallationUser, User, UserProviderKey
 from app.db.session import AsyncSessionLocal, engine
 from conftest import _auth_headers
@@ -147,6 +148,27 @@ async def test_upsert_current_user_uses_token_login_when_body_omits_login(
     )
     assert response.status_code == 200
     assert response.json()["login"] == "token-login"
+
+
+@pytest.mark.anyio
+async def test_upsert_current_user_encrypts_oauth_token(client: httpx.AsyncClient) -> None:
+    github_id = _rand_github_id()
+    oauth_token = "gho_test_oauth_token_value_abcdefghijklmnopqrstuvwxyz"
+
+    response = await client.post(
+        "/api/v1/users/me",
+        json={"login": "token-owner", "oauth_token": oauth_token},
+        headers=_auth_headers_for_user(github_id, login="token-owner"),
+    )
+    assert response.status_code == 200
+
+    async with AsyncSessionLocal() as session:
+        stored_user = (
+            await session.execute(select(User).where(User.github_id == github_id))
+        ).scalar_one_or_none()
+        assert stored_user is not None
+        assert stored_user.token_enc is not None
+        assert decrypt_secret(stored_user.token_enc) == oauth_token
 
 
 @pytest.mark.anyio
