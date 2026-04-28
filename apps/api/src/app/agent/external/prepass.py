@@ -67,17 +67,27 @@ def _fast_pass_model() -> str:
     ]
     if not active_models:
         return "heuristic-lite-v1"
-    # Prefer explicitly fast economy families, then lower cost, then higher score.
-    preferred_family_rank = {
-        "gemini": 0,
-        "gpt": 1,
-        "claude": 2,
+    # Pick the cheapest active economy model among configured providers.
+    # Some provider catalogs occasionally omit pricing fields for economy models.
+    fallback_input_price_by_model = {
+        "gemini-2.5-flash": 0.20,
+    }
+    fallback_output_price_by_model = {
+        "gemini-2.5-flash": 0.80,
     }
 
-    def sort_key(record: ModelRecord) -> tuple[int, float, int]:
-        family_rank = preferred_family_rank.get(record.family.lower(), 99)
-        input_price = float(record.pricing.input_per_1m or 10_000)
-        return (family_rank, input_price, -record.score)
+    def sort_key(record: ModelRecord) -> tuple[float, float, int, str]:
+        input_price = (
+            float(record.pricing.input_per_1m)
+            if record.pricing.input_per_1m is not None
+            else fallback_input_price_by_model.get(record.model, 10_000.0)
+        )
+        output_price = (
+            float(record.pricing.output_per_1m)
+            if record.pricing.output_per_1m is not None
+            else fallback_output_price_by_model.get(record.model, 10_000.0)
+        )
+        return (input_price, output_price, -record.score, record.model)
 
     fastest = sorted(active_models, key=sort_key)[0]
     return f"{fastest.provider}:{fastest.model}"

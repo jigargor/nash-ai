@@ -213,6 +213,7 @@ def _select_best_candidate(
         available_providers if available_providers is not None else _configured_provider_ids()
     )
     scored: list[tuple[int, int, ModelRecord]] = []
+    cost_scored: list[tuple[float, int, int, ModelRecord]] = []
     desired_tier = role_config.tier or ROLE_DEFAULT_TIERS[role]
     active_providers = catalog.active_provider_ids()
     for record in catalog.models:
@@ -237,8 +238,24 @@ def _select_best_candidate(
             else len(provider_order)
         )
         scored.append((score, -provider_preference, record))
+        if role == "fast_path" and desired_tier == "economy":
+            input_price = (
+                float(record.pricing.input_per_1m)
+                if record.pricing.input_per_1m is not None
+                else 9_999.0
+            )
+            output_price = (
+                float(record.pricing.output_per_1m)
+                if record.pricing.output_per_1m is not None
+                else 9_999.0
+            )
+            cost_scored.append((input_price, output_price, -score, record))
     if not scored:
         return None
+    # Fast-path should use the cheapest available economy model first.
+    if cost_scored:
+        cost_scored.sort(key=lambda item: (item[0], item[1], item[2], item[3].model))
+        return cost_scored[0][3]
     # Provider order is an explicit policy control; when candidates are usable,
     # honor it before tie-breaking on score.
     scored.sort(key=lambda item: (item[1], item[0], item[2].score), reverse=True)
