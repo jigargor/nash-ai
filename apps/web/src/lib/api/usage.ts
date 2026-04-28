@@ -25,6 +25,20 @@ export interface UsageSummary {
     remaining: number;
     state: "safe" | "near-cap" | "capped";
   };
+  api_key_caps: Array<{
+    provider: string;
+    daily_tokens: number;
+    weekly_tokens: number;
+    daily_cost_usd: string;
+    weekly_cost_usd: string;
+    effective_cap_tokens: number;
+  }>;
+  cumulative_caps: {
+    daily_tokens: number;
+    weekly_tokens: number;
+    daily_token_budget: number;
+    state: "safe" | "near-cap" | "capped";
+  };
 }
 
 export function fetchUsageSummary(installationId: number) {

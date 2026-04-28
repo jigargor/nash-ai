@@ -25,11 +25,33 @@ def is_critical_finding(candidate: ExternalCriticalFinding) -> bool:
         return False
     if category not in _ALLOWED_CATEGORIES:
         return False
+    file_path = (candidate.get("file_path") or "").strip()
+    line_start = candidate.get("line_start")
+    line_end = candidate.get("line_end")
+    if not file_path:
+        return False
+    if not isinstance(line_start, int) or line_start <= 0:
+        return False
+    if line_end is not None and (not isinstance(line_end, int) or line_end < line_start):
+        return False
     evidence = candidate.get("evidence", {})
     if not isinstance(evidence, dict):
         return False
-    # Require at least one evidence field beyond an empty object.
-    return bool(evidence)
+    excerpt = str(evidence.get("excerpt") or "").strip()
+    confidence_raw = evidence.get("confidence")
+    if isinstance(confidence_raw, bool):
+        confidence = 0.0
+    elif isinstance(confidence_raw, int | float):
+        confidence = float(confidence_raw)
+    elif isinstance(confidence_raw, str):
+        try:
+            confidence = float(confidence_raw.strip())
+        except ValueError:
+            confidence = 0.0
+    else:
+        confidence = 0.0
+    # Require meaningful supporting signal.
+    return len(excerpt) >= 20 and confidence >= 0.8
 
 
 def dedupe_findings(findings: list[ExternalCriticalFinding]) -> list[ExternalCriticalFinding]:

@@ -62,5 +62,10 @@ async def _reset_redis_client_for_tests() -> None:
     global _redis_client
     async with _redis_lock:
         if _redis_client is not None:
-            await _redis_client.aclose()
+            try:
+                await _redis_client.aclose()
+            except RuntimeError:
+                # pytest-anyio may tear down the loop before fixture cleanup on Windows;
+                # dropping the singleton is sufficient for test isolation in that case.
+                logger.debug("Skipping Redis close after event loop shutdown during test cleanup.")
         _redis_client = None
