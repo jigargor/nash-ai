@@ -16,7 +16,6 @@ from app.agent.external.planner import recommended_model_distribution, recommend
 from app.agent.external.sharding import assign_shards
 from app.agent.external.synthesis import ExternalCriticalFinding, dedupe_findings, is_critical_finding
 from app.db.models import (
-    BenchmarkRun,
     ExternalEvaluation,
     ExternalEvaluationFinding,
     ExternalEvaluationShard,
@@ -312,34 +311,6 @@ async def run_external_eval_synthesize(*, eval_id: int) -> None:
             else "Completed external evaluation with no critical findings."
         )
         evaluation.status = "partial" if int(skipped_count or 0) > 0 else "complete"
-        completed_at = datetime.now(timezone.utc)
-        evaluation.completed_at = completed_at
-        bench_run = BenchmarkRun(
-            name=f"{evaluation.owner}/{evaluation.repo}",
-            prompt_version="external_pattern",
-            model_config_json={
-                "pipeline": "external_public_repo",
-                "analyzer": "pattern_rules",
-                "external_evaluation_id": eval_id,
-            },
-            dataset_path=evaluation.repo_url,
-            triggered_by="external_eval",
-            status="complete",
-            completed_at=completed_at,
-            totals_json={
-                "kind": "external_repository_scan",
-                "external_evaluation_id": eval_id,
-                "owner": evaluation.owner,
-                "repo": evaluation.repo,
-                "target_ref": evaluation.target_ref,
-                "findings_count": len(deduped),
-                "tokens_used": int(tokens_sum or 0),
-                "cost_usd": float(cost_sum or 0),
-                "evaluation_status": evaluation.status,
-                "shards_skipped": int(skipped_count or 0),
-                "prepass": evaluation.prepass_metadata,
-            },
-        )
-        session.add(bench_run)
+        evaluation.completed_at = datetime.now(timezone.utc)
         await session.commit()
 

@@ -39,14 +39,15 @@ python evals/compare.py evals/results/baseline.json evals/results/<label>.json
 
 CI runs the harness on pull requests labeled **`prompt-change`** (see `.github/workflows/quality-gates.yml`).
 
-To score the **external public-repo pattern analyzer** (regex slice used by offline shard workers) against the same golden cases—emitting `evals/predictions/external_pattern/` and `evals/results/external_pattern.json`—run:
+DeepEval-based agent replay evals are optional and separate from the dashboard `ExternalEvaluation` feature:
 
 ```bash
-python evals/run_external_benchmark.py
-python evals/run_eval.py --prompt-version external_pattern --predictions-dir evals/predictions/external_pattern
+cd apps/api
+uv sync --extra dev --extra deepeval
+uv run pytest tests/deep_eval -m "not live_llm"
 ```
 
-Completed **dashboard-triggered** external repository evaluations also append a row to `benchmark_runs` (`prompt_version`=`external_pattern`) so ops can compare runs via `/api/v1/admin/benchmarks`.
+The optional DeepEval CI workflow lives in `.github/workflows/deepeval.yml` and runs on `workflow_dispatch` or PRs with the `deepeval` label.
 
 ### Test coverage note
 
