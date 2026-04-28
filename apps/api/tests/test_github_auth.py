@@ -6,6 +6,11 @@ import pytest
 from app.github import auth
 
 
+@pytest.fixture(autouse=True)
+def _reset_installation_token_cache() -> None:
+    auth._reset_installation_token_cache_for_tests()
+
+
 def test_create_jwt_uses_expected_claims(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -59,7 +64,7 @@ def test_get_installation_token_posts_expected_request(monkeypatch: pytest.Monke
             return None
 
         def json(self) -> dict[str, str]:
-            return {"token": "installation-token"}
+            return {"token": "installation-token", "expires_at": "2099-01-01T00:00:00Z"}
 
     class FakeClient:
         async def __aenter__(self) -> "FakeClient":
@@ -91,6 +96,44 @@ def test_get_installation_token_posts_expected_request(monkeypatch: pytest.Monke
     assert headers["Authorization"] == "Bearer jwt-token"
     assert headers["Accept"] == "application/vnd.github+json"
     assert captured["json"] == {}
+
+
+def test_get_installation_token_uses_in_memory_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"count": 0}
+    monkeypatch.setattr(auth, "create_jwt", lambda: "jwt-token")
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            calls["count"] += 1
+            return {"token": "installation-token", "expires_at": "2099-01-01T00:00:00Z"}
+
+    class FakeClient:
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str] | None = None,
+            json: dict | None = None,
+            **_: object,
+        ) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(auth.httpx, "AsyncClient", FakeClient)
+
+    token_first = asyncio.run(auth.get_installation_token(987))
+    token_second = asyncio.run(auth.get_installation_token(987))
+
+    assert token_first == "installation-token"
+    assert token_second == "installation-token"
+    assert calls["count"] == 1
 
 
 def test_load_private_key_prefers_env_value(monkeypatch: pytest.MonkeyPatch) -> None:
