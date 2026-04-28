@@ -70,6 +70,13 @@ jobs:
           if [ -n "${{ secrets.APP_PRIVATE_KEY_PEM }}" ]; then
             printf '%s\n' "${{ secrets.APP_PRIVATE_KEY_PEM }}" > private-key.pem
           fi
+      - name: Fail on merge conflict markers
+        shell: bash
+        run: |
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- ':!uv.lock' ':!pnpm-lock.yaml'; then
+            echo "Merge conflict markers found."
+            exit 1
+          fi
       - name: Ruff
         run: uv run ruff check .
       - name: Mypy
