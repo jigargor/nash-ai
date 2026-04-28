@@ -77,14 +77,17 @@ def _fast_pass_model() -> str:
     }
 
     def sort_key(record: ModelRecord) -> tuple[float, float, int, str]:
+        pricing = record.pricing
+        input_per_1m = getattr(pricing, "input_per_1m", None)
+        output_per_1m = getattr(pricing, "output_per_1m", None)
         input_price = (
-            float(record.pricing.input_per_1m)
-            if record.pricing.input_per_1m is not None
+            float(input_per_1m)
+            if input_per_1m is not None
             else fallback_input_price_by_model.get(record.model, 10_000.0)
         )
         output_price = (
-            float(record.pricing.output_per_1m)
-            if record.pricing.output_per_1m is not None
+            float(output_per_1m)
+            if output_per_1m is not None
             else fallback_output_price_by_model.get(record.model, 10_000.0)
         )
         return (input_price, output_price, -record.score, record.model)

@@ -213,7 +213,7 @@ def _select_best_candidate(
         available_providers if available_providers is not None else _configured_provider_ids()
     )
     scored: list[tuple[int, int, ModelRecord]] = []
-    cost_scored: list[tuple[float, int, int, ModelRecord]] = []
+    cost_scored: list[tuple[float, float, int, ModelRecord]] = []
     desired_tier = role_config.tier or ROLE_DEFAULT_TIERS[role]
     active_providers = catalog.active_provider_ids()
     for record in catalog.models:
