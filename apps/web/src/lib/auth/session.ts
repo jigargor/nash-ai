@@ -82,6 +82,17 @@ export function createOAuthState(): string {
   return uint8ArrayToBase64Url(bytes);
 }
 
+export function createPkceCodeVerifier(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return uint8ArrayToBase64Url(bytes);
+}
+
+export async function derivePkceCodeChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return uint8ArrayToBase64Url(new Uint8Array(digest));
+}
+
 export async function createSessionToken(user: SessionUser): Promise<string> {
   const payload: SessionPayload = {
     sub: String(user.id),

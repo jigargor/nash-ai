@@ -37,6 +37,16 @@ def verify_signature(payload: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+async def _is_duplicate_delivery(request: Request, delivery_id: str) -> bool:
+    if not delivery_id:
+        return False
+    redis = require_app_redis(request)
+    already_seen = not await redis.set(f"webhook:delivery:{delivery_id}", "1", ex=86400, nx=True)
+    if already_seen:
+        logger.info("Duplicate webhook delivery skipped delivery_id=%s", delivery_id)
+    return already_seen
+
+
 @router.post("/github")
 async def github_webhook(request: Request) -> dict[str, bool]:
     started_at = monotonic()
@@ -61,6 +71,8 @@ async def github_webhook(request: Request) -> dict[str, bool]:
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     if event == "installation":
+        if await _is_duplicate_delivery(request, delivery_id):
+            return {"ok": True}
         try:
             installation_payload = GitHubInstallationWebhookPayload.model_validate_json(
                 payload_bytes
@@ -116,18 +128,8 @@ async def github_webhook(request: Request) -> dict[str, bool]:
 
     if pull_request_payload.action in {"opened", "synchronize"}:
         redis = require_app_redis(request)
-        # Deduplicate retried GitHub webhook deliveries at ingestion time.
-        # GitHub resends the same delivery_id on failure; the DB-level check
-        # in queue_pull_request_review happens after enqueue, so two concurrent
-        # deliveries can both slip through. A Redis key with a 24-hour TTL is
-        # the earliest safe dedup point.
-        if delivery_id:
-            already_seen = not await redis.set(
-                f"webhook:delivery:{delivery_id}", "1", ex=86400, nx=True
-            )
-            if already_seen:
-                logger.info("Duplicate webhook delivery skipped delivery_id=%s", delivery_id)
-                return {"ok": True}
+        if await _is_duplicate_delivery(request, delivery_id):
+            return {"ok": True}
         await queue_pull_request_review(redis, pull_request_payload)
     elif pull_request_payload.action == "closed":
         redis = require_app_redis(request)

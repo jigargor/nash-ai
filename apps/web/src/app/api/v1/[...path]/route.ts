@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
+import { createDashboardUserToken } from "@/lib/auth/dashboard-token";
 import { parseSessionToken } from "@/lib/auth/session";
-import { hydrateApiProxyEnvFromAncestors } from "@/lib/monorepo-env";
 
 const DEFAULT_DEV_API = "http://localhost:8000";
 
@@ -16,6 +16,7 @@ export const maxDuration = 30;
 
 /** Upstream fetch timeout — must stay below `maxDuration` (leave headroom for cookie/session work). */
 const UPSTREAM_TIMEOUT_MS = 25_000;
+const MAX_PROXY_BODY_BYTES = 1024 * 1024; // 1 MiB
 
 /**
  * Railway (and most hosts) speak HTTPS on the public URL. If `API_URL` uses `http://`,
@@ -44,7 +45,6 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   const session = await parseSessionToken(token);
   if (!session) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
-  hydrateApiProxyEnvFromAncestors();
   const apiAccessKey = process.env.API_ACCESS_KEY;
   if (!apiAccessKey) {
     return NextResponse.json({ detail: "API access key is not configured for the web proxy." }, { status: 503 });
@@ -80,14 +80,42 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   const accept = request.headers.get("accept");
   if (contentType) headers.set("Content-Type", contentType);
   if (accept) headers.set("Accept", accept);
+  let dashboardUserToken: string;
+  try {
+    dashboardUserToken = createDashboardUserToken(session.user);
+  } catch {
+    return NextResponse.json({ detail: "Dashboard user token auth is not configured." }, { status: 503 });
+  }
   headers.set("X-Api-Key", apiAccessKey);
-  headers.set("X-User-Github-Id", String(session.user.id));
+  headers.set("X-Dashboard-User-Token", dashboardUserToken);
+
+  let requestBody: ArrayBuffer | undefined;
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const contentLengthHeader = request.headers.get("content-length");
+    if (contentLengthHeader !== null) {
+      const declaredLength = Number(contentLengthHeader);
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_PROXY_BODY_BYTES) {
+        return NextResponse.json(
+          { detail: `Request body exceeds ${MAX_PROXY_BODY_BYTES} byte limit.` },
+          { status: 413 },
+        );
+      }
+    }
+
+    requestBody = await request.arrayBuffer();
+    if (requestBody.byteLength > MAX_PROXY_BODY_BYTES) {
+      return NextResponse.json(
+        { detail: `Request body exceeds ${MAX_PROXY_BODY_BYTES} byte limit.` },
+        { status: 413 },
+      );
+    }
+  }
 
   try {
     return await fetch(targetUrl, {
       method: request.method,
       headers,
-      body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
+      body: requestBody,
       cache: "no-store",
       redirect: "follow",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
@@ -114,5 +142,9 @@ export function PUT(request: Request, context: ApiProxyRouteContext): Promise<Re
 }
 
 export function DELETE(request: Request, context: ApiProxyRouteContext): Promise<Response> {
+  return proxyApiRequest(request, context);
+}
+
+export function PATCH(request: Request, context: ApiProxyRouteContext): Promise<Response> {
   return proxyApiRequest(request, context);
 }

@@ -22,6 +22,7 @@ class _FakeJob:
 class _FakeRedis:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
+        self.locks: set[str] = set()
 
     async def exists(self, *keys: object) -> int:
         """Redis EXISTS shim: no keys stored in this fake, so circuit is never open."""
@@ -30,6 +31,20 @@ class _FakeRedis:
     async def enqueue_job(self, *args: object) -> _FakeJob:
         self.calls.append(args)
         return _FakeJob(job_id=f"job-{len(self.calls)}")
+
+    async def set(
+        self,
+        key: str,
+        _value: str,
+        *,
+        ex: int | None = None,
+        nx: bool = False,
+    ) -> bool:
+        _ = ex
+        if nx and key in self.locks:
+            return False
+        self.locks.add(key)
+        return True
 
 
 def _payload(
@@ -142,6 +157,83 @@ async def test_queue_pull_request_review_skips_duplicate_active_review(
     assert total_reviews == 1
     assert len(redis.calls) == 1
     assert redis.calls[0][0] == "review_pr"
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_requeues_failed_review_for_same_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _FakeRedis()
+    payload = _payload()
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _daily_usage(*_args, **_kwargs) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, payload.installation.id)
+        installation = await session.scalar(
+            select(Installation).where(Installation.installation_id == payload.installation.id)
+        )
+        if installation is None:
+            session.add(
+                Installation(
+                    installation_id=payload.installation.id,
+                    account_login="acme",
+                    account_type="Organization",
+                )
+            )
+        existing_review = Review(
+            installation_id=payload.installation.id,
+            repo_full_name=payload.repository.full_name,
+            pr_number=payload.pull_request.number,
+            pr_head_sha=payload.pull_request.head.sha,
+            status="failed",
+            model_provider="anthropic",
+            model="claude-sonnet-4-5",
+        )
+        session.add(existing_review)
+        await session.flush()
+        existing_review_id = int(existing_review.id)
+        await session.commit()
+
+    await queue_pull_request_review(redis, payload)
+
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0] == "review_pr"
+    assert int(redis.calls[0][1]) == existing_review_id
+
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, payload.installation.id)
+        persisted_review = await session.get(Review, existing_review_id)
+        assert persisted_review is not None
+        assert persisted_review.status == "queued"
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_when_submission_lock_already_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _FakeRedis()
+    payload = _payload()
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _daily_usage(*_args, **_kwargs) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, payload)
+    await queue_pull_request_review(redis, payload)
+    assert len(redis.calls) == 1
 
 
 @pytest.mark.anyio

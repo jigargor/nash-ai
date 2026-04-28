@@ -7,6 +7,7 @@ from app.agent.snapshot import load_snapshot
 from app.config import settings
 from app.db.models import Review
 from app.queue.connection import require_app_redis
+from app.queue.idempotency import acquire_review_submission_lock
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.utils import split_repo_full_name as _split_repo_full_name
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
@@ -96,6 +97,17 @@ async def retry_review(
             )
 
         redis = require_app_redis(request)
+        lock_acquired = await acquire_review_submission_lock(
+            redis,
+            installation_id=int(review.installation_id),
+            pr_number=int(review.pr_number),
+            head_sha=review.pr_head_sha,
+        )
+        if not lock_acquired:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Review submission already in progress for this PR head",
+            )
         job = await redis.enqueue_job(
             "review_pr",
             int(review.id),

@@ -23,6 +23,7 @@ from app.agent.runner import (
     _review_config_for_fast_path_decision,
     _run_fast_path_stage,
     _run_chunked_review,
+    _load_user_provider_keys,
     _summarize_target_line_mismatch_subtypes,
     _validate_result,
     _validation_feedback,
@@ -143,6 +144,44 @@ def test_attach_debug_artifacts_includes_drop_buckets() -> None:
     assert artifacts["debate_conflict_score"] == 28
 
 
+@pytest.mark.anyio
+async def test_load_user_provider_keys_sets_user_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_user_context: list[int] = []
+
+    async def fake_set_user_context(_session: object, github_id: int) -> None:
+        seen_user_context.append(github_id)
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.execute_calls = 0
+
+        async def __aenter__(self) -> "FakeSession":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def execute(self, _stmt: object) -> object:
+            self.execute_calls += 1
+            if self.execute_calls == 1:
+                return SimpleNamespace(
+                    scalar_one_or_none=lambda: SimpleNamespace(id=42, deleted_at=None)
+                )
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(
+                    all=lambda: [SimpleNamespace(provider="openai", key_enc="encrypted")]
+                )
+            )
+
+    monkeypatch.setattr("app.agent.runner.AsyncSessionLocal", lambda: FakeSession())
+    monkeypatch.setattr("app.agent.runner.set_user_context", fake_set_user_context)
+    monkeypatch.setattr("app.agent.runner.decrypt_secret", lambda _value: "plain-openai-key")
+
+    keys = await _load_user_provider_keys(123456)
+    assert keys == {"openai": "plain-openai-key"}
+    assert seen_user_context == [123456]
+
+
 def test_repair_findings_from_files_rewrites_line_start_when_match_in_window() -> None:
     finding = _finding("a.py")
     finding.line_start = 1
@@ -201,6 +240,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
         model="claude-sonnet-4-5",
         findings=None,
         debug_artifacts={"chunking_state": {"prior": {"status": "done"}}},
+        github_review_node_id=None,
         tokens_used=None,
         cost_usd=None,
         completed_at=None,
@@ -232,6 +272,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
         "input_tokens": 800,
         "output_tokens": 200,
         "debug_artifacts": {"quality": {"final_findings_total": 0}},
+        "github_review_node_id": "PRR_kwDOExampleNode",
     }
     review_config = ReviewConfig(
         model=ReviewModelConfig(
@@ -245,6 +286,7 @@ async def test_mark_review_done_persists_runtime_model(monkeypatch: pytest.Monke
     assert review.status == "done"
     assert review.model_provider == "anthropic"
     assert review.model == "claude-3-5-haiku-latest"
+    assert review.github_review_node_id == "PRR_kwDOExampleNode"
     assert "chunking_state" in review.debug_artifacts
     assert "quality" in review.debug_artifacts
 

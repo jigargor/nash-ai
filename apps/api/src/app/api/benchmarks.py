@@ -3,11 +3,12 @@ import logging
 from decimal import Decimal
 from typing import Any
 
+from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.db.models import BenchmarkResult, BenchmarkRun, FindingOutcome, Review
+from app.db.models import BenchmarkResult, BenchmarkRun, FindingOutcome, InstallationUser, Review, User
 from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -29,11 +30,37 @@ def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
         )
 
 
-router = APIRouter(prefix="/api/v1/benchmarks", dependencies=[Depends(_verify_api_access)])
+router = APIRouter(prefix="/api/v1/admin/benchmarks", dependencies=[Depends(_verify_api_access)])
+
+
+def _require_admin_key(x_admin_api_key: str | None = Header(default=None)) -> None:
+    if not settings.admin_retry_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin benchmark endpoints are not configured",
+        )
+    if not x_admin_api_key or not hmac.compare_digest(x_admin_api_key, settings.admin_retry_api_key):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
+
+
+async def _allowed_installation_ids(current_user: CurrentDashboardUser) -> set[int]:
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(InstallationUser.installation_id)
+                .join(User, User.id == InstallationUser.user_id)
+                .where(User.github_id == current_user.github_id)
+                .where(User.deleted_at.is_(None))
+            )
+        ).scalars()
+        return {int(installation_id) for installation_id in rows}
 
 
 @router.get("/runs")
-async def list_benchmark_runs(limit: int = Query(default=20, ge=1, le=200)) -> list[dict[str, Any]]:
+async def list_benchmark_runs(
+    limit: int = Query(default=20, ge=1, le=200),
+    _: None = Depends(_require_admin_key),
+) -> list[dict[str, Any]]:
     """List recent benchmark runs with summary totals."""
     async with AsyncSessionLocal() as session:
         rows = (
@@ -62,7 +89,7 @@ async def list_benchmark_runs(limit: int = Query(default=20, ge=1, le=200)) -> l
 
 
 @router.get("/runs/{run_id}")
-async def get_benchmark_run(run_id: int) -> dict[str, Any]:
+async def get_benchmark_run(run_id: int, _: None = Depends(_require_admin_key)) -> dict[str, Any]:
     """Full results for a benchmark run including per-case breakdown."""
     async with AsyncSessionLocal() as session:
         run = await session.get(BenchmarkRun, run_id)
@@ -123,6 +150,7 @@ async def get_benchmark_run(run_id: int) -> dict[str, Any]:
 async def compare_benchmark_runs(
     run_a: int = Query(..., description="First run ID"),
     run_b: int = Query(..., description="Second run ID (baseline)"),
+    _: None = Depends(_require_admin_key),
 ) -> dict[str, Any]:
     """Side-by-side comparison of two benchmark runs."""
     async with AsyncSessionLocal() as session:
@@ -170,7 +198,10 @@ async def compare_benchmark_runs(
 # Production telemetry endpoint (lives here rather than router.py for grouping)
 # ---------------------------------------------------------------------------
 
-telemetry_router = APIRouter(prefix="/api/v1/telemetry", dependencies=[Depends(_verify_api_access)])
+telemetry_router = APIRouter(
+    prefix="/api/v1/telemetry",
+    dependencies=[Depends(_verify_api_access), Depends(get_current_dashboard_user)],
+)
 
 
 @telemetry_router.get("/cost-per-finding")
@@ -178,12 +209,27 @@ async def cost_per_finding(
     installation_id: int | None = Query(default=None),
     model: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, Any]:
     """
     Production cost-effectiveness: cost_usd / count(true-positive findings) per review.
     Joins reviews → finding_outcomes where outcome signals user acceptance.
     """
     POSITIVE_OUTCOMES = ("applied_directly", "applied_modified")
+
+    allowed_installation_ids = await _allowed_installation_ids(current_user)
+    if installation_id is not None and installation_id not in allowed_installation_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Installation not found")
+    if installation_id is None and not allowed_installation_ids:
+        return {
+            "summary": {
+                "total_cost_usd": 0.0,
+                "total_true_positives": 0,
+                "overall_cost_per_tp_usd": None,
+                "reviews_analyzed": 0,
+            },
+            "reviews": [],
+        }
 
     async with AsyncSessionLocal() as session:
         tp_subq = (
@@ -214,6 +260,8 @@ async def cost_per_finding(
         )
         if installation_id is not None:
             q = q.where(Review.installation_id == installation_id)
+        else:
+            q = q.where(Review.installation_id.in_(allowed_installation_ids))
         if model is not None:
             q = q.where(Review.model == model)
 

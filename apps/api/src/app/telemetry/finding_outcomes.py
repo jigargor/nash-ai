@@ -346,19 +346,22 @@ async def classify_pr_outcomes_for_closed_pr(
 
 async def classify_pending_outcomes_nightly(max_open_days: int = 14) -> None:
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_open_days)
-    async with AsyncSessionLocal() as session:
-        pending_rows = await session.execute(
-            select(FindingOutcome, Review)
-            .join(Review, Review.id == FindingOutcome.review_id)
-            .where(FindingOutcome.outcome == Outcome.PENDING.value)
-            .where(Review.created_at <= cutoff)
-        )
-        rows = pending_rows.all()
-
     grouped: dict[tuple[int, str, int], list[Review]] = {}
-    for _, review in rows:
-        key = (int(review.installation_id), review.repo_full_name, int(review.pr_number))
-        grouped.setdefault(key, []).append(review)
+    async with AsyncSessionLocal() as session:
+        installation_rows = await session.scalars(select(Review.installation_id).distinct())
+        installation_ids = [int(item) for item in installation_rows]
+        for installation_id in installation_ids:
+            await set_installation_context(session, installation_id)
+            pending_rows = await session.execute(
+                select(FindingOutcome, Review)
+                .join(Review, Review.id == FindingOutcome.review_id)
+                .where(Review.installation_id == installation_id)
+                .where(FindingOutcome.outcome == Outcome.PENDING.value)
+                .where(Review.created_at <= cutoff)
+            )
+            for _, review in pending_rows.all():
+                key = (int(review.installation_id), review.repo_full_name, int(review.pr_number))
+                grouped.setdefault(key, []).append(review)
 
     for (installation_id, repo_full_name, pr_number), reviews in grouped.items():
         owner, repo = repo_full_name.split("/", 1)
@@ -442,15 +445,25 @@ async def summarize_finding_outcomes(
     installation_id: int | None = None,
     repo_full_name: str | None = None,
 ) -> dict[str, object]:
+    rows: list[tuple[FindingOutcome, Review]] = []
     async with AsyncSessionLocal() as session:
         if installation_id is not None:
             await set_installation_context(session, installation_id)
-        stmt = select(FindingOutcome, Review).join(Review, Review.id == FindingOutcome.review_id)
-        if installation_id is not None:
+            stmt = select(FindingOutcome, Review).join(Review, Review.id == FindingOutcome.review_id)
             stmt = stmt.where(Review.installation_id == installation_id)
-        if repo_full_name:
-            stmt = stmt.where(Review.repo_full_name == repo_full_name)
-        rows = (await session.execute(stmt)).all()
+            if repo_full_name:
+                stmt = stmt.where(Review.repo_full_name == repo_full_name)
+            rows = list((await session.execute(stmt)).tuples().all())
+        else:
+            installation_rows = await session.scalars(select(Review.installation_id).distinct())
+            installation_ids = [int(item) for item in installation_rows]
+            for scoped_installation_id in installation_ids:
+                await set_installation_context(session, scoped_installation_id)
+                stmt = select(FindingOutcome, Review).join(Review, Review.id == FindingOutcome.review_id)
+                stmt = stmt.where(Review.installation_id == scoped_installation_id)
+                if repo_full_name:
+                    stmt = stmt.where(Review.repo_full_name == repo_full_name)
+                rows.extend((await session.execute(stmt)).tuples().all())
 
     total_classified = 0
     outcome_counts: dict[str, int] = {}

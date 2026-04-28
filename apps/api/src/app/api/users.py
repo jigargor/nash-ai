@@ -10,9 +10,10 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.config import settings
 from app.crypto import encrypt_secret
-from app.db.models import User, UserKeyAuditLog, UserProviderKey
+from app.db.models import Installation, InstallationUser, User, UserKeyAuditLog, UserProviderKey
 from app.db.session import AsyncSessionLocal, set_user_context
 
 logger = logging.getLogger(__name__)
@@ -105,8 +106,16 @@ async def _validate_api_key(provider: str, api_key: str) -> None:
 
 
 class UpsertUserRequest(BaseModel):
-    github_id: int
-    login: str
+    login: str | None = None
+    oauth_token: str | None = None
+
+    @field_validator("oauth_token")
+    @classmethod
+    def normalize_oauth_token(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class UserResponse(BaseModel):
@@ -135,27 +144,50 @@ class KeyStatusResponse(BaseModel):
     last_used_at: str | None = None
 
 
+class InstallationSyncItem(BaseModel):
+    installation_id: int
+    account_login: str
+    account_type: str
+
+
+class SyncInstallationsRequest(BaseModel):
+    installations: list[InstallationSyncItem]
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 
 @router.post("/me", response_model=UserResponse)
-async def upsert_current_user(body: UpsertUserRequest) -> UserResponse:
+async def upsert_current_user(
+    body: UpsertUserRequest,
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
+) -> UserResponse:
     """Upsert a user record on login. Called from the BFF after GitHub OAuth succeeds."""
+    login = body.login or current_user.login
+    if not login:
+        raise HTTPException(status_code=422, detail="login is required")
+    token_enc = encrypt_secret(body.oauth_token) if body.oauth_token else None
+    insert_values = {
+        "github_id": current_user.github_id,
+        "login": login,
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if token_enc is not None:
+        insert_values["token_enc"] = token_enc
+    update_values = {
+        "login": login,
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if token_enc is not None:
+        update_values["token_enc"] = token_enc
     stmt = (
         pg_insert(User)
-        .values(
-            github_id=body.github_id,
-            login=body.login,
-            updated_at=datetime.now(timezone.utc),
-        )
+        .values(**insert_values)
         .on_conflict_do_update(
             index_elements=["github_id"],
-            set_={
-                "login": body.login,
-                "updated_at": datetime.now(timezone.utc),
-            },
+            set_=update_values,
         )
         .returning(User)
     )
@@ -170,17 +202,92 @@ async def upsert_current_user(body: UpsertUserRequest) -> UserResponse:
     )
 
 
+@router.post("/me/installations-sync")
+async def sync_current_user_installations(
+    body: SyncInstallationsRequest,
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
+) -> dict[str, int]:
+    installation_ids = sorted(
+        {
+            item.installation_id
+            for item in body.installations
+            if item.installation_id > 0 and item.account_login.strip()
+        }
+    )
+
+    async with AsyncSessionLocal() as session:
+        await set_user_context(session, current_user.github_id)
+        user = (
+            await session.execute(select(User).where(User.github_id == current_user.github_id))
+        ).scalar_one_or_none()
+        if user is None or user.deleted_at is not None:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found — please log out and back in to register your account.",
+            )
+
+        if installation_ids:
+            existing_installations = {
+                int(installation.installation_id): installation
+                for installation in (
+                    (
+                        await session.execute(
+                            select(Installation).where(Installation.installation_id.in_(installation_ids))
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            }
+            for item in body.installations:
+                if item.installation_id <= 0 or not item.account_login.strip():
+                    continue
+                installation = existing_installations.get(item.installation_id)
+                if installation is None:
+                    installation = Installation(
+                        installation_id=item.installation_id,
+                        account_login=item.account_login.strip(),
+                        account_type=item.account_type.strip() or "Unknown",
+                    )
+                    session.add(installation)
+                    existing_installations[item.installation_id] = installation
+                else:
+                    installation.account_login = item.account_login.strip()
+                    installation.account_type = item.account_type.strip() or "Unknown"
+
+        existing_rows = (
+            (
+                await session.execute(
+                    select(InstallationUser).where(InstallationUser.user_id == user.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        existing_ids = {int(row.installation_id) for row in existing_rows}
+        target_ids = set(installation_ids)
+
+        for row in existing_rows:
+            if int(row.installation_id) not in target_ids:
+                await session.delete(row)
+
+        for installation_id in sorted(target_ids - existing_ids):
+            session.add(InstallationUser(installation_id=installation_id, user_id=user.id, role="member"))
+
+        await session.commit()
+
+    return {"linked_installations": len(installation_ids)}
+
+
 @router.delete("/me")
 async def delete_current_user(
-    x_user_github_id: int | None = Header(default=None),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, str]:
     """GDPR erasure: soft-delete the user. Cascade removes all provider keys via DB FK."""
-    if x_user_github_id is None:
-        raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
     async with AsyncSessionLocal() as session:
-        await set_user_context(session, x_user_github_id)
+        await set_user_context(session, current_user.github_id)
         row = (
-            await session.execute(select(User).where(User.github_id == x_user_github_id))
+            await session.execute(select(User).where(User.github_id == current_user.github_id))
         ).scalar_one_or_none()
         if row is None or row.deleted_at is not None:
             raise HTTPException(status_code=404, detail="User not found")
@@ -195,16 +302,13 @@ def _empty_key_list() -> list[KeyStatusResponse]:
 
 @router.get("/me/keys", response_model=list[KeyStatusResponse])
 async def list_user_keys(
-    x_user_github_id: int | None = Header(default=None),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[KeyStatusResponse]:
     """List which providers the user has keys stored for. Never returns key material."""
-    if x_user_github_id is None:
-        raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
-
     async with AsyncSessionLocal() as session:
-        await set_user_context(session, x_user_github_id)
+        await set_user_context(session, current_user.github_id)
         user = (
-            await session.execute(select(User).where(User.github_id == x_user_github_id))
+            await session.execute(select(User).where(User.github_id == current_user.github_id))
         ).scalar_one_or_none()
         # User row may not exist yet if they logged in before the upsert-on-login was deployed.
         # Return empty list rather than 404 — the UI will show all providers as "Not set".
@@ -241,7 +345,7 @@ async def list_user_keys(
 async def upsert_user_key(
     provider: str,
     body: UpsertKeyRequest,
-    x_user_github_id: int | None = Header(default=None),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
     validate: bool = Query(default=True),
 ) -> dict[str, str]:
     """Store (or replace) a Fernet-encrypted API key for the given provider."""
@@ -250,9 +354,6 @@ async def upsert_user_key(
             status_code=400,
             detail=f"Unsupported provider: {provider}. Must be one of {sorted(SUPPORTED_PROVIDERS)}",
         )
-    if x_user_github_id is None:
-        raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
-
     if validate:
         await _validate_api_key(provider, body.api_key)
 
@@ -260,9 +361,9 @@ async def upsert_user_key(
     now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as session:
-        await set_user_context(session, x_user_github_id)
+        await set_user_context(session, current_user.github_id)
         user = (
-            await session.execute(select(User).where(User.github_id == x_user_github_id))
+            await session.execute(select(User).where(User.github_id == current_user.github_id))
         ).scalar_one_or_none()
         if user is None or user.deleted_at is not None:
             raise HTTPException(
@@ -296,18 +397,15 @@ async def upsert_user_key(
 @router.delete("/me/keys/{provider}")
 async def delete_user_key(
     provider: str,
-    x_user_github_id: int | None = Header(default=None),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, str]:
     """Delete a stored provider key and write an audit log entry."""
     if provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
-    if x_user_github_id is None:
-        raise HTTPException(status_code=400, detail="X-User-Github-Id header required")
-
     async with AsyncSessionLocal() as session:
-        await set_user_context(session, x_user_github_id)
+        await set_user_context(session, current_user.github_id)
         user = (
-            await session.execute(select(User).where(User.github_id == x_user_github_id))
+            await session.execute(select(User).where(User.github_id == current_user.github_id))
         ).scalar_one_or_none()
         if user is None or user.deleted_at is not None:
             raise HTTPException(

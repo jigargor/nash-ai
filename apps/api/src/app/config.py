@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     log_webhook_payloads: bool = False
     admin_retry_api_key: str | None = None
     api_access_key: str | None = None
+    dashboard_user_jwt_secret: str | None = None
+    dashboard_user_jwt_audience: str = "dashboard-api"
+    dashboard_user_jwt_issuer: str = "nash-web-dashboard"
     enable_reviews: bool = True
     reviews_per_hour_limit: int = 30
     daily_token_budget_per_installation: int = 10_000_000
@@ -69,6 +72,14 @@ class Settings(BaseSettings):
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
     web_app_url: str | None = None
+    snapshot_retention_days: int = 30
+    snapshot_archive_batch_size: int = 100
+    r2_endpoint_url: str | None = None
+    r2_bucket: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_region: str = "auto"
+    r2_snapshot_prefix: str = "review-snapshots"
 
     @field_validator("github_app_id", mode="before")
     @classmethod
@@ -131,6 +142,17 @@ class Settings(BaseSettings):
         return any(
             (key or "").strip()
             for key in (self.anthropic_api_key, self.openai_api_key, self.gemini_api_key)
+        )
+
+    def has_r2_snapshot_archive_configured(self) -> bool:
+        return all(
+            (value or "").strip()
+            for value in (
+                self.r2_endpoint_url,
+                self.r2_bucket,
+                self.r2_access_key_id,
+                self.r2_secret_access_key,
+            )
         )
 
 

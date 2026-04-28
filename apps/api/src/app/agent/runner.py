@@ -24,7 +24,6 @@ from app.agent.chunking import (
     ChunkPlan,
     ChunkingPlannerConfig,
     FileClass,
-    PlannedChunk,
     plan_chunks,
 )
 from app.agent.chunked_runtime import (
@@ -64,7 +63,7 @@ from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.config import settings
 from app.crypto import decrypt_secret
 from app.db.models import Review, ReviewModelAudit, User, UserProviderKey
-from app.db.session import AsyncSessionLocal, set_installation_context
+from app.db.session import AsyncSessionLocal, set_installation_context, set_user_context
 from app.github.client import GitHubClient
 from app.github.comments import post_review
 from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
@@ -335,6 +334,7 @@ async def _load_user_provider_keys(github_id: int) -> dict[str, str]:
     from sqlalchemy import select as sa_select
 
     async with AsyncSessionLocal() as session:
+        await set_user_context(session, github_id)
         user = (
             await session.execute(sa_select(User).where(User.github_id == github_id))
         ).scalar_one_or_none()
@@ -396,7 +396,7 @@ async def _capture_context_snapshot(
             fetched_files=dict(context_bundle.fetched_files),
             chunk_plan=chunk_plan,
         )
-        await store_snapshot(payload)
+        await store_snapshot(payload, installation_id=int(context["installation_id"]))
         logger.debug("Context snapshot captured review_id=%s", context["review_id"])
     except Exception:
         logger.warning(
@@ -529,6 +529,7 @@ async def run_review(
             review_post_response = await post_review(
                 gh, owner, repo, pr_number, head_sha, final_result
             )
+            context["github_review_node_id"] = extract_review_node_id(review_post_response)
             comment_ids = extract_review_comment_ids(review_post_response)
             await seed_pending_finding_outcomes(
                 review_id=cast(int, context["review_id"]),
@@ -924,6 +925,7 @@ async def run_review(
         )
 
         review_post_response = await post_review(gh, owner, repo, pr_number, head_sha, final_result)
+        context["github_review_node_id"] = extract_review_node_id(review_post_response)
         comment_ids = extract_review_comment_ids(review_post_response)
         await seed_pending_finding_outcomes(
             review_id=cast(int, context["review_id"]),
@@ -1011,6 +1013,9 @@ async def _mark_review_done(
         review.debug_artifacts = current_artifacts or None
         review.tokens_used = int(context.get("tokens_used", 0))
         review.cost_usd = float(cost)
+        github_review_node_id = context.get("github_review_node_id")
+        if isinstance(github_review_node_id, str) and github_review_node_id.strip():
+            review.github_review_node_id = github_review_node_id.strip()
         review.completed_at = datetime.now(timezone.utc)
         await session.commit()
 
@@ -1021,6 +1026,7 @@ async def _mark_review_done(
         from sqlalchemy import select as sa_select
 
         async with AsyncSessionLocal() as key_session:
+            await set_user_context(key_session, user_github_id)
             user = (
                 await key_session.execute(sa_select(User).where(User.github_id == user_github_id))
             ).scalar_one_or_none()
@@ -1392,35 +1398,6 @@ async def _run_chunked_review(
     )
 
 
-def _chunk_repo_segments(chunk_plan: ChunkPlan, chunk: PlannedChunk) -> list[str]:
-    files = [entry.path for entry in chunk.files]
-    chunk_packages = sorted({entry.touched_package for entry in chunk.files})
-    chunk_dep_hints = sorted(
-        {hint for entry in chunk.files if (hint := entry.dependency_hint) is not None}
-    )
-    return [
-        "Full changed-file manifest:\n" + "\n".join(chunk_plan.full_manifest),
-        "Touched packages: "
-        + (", ".join(chunk_plan.touched_packages) if chunk_plan.touched_packages else "none"),
-        "Dependency hints: "
-        + (", ".join(chunk_plan.dependency_hints) if chunk_plan.dependency_hints else "none"),
-        f"Active chunk files ({len(files)}):\n" + "\n".join(files),
-        "Active chunk package scope: " + (", ".join(chunk_packages) if chunk_packages else "none"),
-        "Active chunk dependency hints: "
-        + (", ".join(chunk_dep_hints) if chunk_dep_hints else "none"),
-    ]
-
-
-def _render_chunk_diff(files_in_diff: list[FileInDiff]) -> str:
-    rendered: list[str] = []
-    for file in files_in_diff:
-        rendered.append(f"diff -- {file.path}")
-        for line in file.numbered_lines:
-            marker = {"add": "+", "del": "-", "ctx": " "}[line.kind]
-            rendered.append(f"{marker}{line.content}")
-    return "\n".join(rendered)
-
-
 async def _run_cross_chunk_synthesis(
     *,
     chunk_plan: ChunkPlan,
@@ -1458,40 +1435,6 @@ async def _run_cross_chunk_synthesis(
         model_name=synthesis_resolution.model,
         provider=synthesis_resolution.provider,
         allow_retry=False,
-    )
-
-
-def _finding_dedupe_key(finding: Finding) -> tuple[str, int, str, str, str]:
-    line_value = finding.line_end or finding.line_start
-    side = finding.side
-    normalized_title = normalize_for_match(finding.message[:120])
-    normalized_excerpt = normalize_for_match(finding.target_line_content[:240])
-    return (
-        finding.file_path,
-        line_value,
-        side,
-        normalized_title,
-        f"{finding.category}:{normalized_excerpt}",
-    )
-
-
-def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
-    merged: dict[tuple[str, int, str, str, str], Finding] = {}
-    for finding in findings:
-        key = _finding_dedupe_key(finding)
-        existing = merged.get(key)
-        if existing is None:
-            merged[key] = finding
-            continue
-        if SEVERITY_RANK[finding.severity] > SEVERITY_RANK[existing.severity]:
-            merged[key] = finding
-            continue
-        if finding.confidence > existing.confidence:
-            merged[key] = finding
-    return sorted(
-        merged.values(),
-        key=lambda item: (SEVERITY_RANK[item.severity], item.confidence),
-        reverse=True,
     )
 
 
@@ -2422,3 +2365,11 @@ def extract_review_comment_ids(review_response: dict[str, object]) -> list[int |
         raw_id = comment.get("id")
         comment_ids.append(int(raw_id) if isinstance(raw_id, int) else None)
     return comment_ids
+
+
+def extract_review_node_id(review_response: dict[str, object]) -> str | None:
+    raw_node_id = review_response.get("node_id")
+    if isinstance(raw_node_id, str):
+        normalized = raw_node_id.strip()
+        return normalized if normalized else None
+    return None

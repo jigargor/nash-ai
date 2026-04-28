@@ -85,6 +85,30 @@ class Installation(Base):
     suspended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
 
 
+class InstallationUser(Base):
+    __tablename__ = "installation_users"
+    __table_args__ = (
+        UniqueConstraint("installation_id", "user_id"),
+        Index("installation_users_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("installations.installation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'member'"))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+
+
 class RepoConfig(Base):
     __tablename__ = "repo_configs"
     __table_args__ = (UniqueConstraint("installation_id", "repo_full_name"),)
@@ -106,7 +130,10 @@ class RepoConfig(Base):
 
 class Review(Base):
     __tablename__ = "reviews"
-    __table_args__ = (Index("reviews_repo_pr", "repo_full_name", "pr_number"),)
+    __table_args__ = (
+        UniqueConstraint("installation_id", "pr_number", "pr_head_sha"),
+        Index("reviews_repo_pr", "repo_full_name", "pr_number"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
     installation_id: Mapped[int] = mapped_column(
@@ -126,6 +153,7 @@ class Review(Base):
     model: Mapped[str] = mapped_column(Text, nullable=False)
     findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     debug_artifacts: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    github_review_node_id: Mapped[str | None] = mapped_column(Text)
     tokens_used: Mapped[int | None] = mapped_column(Integer)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6))
     triggered_by_user_id: Mapped[int | None] = mapped_column(
@@ -269,11 +297,19 @@ class ReviewContextSnapshot(Base):
         unique=True,
         nullable=False,
     )
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("installations.installation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     captured_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now()
     )
+    expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    r2_object_key: Mapped[str | None] = mapped_column(Text)
     schema_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("1"))
-    snapshot_gz: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    snapshot_gz: Mapped[bytes | None] = mapped_column(LargeBinary)
 
 
 class BenchmarkResult(Base):

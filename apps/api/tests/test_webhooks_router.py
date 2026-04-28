@@ -11,6 +11,25 @@ from app.config import settings
 from app.webhooks import router as webhook_router
 
 
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+
+    async def set(
+        self,
+        key: str,
+        _value: str,
+        *,
+        ex: int | None = None,
+        nx: bool = False,
+    ) -> bool:
+        _ = ex
+        if nx and key in self.keys:
+            return False
+        self.keys.add(key)
+        return True
+
+
 def _payload_bytes(action: str = "opened") -> bytes:
     payload = {
         "action": action,
@@ -47,7 +66,7 @@ def _signature(payload: bytes) -> str:
 def test_app() -> FastAPI:
     application = FastAPI()
     application.include_router(webhook_router.router, prefix="/webhooks")
-    application.state.redis = object()
+    application.state.redis = _FakeRedis()
     return application
 
 
@@ -168,6 +187,32 @@ async def test_github_webhook_with_installation_event_syncs(
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+    assert calls == ["synced"]
+
+
+@pytest.mark.anyio
+async def test_github_webhook_skips_duplicate_installation_delivery(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_sync(_payload: object) -> None:
+        calls.append("synced")
+
+    monkeypatch.setattr(webhook_router, "sync_installation_from_webhook", fake_sync)
+
+    payload = _installation_payload_bytes(action="created")
+    headers = {
+        "X-Hub-Signature-256": _signature(payload),
+        "X-GitHub-Event": "installation",
+        "X-GitHub-Delivery": "delivery-123",
+    }
+    first = await client.post("/webhooks/github", content=payload, headers=headers)
+    second = await client.post("/webhooks/github", content=payload, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
     assert calls == ["synced"]
 
 
