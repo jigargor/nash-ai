@@ -220,7 +220,7 @@ export default function DashboardHomePage() {
                     Weekly: {combinationTotals.weeklyTokens} tokens ({formatUsd(String(combinationTotals.weeklyCost))})
                   </span>
                   <span style={{ color: "var(--text-muted)" }}>
-                    Compared against daily shared cap: {usageSummary.data?.session_cap.daily_token_budget ?? 0} tokens
+                    Compared against daily shared cap: {usageSummary.data?.cumulative_caps?.daily_token_budget ?? 0} tokens
                   </span>
                 </article>
               </div>
