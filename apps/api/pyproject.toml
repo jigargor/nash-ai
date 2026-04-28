@@ -47,11 +47,15 @@ dev = [
   "types-unidiff>=0.1.0",
   "pip-audit>=2.10.0",
 ]
+deepeval = [
+  "deepeval>=3.6.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 markers = [
   "live_github: integration test that hits the real GitHub API",
+  "live_llm: test that hits live LLM APIs",
 ]
 
 [tool.mypy]
