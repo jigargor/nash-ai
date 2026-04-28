@@ -9,10 +9,12 @@ import httpx
 import jwt
 import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api import users as users_module
+from app.api.auth import CurrentDashboardUser
 from app.config import settings
 from app.crypto import decrypt_secret
 from app.db.models import Installation, InstallationUser, User, UserProviderKey
@@ -91,6 +93,111 @@ async def _seed_user(github_id: int, login: str = "testuser") -> int:
         user_id = (await session.execute(stmt)).scalar_one()
         await session.commit()
     return int(user_id)
+
+
+@pytest.mark.anyio
+async def test_verify_api_access_rejects_missing_key_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "api_access_key", "required-key")
+    with pytest.raises(HTTPException) as exc_info:
+        users_module._verify_api_access(None)
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_verify_api_access_accepts_matching_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "api_access_key", "required-key")
+    users_module._verify_api_access("required-key")
+
+
+@pytest.mark.anyio
+async def test_resolve_user_not_found_raises_404() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module._resolve_user(987654321)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_resolve_user_deleted_raises_404() -> None:
+    github_id = _rand_github_id()
+    await _seed_user(github_id, login="deleted-user")
+    async with AsyncSessionLocal() as session:
+        user = (
+            await session.execute(select(User).where(User.github_id == github_id))
+        ).scalar_one()
+        user.deleted_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module._resolve_user(github_id)
+    assert exc_info.value.status_code == 404
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+
+
+class _FakeHttpxClient:
+    def __init__(self, response_status: int | None = None, raise_exc: Exception | None = None):
+        self._response_status = response_status
+        self._raise_exc = raise_exc
+
+    async def __aenter__(self) -> "_FakeHttpxClient":
+        return self
+
+    async def __aexit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        return None
+
+    async def get(self, *_args: object, **_kwargs: object) -> _FakeResponse:
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return _FakeResponse(self._response_status or 200)
+
+
+@pytest.mark.anyio
+async def test_validate_api_key_anthropic_401_maps_to_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(users_module.httpx, "AsyncClient", lambda: _FakeHttpxClient(401))
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module._validate_api_key("anthropic", "bad-key")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_validate_api_key_openai_401_maps_to_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(users_module.httpx, "AsyncClient", lambda: _FakeHttpxClient(401))
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module._validate_api_key("openai", "bad-key")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_validate_api_key_timeout_maps_to_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        users_module.httpx,
+        "AsyncClient",
+        lambda: _FakeHttpxClient(raise_exc=TimeoutError()),
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module._validate_api_key("gemini", "slow-key")
+    assert exc_info.value.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_validate_api_key_network_failure_maps_to_422(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        users_module.httpx,
+        "AsyncClient",
+        lambda: _FakeHttpxClient(raise_exc=RuntimeError("boom")),
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module._validate_api_key("openai", "bad-key")
+    assert exc_info.value.status_code == 422
 
 
 @pytest.mark.anyio
@@ -236,6 +343,117 @@ async def test_sync_user_installations_upserts_membership(client: httpx.AsyncCli
 
 
 @pytest.mark.anyio
+async def test_sync_user_installations_missing_user_returns_404(client: httpx.AsyncClient) -> None:
+    github_id = _rand_github_id()
+    response = await client.post(
+        "/api/v1/users/me/installations-sync",
+        json={"installations": []},
+        headers=_auth_headers_for_user(github_id, login="missing-user"),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_sync_user_installations_removes_stale_memberships(client: httpx.AsyncClient) -> None:
+    github_id = _rand_github_id()
+    user_id = await _seed_user(github_id, login="sync-prune-user")
+    old_installation_id = int(str(uuid4().int)[:9])
+    new_installation_id = int(str(uuid4().int)[9:18])
+
+    async with AsyncSessionLocal() as session:
+        session.add(Installation(installation_id=old_installation_id, account_login="acme-old", account_type="Org"))
+        session.add(InstallationUser(installation_id=old_installation_id, user_id=user_id, role="member"))
+        await session.commit()
+
+    response = await client.post(
+        "/api/v1/users/me/installations-sync",
+        json={
+            "installations": [
+                {
+                    "installation_id": new_installation_id,
+                    "account_login": "acme-new",
+                    "account_type": "Organization",
+                }
+            ]
+        },
+        headers=_auth_headers_for_user(github_id, login="sync-prune-user"),
+    )
+    assert response.status_code == 200
+
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(select(InstallationUser).where(InstallationUser.user_id == user_id))
+        ).scalars().all()
+        installation_ids = {int(row.installation_id) for row in rows}
+        assert old_installation_id not in installation_ids
+        assert new_installation_id in installation_ids
+
+
+@pytest.mark.anyio
+async def test_sync_installations_direct_covers_existing_installation_update() -> None:
+    github_id = _rand_github_id()
+    user_id = await _seed_user(github_id, login="direct-sync")
+    installation_id = int(str(uuid4().int)[:9])
+    async with AsyncSessionLocal() as session:
+        session.add(
+            Installation(
+                installation_id=installation_id,
+                account_login="acme-old-login",
+                account_type="User",
+            )
+        )
+        session.add(InstallationUser(installation_id=installation_id, user_id=user_id, role="member"))
+        await session.commit()
+
+    result = await users_module.sync_current_user_installations(
+        users_module.SyncInstallationsRequest(
+            installations=[
+                users_module.InstallationSyncItem(
+                    installation_id=installation_id,
+                    account_login="acme-new-login",
+                    account_type="Organization",
+                )
+            ]
+        ),
+        CurrentDashboardUser(github_id=github_id, login="direct-sync"),
+    )
+    assert result["linked_installations"] == 1
+
+    async with AsyncSessionLocal() as session:
+        installation = (
+            await session.execute(
+                select(Installation).where(Installation.installation_id == installation_id)
+            )
+        ).scalar_one()
+        assert installation.account_login == "acme-new-login"
+        assert installation.account_type == "Organization"
+
+
+@pytest.mark.anyio
+async def test_sync_installations_direct_ignores_invalid_entries() -> None:
+    github_id = _rand_github_id()
+    await _seed_user(github_id, login="direct-sync-invalid")
+    result = await users_module.sync_current_user_installations(
+        users_module.SyncInstallationsRequest(
+            installations=[
+                users_module.InstallationSyncItem(
+                    installation_id=-1,
+                    account_login="invalid",
+                    account_type="Organization",
+                ),
+                users_module.InstallationSyncItem(
+                    installation_id=0,
+                    account_login="",
+                    account_type="Organization",
+                ),
+            ]
+        ),
+        CurrentDashboardUser(github_id=github_id, login="direct-sync-invalid"),
+    )
+    assert result["linked_installations"] == 0
+
+
+@pytest.mark.anyio
 async def test_list_user_keys_ignores_spoofed_header_identity(client: httpx.AsyncClient) -> None:
     token_user_id = _rand_github_id()
     spoofed_header_user_id = _rand_github_id()
@@ -263,6 +481,16 @@ async def test_list_user_keys_ignores_spoofed_header_identity(client: httpx.Asyn
     assert response.status_code == 200
     result = {item["provider"]: item for item in response.json()}
     assert result["anthropic"]["has_key"] is True
+
+
+@pytest.mark.anyio
+async def test_list_user_keys_missing_user_returns_empty_list(client: httpx.AsyncClient) -> None:
+    github_id = _rand_github_id()
+    response = await client.get("/api/v1/users/me/keys", headers=_auth_headers_for_user(github_id))
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 3
+    assert all(item["has_key"] is False for item in items)
 
 
 @pytest.mark.anyio
@@ -306,6 +534,40 @@ async def test_upsert_user_key_uses_token_subject_not_spoofed_header(
 
 
 @pytest.mark.anyio
+async def test_upsert_user_key_unsupported_provider_returns_400(client: httpx.AsyncClient) -> None:
+    github_id = _rand_github_id()
+    await _seed_user(github_id)
+    response = await client.put(
+        "/api/v1/users/me/keys/notreal?validate=false",
+        json={"api_key": "sk-test-key-long-enough-here"},
+        headers=_auth_headers_for_user(github_id),
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_upsert_user_key_direct_create_then_update() -> None:
+    github_id = _rand_github_id()
+    await _seed_user(github_id, login="direct-key-user")
+
+    created = await users_module.upsert_user_key(
+        "openai",
+        users_module.UpsertKeyRequest(api_key="sk-direct-create-key-long-enough-123"),
+        CurrentDashboardUser(github_id=github_id, login="direct-key-user"),
+        validate=False,
+    )
+    assert "created" in created["detail"]
+
+    updated = await users_module.upsert_user_key(
+        "openai",
+        users_module.UpsertKeyRequest(api_key="sk-direct-update-key-long-enough-456"),
+        CurrentDashboardUser(github_id=github_id, login="direct-key-user"),
+        validate=False,
+    )
+    assert "updated" in updated["detail"]
+
+
+@pytest.mark.anyio
 async def test_upsert_and_delete_user_key_happy_path(client: httpx.AsyncClient) -> None:
     github_id = _rand_github_id()
     user_id = await _seed_user(github_id)
@@ -336,6 +598,56 @@ async def test_upsert_and_delete_user_key_happy_path(client: httpx.AsyncClient) 
 
 
 @pytest.mark.anyio
+async def test_delete_user_key_not_found_returns_404(client: httpx.AsyncClient) -> None:
+    github_id = _rand_github_id()
+    await _seed_user(github_id)
+    response = await client.delete(
+        "/api/v1/users/me/keys/openai",
+        headers=_auth_headers_for_user(github_id),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_delete_user_key_direct_unsupported_provider_400() -> None:
+    github_id = _rand_github_id()
+    await _seed_user(github_id, login="unsupported-delete-user")
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module.delete_user_key(
+            "notreal",
+            CurrentDashboardUser(github_id=github_id, login="unsupported-delete-user"),
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_delete_user_key_direct_missing_user_404() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module.delete_user_key(
+            "openai",
+            CurrentDashboardUser(github_id=_rand_github_id(), login="missing-user"),
+        )
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_delete_user_key_direct_happy_path() -> None:
+    github_id = _rand_github_id()
+    await _seed_user(github_id, login="delete-key-user")
+    await users_module.upsert_user_key(
+        "anthropic",
+        users_module.UpsertKeyRequest(api_key="sk-delete-key-long-enough-123456"),
+        CurrentDashboardUser(github_id=github_id, login="delete-key-user"),
+        validate=False,
+    )
+    result = await users_module.delete_user_key(
+        "anthropic",
+        CurrentDashboardUser(github_id=github_id, login="delete-key-user"),
+    )
+    assert "deleted" in result["detail"]
+
+
+@pytest.mark.anyio
 async def test_delete_current_user_soft_deletes(client: httpx.AsyncClient) -> None:
     github_id = _rand_github_id()
     await _seed_user(github_id)
@@ -345,6 +657,15 @@ async def test_delete_current_user_soft_deletes(client: httpx.AsyncClient) -> No
 
     response_again = await client.delete("/api/v1/users/me", headers=_auth_headers_for_user(github_id))
     assert response_again.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_delete_current_user_direct_missing_404() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await users_module.delete_current_user(
+            CurrentDashboardUser(github_id=_rand_github_id(), login="missing-delete-user")
+        )
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.anyio
