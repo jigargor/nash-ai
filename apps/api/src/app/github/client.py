@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 JsonDict = dict[str, Any]
 
 _TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=2.0)
+_LIMITS = httpx.Limits(max_connections=30, max_keepalive_connections=15, keepalive_expiry=30.0)
 _RETRYABLE_STATUS = {403, 429, 500, 502, 503, 504}
 _MAX_RETRIES = 3
 _MAX_PAGINATION_PAGES = 100
@@ -39,6 +40,7 @@ async def _request_with_retry(
     url: str,
     headers: dict[str, str],
     *,
+    client: httpx.AsyncClient | None = None,
     params: dict[str, Any] | None = None,
     json: JsonDict | None = None,
 ) -> httpx.Response:
@@ -47,21 +49,30 @@ async def _request_with_retry(
     GitHub secondary rate limits return 403 with Retry-After; primary rate
     limits return 429.  Transient 5xx also deserve a retry.
     """
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        for attempt in range(_MAX_RETRIES + 1):
-            response = await client.request(method, url, headers=headers, params=params, json=json)
-            if response.status_code == 403 and "Retry-After" not in response.headers:
-                response.raise_for_status()
-            if response.status_code not in _RETRYABLE_STATUS:
-                response.raise_for_status()
-                return response
-            if attempt == _MAX_RETRIES:
-                response.raise_for_status()
-            retry_after = _parse_retry_after_seconds(response.headers.get("Retry-After", ""))
-            # Use secrets for jitter to avoid weak RNG usage in retry backoff paths.
-            jitter = secrets.randbelow(1_000_000) / 1_000_000
-            delay = retry_after if retry_after > 0 else (2**attempt + jitter)
-            await asyncio.sleep(min(delay, 60))
+    if client is None:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, limits=_LIMITS) as ephemeral_client:
+            return await _request_with_retry(
+                method,
+                url,
+                headers,
+                client=ephemeral_client,
+                params=params,
+                json=json,
+            )
+    for attempt in range(_MAX_RETRIES + 1):
+        response = await client.request(method, url, headers=headers, params=params, json=json)
+        if response.status_code == 403 and "Retry-After" not in response.headers:
+            response.raise_for_status()
+        if response.status_code not in _RETRYABLE_STATUS:
+            response.raise_for_status()
+            return response
+        if attempt == _MAX_RETRIES:
+            response.raise_for_status()
+        retry_after = _parse_retry_after_seconds(response.headers.get("Retry-After", ""))
+        # Use secrets for jitter to avoid weak RNG usage in retry backoff paths.
+        jitter = secrets.randbelow(1_000_000) / 1_000_000
+        delay = retry_after if retry_after > 0 else (2**attempt + jitter)
+        await asyncio.sleep(min(delay, 60))
     raise RuntimeError("unreachable")  # pragma: no cover
 
 
@@ -82,17 +93,24 @@ def _parse_retry_after_seconds(retry_after_raw: str) -> float:
 
 
 class GitHubClient:
-    def __init__(self, token: str):
+    def __init__(self, token: str, *, client: httpx.AsyncClient | None = None):
         self._headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+        # Reuse one HTTP client per GitHubClient instance to amortize TCP/TLS setup.
+        self._client = client or httpx.AsyncClient(timeout=_TIMEOUT, limits=_LIMITS)
+        self._owns_client = client is None
 
     @classmethod
     async def for_installation(cls, installation_id: int) -> "GitHubClient":
         token = await get_installation_token(installation_id)
         return cls(token)
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
 
     # ------------------------------------------------------------------
     # Pagination helper
@@ -113,7 +131,13 @@ class GitHubClient:
                 break
             visited_urls.add(next_url)
             page_count += 1
-            response = await _request_with_retry("GET", next_url, self._headers, params=next_params)
+            response = await _request_with_retry(
+                "GET",
+                next_url,
+                self._headers,
+                client=self._client,
+                params=next_params,
+            )
             payload = response.json()
             if not isinstance(payload, list):
                 logger.warning(
@@ -152,7 +176,10 @@ class GitHubClient:
     async def get_pull_request_diff(self, owner: str, repo: str, pr_number: int) -> str:
         headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
         response = await _request_with_retry(
-            "GET", f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}", headers=headers
+            "GET",
+            f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}",
+            headers=headers,
+            client=self._client,
         )
         return response.text
 
@@ -194,6 +221,7 @@ class GitHubClient:
             "GET",
             f"{BASE}/repos/{owner}/{repo}/commits",
             self._headers,
+            client=self._client,
             params={"path": path, "per_page": 10},
         )
         payload = response.json()
@@ -216,6 +244,7 @@ class GitHubClient:
             "GET",
             f"{BASE}/repos/{owner}/{repo}/commits",
             self._headers,
+            client=self._client,
             params=params,
         )
         payload = response.json()
@@ -297,6 +326,7 @@ class GitHubClient:
                 "GET",
                 f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}/threads",
                 self._headers,
+                client=self._client,
                 params={"per_page": 100},
             )
         except httpx.HTTPStatusError:
@@ -380,14 +410,26 @@ class GitHubClient:
     # ------------------------------------------------------------------
 
     async def get_json(self, path: str, params: dict[str, str | int] | None = None) -> JsonDict:
-        response = await _request_with_retry("GET", f"{BASE}{path}", self._headers, params=params)
+        response = await _request_with_retry(
+            "GET",
+            f"{BASE}{path}",
+            self._headers,
+            client=self._client,
+            params=params,
+        )
         data = response.json()
         if not isinstance(data, dict):
             return {}
         return cast(JsonDict, data)
 
     async def post_json(self, path: str, payload: JsonDict) -> JsonDict:
-        response = await _request_with_retry("POST", f"{BASE}{path}", self._headers, json=payload)
+        response = await _request_with_retry(
+            "POST",
+            f"{BASE}{path}",
+            self._headers,
+            client=self._client,
+            json=payload,
+        )
         data = response.json()
         if not isinstance(data, dict):
             return {}
