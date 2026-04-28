@@ -13,7 +13,6 @@ from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 import redis.exceptions as redis_exc
-from pydantic import ValidationError
 from redis.asyncio import Redis
 
 from app.agent.acknowledgments import extract_todo_fixme_markers
@@ -27,12 +26,15 @@ from app.agent.chunking import (
     plan_chunks,
 )
 from app.agent.chunked_runtime import (
+    chunk_findings_from_state,
     chunk_repo_segments,
+    chunk_summary_from_state,
     chunk_status,
     load_chunk_state,
     merge_chunk_state_with_plan,
     persist_chunk_state,
     render_chunk_diff,
+    set_chunk_state,
 )
 from app.agent.context_builder import (
     ContextBundle,
@@ -1236,8 +1238,8 @@ async def _run_chunked_review(
             elapsed_budget_exhausted = True
             break
         if chunk_status(chunk_state, chunk.chunk_id) == "done":
-            structured_findings.extend(_chunk_findings_from_state(chunk_state, chunk.chunk_id))
-            chunk_summaries.append(_chunk_summary_from_state(chunk_state, chunk.chunk_id))
+            structured_findings.extend(chunk_findings_from_state(chunk_state, chunk.chunk_id))
+            chunk_summaries.append(chunk_summary_from_state(chunk_state, chunk.chunk_id))
             continue
 
         chunk_files = [entry.file_in_diff for entry in chunk.files]
@@ -1279,7 +1281,7 @@ async def _run_chunked_review(
             prompt_budget_exhausted = True
             break
 
-        _set_chunk_state(chunk_state, chunk.chunk_id, status="running")
+        set_chunk_state(chunk_state, chunk.chunk_id, status="running")
         await persist_chunk_state(context, chunk_state)
         chunk_stage_started_at = monotonic()
         chunk_token_snapshot = _token_snapshot(context)
@@ -1332,7 +1334,7 @@ async def _run_chunked_review(
             )
             structured_findings.extend(postprocessed_chunk.findings)
             chunk_summaries.append(chunk_result.summary)
-            _set_chunk_state(
+            set_chunk_state(
                 chunk_state,
                 chunk.chunk_id,
                 status="done",
@@ -1341,7 +1343,7 @@ async def _run_chunked_review(
                 estimated_prompt_tokens=chunk.estimated_prompt_tokens,
             )
         except Exception as exc:
-            _set_chunk_state(chunk_state, chunk.chunk_id, status="failed", error=str(exc))
+            set_chunk_state(chunk_state, chunk.chunk_id, status="failed", error=str(exc))
             await persist_chunk_state(context, chunk_state)
             logger.warning(
                 "Chunk review failed and will be skipped chunk_id=%s owner=%s repo=%s pr=%s err=%s",
@@ -1436,171 +1438,6 @@ async def _run_cross_chunk_synthesis(
         provider=synthesis_resolution.provider,
         allow_retry=False,
     )
-
-
-def _attach_anchor_metadata(
-    findings: list[Finding], files_in_diff: list[FileInDiff]
-) -> list[Finding]:
-    index = _build_diff_anchor_index(files_in_diff)
-    updated: list[Finding] = []
-    for finding in findings:
-        anchor = index.get((finding.file_path, finding.line_start))
-        if anchor is None:
-            updated.append(finding)
-            continue
-        new_line_no = anchor["new_line_no"]
-        old_line_no = anchor["old_line_no"]
-        hunk_id = anchor["hunk_id"]
-        finding.side = "RIGHT" if new_line_no is not None else "LEFT"
-        finding.start_side = finding.side
-        finding.old_line_no = old_line_no
-        finding.new_line_no = new_line_no
-        finding.patch_hunk = hunk_id
-        updated.append(finding)
-    return updated
-
-
-def _build_diff_anchor_index(
-    files_in_diff: list[FileInDiff],
-) -> dict[tuple[str, int], DiffAnchorMetadata]:
-    index: dict[tuple[str, int], DiffAnchorMetadata] = {}
-    for file in files_in_diff:
-        hunk_id = 0
-        previous_line = -1
-        for numbered in file.numbered_lines:
-            anchor = (
-                numbered.new_line_no if numbered.new_line_no is not None else numbered.old_line_no
-            )
-            if anchor is None:
-                continue
-            if previous_line != -1 and anchor > previous_line + 1:
-                hunk_id += 1
-            key = (file.path, anchor)
-            index[key] = {
-                "new_line_no": numbered.new_line_no,
-                "old_line_no": numbered.old_line_no,
-                "hunk_id": f"{file.path}:hunk:{hunk_id}",
-            }
-            previous_line = anchor
-    return index
-
-
-def _filter_findings_with_valid_anchors(
-    findings: list[Finding], files_in_diff: list[FileInDiff]
-) -> list[Finding]:
-    allowed = _build_diff_anchor_index(files_in_diff)
-    filtered: list[Finding] = []
-    for finding in findings:
-        anchor_line = finding.line_end or finding.line_start
-        if (finding.file_path, anchor_line) not in allowed:
-            continue
-        filtered.append(finding)
-    return filtered
-
-
-def _chunk_state_key(context: dict[str, Any]) -> str:
-    payload = {
-        "repo": context["repo"],
-        "pr_number": context["pr_number"],
-        "head_sha": context["head_sha"],
-        "config_hash": context.get("chunking_config_hash", "default"),
-    }
-    digest = sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-    return f"chunking:{digest}"
-
-
-async def _load_chunk_state(context: dict[str, Any]) -> dict[str, dict[str, object]]:
-    installation_id = cast(int, context["installation_id"])
-    review_id = cast(int, context["review_id"])
-    async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None or not review.debug_artifacts:
-            return {}
-        chunking_state = review.debug_artifacts.get("chunking_state")
-        if not isinstance(chunking_state, dict):
-            return {}
-        state = chunking_state.get(_chunk_state_key(context))
-        if not isinstance(state, dict):
-            return {}
-        return cast(dict[str, dict[str, object]], state)
-
-
-def _merge_chunk_state_with_plan(
-    existing: dict[str, dict[str, object]], plan: ChunkPlan
-) -> dict[str, dict[str, object]]:
-    merged = dict(existing)
-    for chunk in plan.chunks:
-        if chunk.chunk_id not in merged:
-            merged[chunk.chunk_id] = {"status": "pending", "findings": [], "summary": ""}
-    return merged
-
-
-def _chunk_status(state: dict[str, dict[str, object]], chunk_id: str) -> str:
-    chunk_state = state.get(chunk_id, {})
-    status = chunk_state.get("status")
-    return str(status) if isinstance(status, str) else "pending"
-
-
-def _chunk_findings_from_state(state: dict[str, dict[str, object]], chunk_id: str) -> list[Finding]:
-    chunk_state = state.get(chunk_id, {})
-    findings_raw = chunk_state.get("findings")
-    if not isinstance(findings_raw, list):
-        return []
-    findings: list[Finding] = []
-    for entry in findings_raw:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            findings.append(Finding.model_validate(entry))
-        except ValidationError:
-            continue
-    return findings
-
-
-def _chunk_summary_from_state(state: dict[str, dict[str, object]], chunk_id: str) -> str:
-    summary = state.get(chunk_id, {}).get("summary")
-    return str(summary) if isinstance(summary, str) else ""
-
-
-def _set_chunk_state(
-    state: dict[str, dict[str, object]],
-    chunk_id: str,
-    *,
-    status: str,
-    findings: list[dict[str, object]] | None = None,
-    summary: str | None = None,
-    estimated_prompt_tokens: int | None = None,
-    error: str | None = None,
-) -> None:
-    chunk_state = state.setdefault(chunk_id, {})
-    chunk_state["status"] = status
-    if findings is not None:
-        chunk_state["findings"] = findings
-    if summary is not None:
-        chunk_state["summary"] = summary
-    if estimated_prompt_tokens is not None:
-        chunk_state["estimated_prompt_tokens"] = estimated_prompt_tokens
-    if error is not None:
-        chunk_state["error"] = error
-
-
-async def _persist_chunk_state(
-    context: dict[str, Any], chunk_state: dict[str, dict[str, object]]
-) -> None:
-    installation_id = cast(int, context["installation_id"])
-    review_id = cast(int, context["review_id"])
-    async with AsyncSessionLocal() as session:
-        await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None:
-            return
-        debug_artifacts = dict(review.debug_artifacts or {})
-        chunking_state = dict(debug_artifacts.get("chunking_state") or {})
-        chunking_state[_chunk_state_key(context)] = chunk_state
-        debug_artifacts["chunking_state"] = chunking_state
-        review.debug_artifacts = debug_artifacts
-        await session.commit()
 
 
 def _filter_diff_files(

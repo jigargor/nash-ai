@@ -25,6 +25,10 @@ function modelLabel(provider?: string | null, model?: string | null): string {
   return `${provider ?? "provider"} / ${model ?? "model"}`;
 }
 
+function isPositiveNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && value > 0;
+}
+
 export default function ReviewsPage() {
   const installations = useInstallations();
   const [installationId, setInstallationId] = useState<number | undefined>(undefined);
@@ -155,22 +159,24 @@ export default function ReviewsPage() {
                     <span className="review-hover-key">Model</span>
                     <span className="review-hover-value">{modelLabel(review.model_provider, review.model)}</span>
                   </span>
-                  <span className="review-hover-row">
-                    <span className="review-hover-key">Tokens</span>
-                    <span className="review-hover-value">{review.tokens_used ?? 0}</span>
-                  </span>
-                  <span className="review-hover-row">
-                    <span className="review-hover-key">Files changed</span>
-                    <span className="review-hover-value">
-                      {typeof review.files_changed === "number" ? review.files_changed : "—"}
+                  {isPositiveNumber(review.tokens_used) ? (
+                    <span className="review-hover-row">
+                      <span className="review-hover-key">Tokens</span>
+                      <span className="review-hover-value">{review.tokens_used}</span>
                     </span>
-                  </span>
-                  <span className="review-hover-row">
-                    <span className="review-hover-key">LOC changed</span>
-                    <span className="review-hover-value">
-                      {typeof review.lines_changed === "number" ? review.lines_changed : "—"}
+                  ) : null}
+                  {isPositiveNumber(review.files_changed) ? (
+                    <span className="review-hover-row">
+                      <span className="review-hover-key">Files changed</span>
+                      <span className="review-hover-value">{review.files_changed}</span>
                     </span>
-                  </span>
+                  ) : null}
+                  {isPositiveNumber(review.lines_changed) ? (
+                    <span className="review-hover-row">
+                      <span className="review-hover-key">LOC changed</span>
+                      <span className="review-hover-value">{review.lines_changed}</span>
+                    </span>
+                  ) : null}
                 </span>
               </Link>
             ))}

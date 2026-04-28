@@ -2,7 +2,10 @@ import json
 from hashlib import sha256
 from typing import Any, cast
 
+from pydantic import ValidationError
+
 from app.agent.chunking import ChunkPlan, PlannedChunk
+from app.agent.schema import Finding
 from app.db.models import Review
 from app.db.session import AsyncSessionLocal, set_installation_context
 
@@ -78,6 +81,49 @@ def chunk_status(state: dict[str, dict[str, object]], chunk_id: str) -> str:
     chunk_state = state.get(chunk_id, {})
     status = chunk_state.get("status")
     return str(status) if isinstance(status, str) else "pending"
+
+
+def chunk_findings_from_state(state: dict[str, dict[str, object]], chunk_id: str) -> list[Finding]:
+    chunk_state = state.get(chunk_id, {})
+    findings_raw = chunk_state.get("findings")
+    if not isinstance(findings_raw, list):
+        return []
+    findings: list[Finding] = []
+    for entry in findings_raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            findings.append(Finding.model_validate(entry))
+        except ValidationError:
+            continue
+    return findings
+
+
+def chunk_summary_from_state(state: dict[str, dict[str, object]], chunk_id: str) -> str:
+    summary = state.get(chunk_id, {}).get("summary")
+    return str(summary) if isinstance(summary, str) else ""
+
+
+def set_chunk_state(
+    state: dict[str, dict[str, object]],
+    chunk_id: str,
+    *,
+    status: str,
+    findings: list[dict[str, object]] | None = None,
+    summary: str | None = None,
+    estimated_prompt_tokens: int | None = None,
+    error: str | None = None,
+) -> None:
+    chunk_state = state.setdefault(chunk_id, {})
+    chunk_state["status"] = status
+    if findings is not None:
+        chunk_state["findings"] = findings
+    if summary is not None:
+        chunk_state["summary"] = summary
+    if estimated_prompt_tokens is not None:
+        chunk_state["estimated_prompt_tokens"] = estimated_prompt_tokens
+    if error is not None:
+        chunk_state["error"] = error
 
 
 async def persist_chunk_state(

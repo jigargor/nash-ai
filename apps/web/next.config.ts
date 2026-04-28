@@ -23,6 +23,59 @@ loadEnvConfig(
   process.env.NODE_ENV !== "production",
 );
 
+/**
+ * CSP `form-action` applies to form submission navigations, **including redirect targets**. The
+ * login POST returns 307 → `https://github.com/login/oauth/authorize`, so `'self'` alone blocks
+ * the OAuth handoff. We always allow GitHub plus optional origins from WEB_APP_URL (www/apex, etc.).
+ */
+function expandWwwApexOrigins(canonicalInput: string): string[] {
+  let url: URL;
+  try {
+    url = new URL(canonicalInput);
+  } catch {
+    return [];
+  }
+  const host = url.hostname;
+  const port = url.port ? `:${url.port}` : "";
+  const base = (h: string) => `${url.protocol}//${h}${port}`;
+  const out = new Set<string>([base(host)]);
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    /^\d+\.\d+\.\d+\.\d+$/.test(host) ||
+    host.endsWith(".vercel.app")
+  ) {
+    return [...out];
+  }
+  if (host.startsWith("www.")) {
+    out.add(base(host.slice(4)));
+  } else {
+    out.add(base(`www.${host}`));
+  }
+  return [...out];
+}
+
+function buildFormActionDirective(): string {
+  const origins = new Set<string>(["https://github.com"]);
+
+  const tokens = [
+    process.env.WEB_APP_URL,
+    process.env.NEXT_PUBLIC_WEB_APP_URL,
+    process.env.CSP_FORM_ACTION_EXTRA,
+    process.env.VERCEL === "1" && process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "",
+  ]
+    .filter(Boolean)
+    .flatMap((s) => String(s).trim().split(/\s+/));
+
+  for (const token of tokens) {
+    for (const o of expandWwwApexOrigins(token)) {
+      if (o) origins.add(o);
+    }
+  }
+
+  return `form-action 'self' ${[...origins].sort().join(" ")}`;
+}
+
 // default-src alone blocks inline script/style that React/Next hydration relies on.
 // React + Next dev tooling (e.g. Turbopack, stack reconstruction) uses eval(); never in production bundles.
 const isDev = process.env.NODE_ENV !== "production";
@@ -33,7 +86,7 @@ const scriptSrc = isDev
 const csp = [
   "default-src 'self'",
   "base-uri 'self'",
-  "form-action 'self'",
+  buildFormActionDirective(),
   "frame-ancestors 'none'",
   "img-src 'self' data: https:",
   "font-src 'self' data:",
