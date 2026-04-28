@@ -10,6 +10,7 @@ from app.agent.external.github_public import (
     list_repo_files,
     resolve_repo_ref,
 )
+from app.agent.external.analyzer import analyze_file_content
 from app.agent.external.prepass import run_prepass
 from app.agent.external.planner import recommended_model_distribution, recommended_team_size
 from app.agent.external.sharding import assign_shards
@@ -135,45 +136,6 @@ async def run_external_eval_prepass(*, eval_id: int, redis: Any | None = None) -
             await redis.enqueue_job("external_eval_shard", int(shard_row.id))
 
 
-def _finding_from_path(path: str, sample: str) -> ExternalCriticalFinding | None:
-    lower_path = path.lower()
-    lower_sample = sample.lower()
-    if "eval(" in lower_sample and lower_path.endswith((".js", ".ts", ".py")):
-        return {
-            "category": "security",
-            "severity": "high",
-            "title": "Potential code execution sink",
-            "message": "Dynamic evaluation call detected in source file; review for injection risks.",
-            "file_path": path,
-            "line_start": None,
-            "line_end": None,
-            "evidence": {"pattern": "eval(", "excerpt": lower_sample[:180]},
-        }
-    if "password" in lower_sample and "hardcod" in lower_sample:
-        return {
-            "category": "security",
-            "severity": "critical",
-            "title": "Potential hardcoded credential",
-            "message": "Possible hardcoded credential marker detected in repository file.",
-            "file_path": path,
-            "line_start": None,
-            "line_end": None,
-            "evidence": {"pattern": "hardcoded password marker", "excerpt": lower_sample[:180]},
-        }
-    if "n+1" in lower_sample or "select *" in lower_sample:
-        return {
-            "category": "performance",
-            "severity": "high",
-            "title": "Potential query performance hotspot",
-            "message": "Potential expensive query behavior detected; validate indexing/query strategy.",
-            "file_path": path,
-            "line_start": None,
-            "line_end": None,
-            "evidence": {"pattern": "query hotspot", "excerpt": lower_sample[:180]},
-        }
-    return None
-
-
 async def run_external_eval_shard(*, shard_id: int, redis: Any | None = None) -> None:
     async with AsyncSessionLocal() as session:
         shard = await session.get(ExternalEvaluationShard, shard_id)
@@ -236,9 +198,20 @@ async def run_external_eval_shard(*, shard_id: int, redis: Any | None = None) ->
                 sample = await fetch_file_sample(repo_ref, raw_path, max_bytes=6000)
                 if not sample:
                     continue
-                finding = _finding_from_path(raw_path, sample)
-                if finding and is_critical_finding(finding):
-                    findings.append(finding)
+                analyzed = analyze_file_content(raw_path, sample)
+                for candidate in analyzed:
+                    finding: ExternalCriticalFinding = {
+                        "category": candidate.category,
+                        "severity": candidate.severity,
+                        "title": candidate.title,
+                        "message": candidate.message,
+                        "file_path": candidate.file_path,
+                        "line_start": candidate.line_start,
+                        "line_end": candidate.line_end,
+                        "evidence": candidate.evidence,
+                    }
+                    if is_critical_finding(finding):
+                        findings.append(finding)
 
         shard.tokens_used = estimated_tokens
         shard.cost_usd = estimated_cost

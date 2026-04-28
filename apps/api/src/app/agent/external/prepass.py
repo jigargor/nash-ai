@@ -5,6 +5,9 @@ from collections import Counter
 
 from app.agent.external.github_public import fetch_file_sample
 from app.agent.external.types import ExternalFileDescriptor, PrepassPlan, PrepassSignals
+from app.config import settings
+from app.llm.catalog.loader import load_baseline_catalog
+from app.llm.types import ModelRecord
 
 _PROMPT_INJECTION_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
@@ -45,6 +48,41 @@ _IGNORED_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".lock", "
 _IGNORED_DIR_PREFIXES = ("node_modules/", "vendor/", "dist/", "build/", ".next/", ".git/")
 
 
+def _provider_is_configured(provider: str) -> bool:
+    if provider == "gemini":
+        return bool((settings.gemini_api_key or "").strip())
+    if provider == "openai":
+        return bool((settings.openai_api_key or "").strip())
+    if provider == "anthropic":
+        return bool((settings.anthropic_api_key or "").strip())
+    return False
+
+
+def _fast_pass_model() -> str:
+    catalog = load_baseline_catalog()
+    active_models: list[ModelRecord] = [
+        record
+        for record in catalog.models
+        if record.status == "active" and record.tier == "economy" and _provider_is_configured(record.provider)
+    ]
+    if not active_models:
+        return "heuristic-lite-v1"
+    # Prefer explicitly fast economy families, then lower cost, then higher score.
+    preferred_family_rank = {
+        "gemini": 0,
+        "gpt": 1,
+        "claude": 2,
+    }
+
+    def sort_key(record: ModelRecord) -> tuple[int, float, int]:
+        family_rank = preferred_family_rank.get(record.family.lower(), 99)
+        input_price = float(record.pricing.input_per_1m or 10_000)
+        return (family_rank, input_price, -record.score)
+
+    fastest = sorted(active_models, key=sort_key)[0]
+    return f"{fastest.provider}:{fastest.model}"
+
+
 def _looks_like_filler(text: str) -> bool:
     compact = " ".join(text.split())
     if len(compact) < 80:
@@ -68,12 +106,13 @@ def _is_risky_path(path: str) -> bool:
 
 
 def _recommended_plan(file_count: int, risky_paths: int) -> PrepassPlan:
+    fast_pass_model = _fast_pass_model()
     if file_count >= 2500 or risky_paths >= 120:
         return PrepassPlan(
             service_tier="high",
             shard_count=20,
             shard_size_target=140,
-            cheap_pass_model="heuristic-lite-v1",
+            cheap_pass_model=fast_pass_model,
             notes=["Large repository footprint; prioritize high-risk areas first."],
         )
     if file_count >= 800 or risky_paths >= 40:
@@ -81,14 +120,14 @@ def _recommended_plan(file_count: int, risky_paths: int) -> PrepassPlan:
             service_tier="balanced",
             shard_count=10,
             shard_size_target=120,
-            cheap_pass_model="heuristic-lite-v1",
+            cheap_pass_model=fast_pass_model,
             notes=["Medium repository footprint; use balanced shard concurrency."],
         )
     return PrepassPlan(
         service_tier="economy",
         shard_count=4,
         shard_size_target=100,
-        cheap_pass_model="heuristic-lite-v1",
+        cheap_pass_model=fast_pass_model,
         notes=["Smaller repository; fewer shards reduce coordination overhead."],
     )
 

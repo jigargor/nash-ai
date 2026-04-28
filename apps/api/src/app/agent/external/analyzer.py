@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-
-from app.agent.external.github_public import fetch_file_sample
-from app.agent.external.github_public import PublicRepoRef
-from app.agent.external.types import ExternalFileDescriptor
-
+from pathlib import PurePosixPath
 
 @dataclass(slots=True)
 class CriticalFinding:
@@ -15,123 +11,177 @@ class CriticalFinding:
     title: str
     message: str
     file_path: str
-    evidence: str
+    line_start: int
+    line_end: int
+    evidence: dict[str, object]
+    confidence: float
 
 
-_SECURITY_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
-    (
-        "Hardcoded secret material",
-        "critical",
-        re.compile(
-            r"(api[_-]?key|secret|token|password)\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]",
+@dataclass(slots=True)
+class PatternRule:
+    category: str
+    severity: str
+    title: str
+    pattern: re.Pattern[str]
+    confidence: float
+    allowed_suffixes: tuple[str, ...] = ()
+    exclude_example_paths: bool = True
+
+
+_SOURCE_SUFFIXES = (
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".go",
+    ".java",
+    ".rs",
+    ".sql",
+    ".yml",
+    ".yaml",
+)
+
+_EXAMPLE_PATH_MARKERS = (
+    "/test/",
+    "/tests/",
+    "/fixtures/",
+    "/fixture/",
+    "/examples/",
+    "/sample/",
+    "/samples/",
+    "/mocks/",
+    "/mock/",
+    "/docs/",
+)
+
+_PLACEHOLDER_SECRET_PATTERN = re.compile(
+    r"(changeme|example|sample|dummy|placeholder|your_|xxx|todo)",
+    re.IGNORECASE,
+)
+
+_RULES: tuple[PatternRule, ...] = (
+    PatternRule(
+        category="security",
+        severity="critical",
+        title="Potential hardcoded credential",
+        pattern=re.compile(
+            r"(api[_-]?key|secret|token|password)\s*[:=]\s*['\"]([A-Za-z0-9_\-]{20,})['\"]",
             re.IGNORECASE,
         ),
+        confidence=0.93,
     ),
-    (
-        "Unsanitized command execution",
-        "critical",
-        re.compile(r"(subprocess\.Popen|os\.system|exec\(|eval\().{0,60}(request|input|params)", re.IGNORECASE),
+    PatternRule(
+        category="security",
+        severity="high",
+        title="Potential unsafe code execution with untrusted input",
+        pattern=re.compile(
+            r"(exec\(|eval\(|subprocess\.Popen|os\.system)[^\n]{0,100}(request|input|argv|query|params)",
+            re.IGNORECASE,
+        ),
+        confidence=0.9,
+        allowed_suffixes=(".py", ".js", ".ts", ".tsx"),
     ),
-]
-
-_PERFORMANCE_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
-    (
-        "Potential n+1 loop with network call",
-        "high",
-        re.compile(r"for\s+.+:\s*\n[^\n]*(fetch\(|requests\.|httpx\.)", re.IGNORECASE),
+    PatternRule(
+        category="best-practice",
+        severity="high",
+        title="Wildcard CORS policy in server code",
+        pattern=re.compile(
+            r"(allow_origins\s*=\s*\[\s*['\"]\*['\"]\s*\]|Access-Control-Allow-Origin[^\n]{0,10}\*)",
+            re.IGNORECASE,
+        ),
+        confidence=0.88,
+        allowed_suffixes=(".py", ".ts", ".js"),
     ),
-    (
-        "Synchronous sleep in request path",
-        "high",
-        re.compile(r"time\.sleep\(", re.IGNORECASE),
+    PatternRule(
+        category="performance",
+        severity="high",
+        title="Potential N+1 request pattern in loop",
+        pattern=re.compile(
+            r"for\s+[^\n]+:\s*(?:\n[ \t]+[^\n]+){0,4}(requests\.|httpx\.|fetch\()",
+            re.IGNORECASE,
+        ),
+        confidence=0.82,
     ),
-]
-
-_BEST_PRACTICE_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
-    (
-        "Dangerous React HTML injection",
-        "high",
-        re.compile(r"dangerouslySetInnerHTML", re.IGNORECASE),
+    PatternRule(
+        category="performance",
+        severity="high",
+        title="Blocking sleep detected in request-time code",
+        pattern=re.compile(r"time\.sleep\(\s*[1-9]\d*", re.IGNORECASE),
+        confidence=0.84,
+        allowed_suffixes=(".py",),
     ),
-    (
-        "Wildcard CORS in server path",
-        "high",
-        re.compile(r"allow_origins\s*=\s*\[\s*['\"]\*['\"]\s*\]|Access-Control-Allow-Origin.*\*", re.IGNORECASE),
+    PatternRule(
+        category="best-practice",
+        severity="high",
+        title="Potential unsafe HTML injection sink",
+        pattern=re.compile(r"dangerouslySetInnerHTML", re.IGNORECASE),
+        confidence=0.86,
+        allowed_suffixes=(".ts", ".tsx", ".js", ".jsx"),
     ),
-]
-
-
-def _make_finding(
-    *,
-    category: str,
-    severity: str,
-    title: str,
-    file_path: str,
-    content: str,
-    match_start: int,
-) -> CriticalFinding:
-    line_start = max(0, content.rfind("\n", 0, match_start))
-    snippet = content[line_start + 1 : line_start + 180].strip()
-    return CriticalFinding(
-        category=category,
-        severity=severity,
-        title=title,
-        message=f"{title} detected in {file_path}.",
-        file_path=file_path,
-        evidence=snippet[:250],
-    )
+)
 
 
-def _scan_content(file_path: str, content: str) -> list[CriticalFinding]:
+def _line_number_for_index(content: str, index: int) -> int:
+    return content.count("\n", 0, index) + 1
+
+
+def should_scan_path(path: str) -> bool:
+    lowered = path.strip().lower()
+    return lowered.endswith(_SOURCE_SUFFIXES)
+
+
+def _looks_like_example_path(path: str) -> bool:
+    lowered = f"/{path.strip().lower()}"
+    return any(marker in lowered for marker in _EXAMPLE_PATH_MARKERS)
+
+
+def _excerpt_at(content: str, start: int, end: int, window: int = 90) -> str:
+    snippet_start = max(0, start - window)
+    snippet_end = min(len(content), end + window)
+    return " ".join(content[snippet_start:snippet_end].strip().split())[:260]
+
+
+def _is_placeholder_secret(match_text: str) -> bool:
+    return bool(_PLACEHOLDER_SECRET_PATTERN.search(match_text))
+
+
+def analyze_file_content(path: str, content: str) -> list[CriticalFinding]:
+    if not should_scan_path(path) or not content.strip():
+        return []
     findings: list[CriticalFinding] = []
-    for title, severity, pattern in _SECURITY_PATTERNS:
-        match = pattern.search(content)
-        if match:
-            findings.append(
-                _make_finding(
-                    category="security",
-                    severity=severity,
-                    title=title,
-                    file_path=file_path,
-                    content=content,
-                    match_start=match.start(),
-                )
-            )
-    for title, severity, pattern in _PERFORMANCE_PATTERNS:
-        match = pattern.search(content)
-        if match:
-            findings.append(
-                _make_finding(
-                    category="performance",
-                    severity=severity,
-                    title=title,
-                    file_path=file_path,
-                    content=content,
-                    match_start=match.start(),
-                )
-            )
-    for title, severity, pattern in _BEST_PRACTICE_PATTERNS:
-        match = pattern.search(content)
-        if match:
-            findings.append(
-                _make_finding(
-                    category="best_practices",
-                    severity=severity,
-                    title=title,
-                    file_path=file_path,
-                    content=content,
-                    match_start=match.start(),
-                )
-            )
-    return findings
+    is_example_path = _looks_like_example_path(path)
+    lower_path = path.lower()
 
-
-async def analyze_shard(repo_ref: PublicRepoRef, files: list[ExternalFileDescriptor]) -> list[CriticalFinding]:
-    findings: list[CriticalFinding] = []
-    for descriptor in files:
-        content = await fetch_file_sample(repo_ref, descriptor.path, max_bytes=8000)
-        if not content:
+    for rule in _RULES:
+        suffix_filter = rule.allowed_suffixes
+        if suffix_filter and not lower_path.endswith(suffix_filter):
             continue
-        findings.extend(_scan_content(descriptor.path, content))
+        if is_example_path and rule.exclude_example_paths:
+            continue
+        for match in rule.pattern.finditer(content):
+            match_text = match.group(0)
+            if rule.title == "Potential hardcoded credential" and _is_placeholder_secret(match_text):
+                continue
+            line = _line_number_for_index(content, match.start())
+            findings.append(
+                CriticalFinding(
+                    category=rule.category,
+                    severity=rule.severity,
+                    title=rule.title,
+                    message=f"{rule.title} detected in {path}.",
+                    file_path=path,
+                    line_start=line,
+                    line_end=line,
+                    evidence={
+                        "pattern": rule.pattern.pattern,
+                        "excerpt": _excerpt_at(content, match.start(), match.end()),
+                        "confidence": rule.confidence,
+                    },
+                    confidence=rule.confidence,
+                )
+            )
+            # Avoid flooding with duplicate matches in one file for same rule.
+            break
     return findings
 

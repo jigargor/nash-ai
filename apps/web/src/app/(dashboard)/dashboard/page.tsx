@@ -1,47 +1,61 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo, useState } from "react";
 
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
-import { Button } from "@/components/ui/button";
 import { useUsageSummary } from "@/hooks/use-usage-summary";
-import { useOutcomeSummary } from "@/hooks/use-outcome-summary";
 import { useInstallations } from "@/hooks/use-installations";
-import { useRerunReview } from "@/hooks/use-review-actions";
-import { useReviews } from "@/hooks/use-reviews";
-import { isReviewInFlightStatus } from "@/lib/review-status";
+
+type CapViewMode = "per_key" | "cumulative" | "combination";
+
+function formatUsd(value: string): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "$0.00";
+  return `$${numeric.toFixed(4)}`;
+}
 
 export default function DashboardHomePage() {
   const installations = useInstallations();
   const activeInstallations = installations.data?.filter((installation) => installation.active) ?? [];
   const installationId = activeInstallations[0]?.installation_id;
-  const reviews = useReviews(installationId);
   const usageSummary = useUsageSummary(installationId);
-  const outcomeSummary = useOutcomeSummary(installationId);
-  const retryReview = useRerunReview();
-  const totalTokens = (reviews.data ?? []).reduce((sum, review) => sum + (review.tokens_used ?? 0), 0);
-  const totalCost = (reviews.data ?? []).reduce((sum, review) => sum + Number(review.cost_usd ?? 0), 0);
+  const [capViewMode, setCapViewMode] = useState<CapViewMode>("per_key");
+  const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
   const dailyUsageRequests = usageSummary.data?.daily_requests.at(-1)?.requests ?? 0;
   const weeklyUsageRequests = usageSummary.data?.weekly_requests.at(-1)?.requests ?? 0;
-  const capState = usageSummary.data?.session_cap.state ?? "safe";
+  const capState = usageSummary.data?.cumulative_caps.state ?? "safe";
   const capLabel =
     capState === "capped" ? "Cap reached" : capState === "near-cap" ? "Near cap" : "Within cap";
+  const perKeyCaps = usageSummary.data?.api_key_caps ?? [];
+  const cumulativeCaps = usageSummary.data?.cumulative_caps;
+
+  const selectedCapRows = useMemo(() => {
+    if (capViewMode !== "combination") return [];
+    return perKeyCaps.filter((row) => selectedProviders.includes(row.provider));
+  }, [capViewMode, perKeyCaps, selectedProviders]);
+
+  const combinationTotals = useMemo(() => {
+    const dailyTokens = selectedCapRows.reduce((sum, row) => sum + row.daily_tokens, 0);
+    const weeklyTokens = selectedCapRows.reduce((sum, row) => sum + row.weekly_tokens, 0);
+    const dailyCost = selectedCapRows.reduce((sum, row) => sum + Number(row.daily_cost_usd), 0);
+    const weeklyCost = selectedCapRows.reduce((sum, row) => sum + Number(row.weekly_cost_usd), 0);
+    return { dailyTokens, weeklyTokens, dailyCost, weeklyCost };
+  }, [selectedCapRows]);
+
+  function toggleProvider(provider: string): void {
+    setSelectedProviders((previous) =>
+      previous.includes(provider) ? previous.filter((item) => item !== provider) : [...previous, provider],
+    );
+  }
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
       <div className="metrics-grid">
         <article className="metric-card">
-          <p className="metric-label">Reviews this month</p>
-          <p className="metric-value">{reviews.data?.length ?? 0}</p>
-        </article>
-        <article className="metric-card">
-          <p className="metric-label">Tokens processed</p>
-          <p className="metric-value">{totalTokens}</p>
-        </article>
-        <article className="metric-card">
-          <p className="metric-label">Estimated cost</p>
-          <p className="metric-value">${totalCost.toFixed(6)}</p>
+          <p className="metric-label">Active providers</p>
+          <p className="metric-value">{perKeyCaps.length}</p>
         </article>
         <article className="metric-card">
           <p className="metric-label">Service requests (24h)</p>
@@ -58,79 +72,159 @@ export default function DashboardHomePage() {
       </div>
 
       <Panel elevated>
-        <h1 style={{ marginTop: 0, marginBottom: "0.4rem", fontFamily: "var(--font-instrument-serif)" }}>Recent Reviews</h1>
+        <h1 style={{ marginTop: 0, marginBottom: "0.4rem", fontFamily: "var(--font-instrument-serif)" }}>
+          API Key Cap Controls
+        </h1>
         <p style={{ color: "var(--text-muted)", marginTop: 0 }}>
-          Active installations: {activeInstallations.length} · useful rate{" "}
-          {outcomeSummary.data ? `${(outcomeSummary.data.global_metrics.useful_rate * 100).toFixed(1)}%` : "N/A"}
+          View caps per key, cumulative across all keys, or a custom combination.
         </p>
-
-        {installations.isLoading || reviews.isLoading ? (
-          <StateBlock title="Loading reviews" description="Syncing recent review activity." />
+        {usageSummary.isLoading || installations.isLoading ? (
+          <StateBlock title="Loading cap telemetry" description="Fetching usage + cap data." />
         ) : null}
 
-        {installations.isError || reviews.isError ? (
-          <StateBlock title="Failed to load reviews" description="Retry once the API becomes available." />
+        {usageSummary.isError || installations.isError ? (
+          <StateBlock title="Failed to load cap telemetry" description="Retry once the API becomes available." />
         ) : null}
 
         {!installations.isLoading && !installations.isError && !installationId ? (
           <StateBlock
             title="No installations connected"
-            description="Install the GitHub App to start receiving review activity."
+            description="Install the GitHub App to start receiving usage telemetry."
             action={
-              <a className="button button-primary" href="https://github.com/settings/apps" target="_blank" rel="noreferrer">
+              <a
+                className="button button-primary"
+                href="https://github.com/settings/apps"
+                target="_blank"
+                rel="noreferrer"
+              >
                 Install GitHub App
               </a>
             }
           />
         ) : null}
 
-        {!reviews.isLoading && !reviews.isError && installationId && (reviews.data?.length ?? 0) === 0 ? (
-          <StateBlock
-            title="No reviews yet"
-            description="Open or synchronize a pull request to trigger the first run."
-          />
-        ) : null}
+        {!usageSummary.isLoading && !usageSummary.isError ? (
+          <div style={{ display: "grid", gap: "0.7rem" }}>
+            <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className={`button ${capViewMode === "per_key" ? "button-primary" : "button-ghost"}`}
+                onClick={() => setCapViewMode("per_key")}
+              >
+                By API Key
+              </button>
+              <button
+                type="button"
+                className={`button ${capViewMode === "cumulative" ? "button-primary" : "button-ghost"}`}
+                onClick={() => setCapViewMode("cumulative")}
+              >
+                Cumulative
+              </button>
+              <button
+                type="button"
+                className={`button ${capViewMode === "combination" ? "button-primary" : "button-ghost"}`}
+                onClick={() => setCapViewMode("combination")}
+              >
+                Combination
+              </button>
+            </div>
 
-        {!reviews.isLoading && !reviews.isError ? (
-          <div style={{ display: "grid", gap: "0.55rem" }}>
-            {reviews.data?.map((review) => (
+            {capViewMode === "per_key" ? (
+              <div style={{ display: "grid", gap: "0.45rem" }}>
+                {perKeyCaps.length === 0 ? (
+                  <StateBlock title="No API key usage yet" description="Run reviews to populate provider cap telemetry." />
+                ) : (
+                  perKeyCaps.map((row) => (
+                    <article
+                      key={row.provider}
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-md)",
+                        padding: "0.6rem 0.75rem",
+                        display: "grid",
+                        gap: "0.25rem",
+                      }}
+                    >
+                      <strong>{row.provider}</strong>
+                      <span style={{ color: "var(--text-muted)" }}>
+                        Daily: {row.daily_tokens} tokens ({formatUsd(row.daily_cost_usd)}) / cap {row.effective_cap_tokens}
+                      </span>
+                      <span style={{ color: "var(--text-muted)" }}>
+                        Weekly: {row.weekly_tokens} tokens ({formatUsd(row.weekly_cost_usd)})
+                      </span>
+                    </article>
+                  ))
+                )}
+              </div>
+            ) : null}
+
+            {capViewMode === "cumulative" && cumulativeCaps ? (
               <article
-                key={review.id}
                 style={{
                   border: "1px solid var(--border)",
                   borderRadius: "var(--radius-md)",
-                  padding: "0.65rem 0.8rem",
+                  padding: "0.7rem 0.8rem",
                   display: "grid",
-                  gap: "0.35rem",
+                  gap: "0.25rem",
                 }}
               >
-                <Link href={`/repos/${review.repo_full_name}/prs/${review.pr_number}?reviewId=${review.id}&installationId=${review.installation_id}`}>
-                  {review.repo_full_name} · PR #{review.pr_number}
-                </Link>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", color: "var(--text-muted)" }}>
-                  <span>
-                    {isReviewInFlightStatus(review.status) ? "● " : ""}
-                    {review.status}
-                    {isReviewInFlightStatus(review.status) ? " (refreshing…)" : ""} · {review.tokens_used ?? 0} tokens · $
-                    {review.cost_usd ?? "0.000000"}
-                  </span>
-                  {review.status === "failed" ? (
-                    <Button
-                      variant="ghost"
-                      disabled={retryReview.isPending && retryReview.variables?.reviewId === review.id}
-                      onClick={() =>
-                        retryReview.mutate({
-                          reviewId: review.id,
-                          installationId: review.installation_id,
-                        })
-                      }
-                    >
-                      {retryReview.isPending && retryReview.variables?.reviewId === review.id ? "Queuing…" : "Retry"}
-                    </Button>
-                  ) : null}
-                </div>
+                <strong>Cumulative usage across all API keys</strong>
+                <span style={{ color: "var(--text-muted)" }}>
+                  Daily: {cumulativeCaps.daily_tokens} / {cumulativeCaps.daily_token_budget} tokens
+                </span>
+                <span style={{ color: "var(--text-muted)" }}>
+                  Weekly: {cumulativeCaps.weekly_tokens} tokens · state: {cumulativeCaps.state}
+                </span>
               </article>
-            ))}
+            ) : null}
+
+            {capViewMode === "combination" ? (
+              <div style={{ display: "grid", gap: "0.55rem" }}>
+                <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                  {perKeyCaps.map((row) => (
+                    <label
+                      key={row.provider}
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--radius-md)",
+                        padding: "0.35rem 0.55rem",
+                        display: "inline-flex",
+                        gap: "0.35rem",
+                        alignItems: "center",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedProviders.includes(row.provider)}
+                        onChange={() => toggleProvider(row.provider)}
+                      />
+                      <span>{row.provider}</span>
+                    </label>
+                  ))}
+                </div>
+                <article
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-md)",
+                    padding: "0.6rem 0.75rem",
+                    display: "grid",
+                    gap: "0.25rem",
+                  }}
+                >
+                  <strong>Selected API key combination</strong>
+                  <span style={{ color: "var(--text-muted)" }}>
+                    Daily: {combinationTotals.dailyTokens} tokens ({formatUsd(String(combinationTotals.dailyCost))})
+                  </span>
+                  <span style={{ color: "var(--text-muted)" }}>
+                    Weekly: {combinationTotals.weeklyTokens} tokens ({formatUsd(String(combinationTotals.weeklyCost))})
+                  </span>
+                  <span style={{ color: "var(--text-muted)" }}>
+                    Compared against daily shared cap: {usageSummary.data?.session_cap.daily_token_budget ?? 0} tokens
+                  </span>
+                </article>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </Panel>

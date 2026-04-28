@@ -114,6 +114,28 @@ async def get_usage_summary(
             .where(Review.installation_id == installation_id)
             .where(Review.created_at >= week_start)
         )
+        provider_daily_rows = await session.execute(
+            select(
+                func.coalesce(Review.model_provider, "unknown").label("provider"),
+                func.coalesce(func.sum(Review.tokens_used), 0).label("tokens"),
+                func.coalesce(func.sum(Review.cost_usd), 0).label("cost"),
+            )
+            .where(Review.installation_id == installation_id)
+            .where(Review.created_at >= day_start)
+            .group_by("provider")
+            .order_by("provider")
+        )
+        provider_weekly_rows = await session.execute(
+            select(
+                func.coalesce(Review.model_provider, "unknown").label("provider"),
+                func.coalesce(func.sum(Review.tokens_used), 0).label("tokens"),
+                func.coalesce(func.sum(Review.cost_usd), 0).label("cost"),
+            )
+            .where(Review.installation_id == installation_id)
+            .where(Review.created_at >= week_start)
+            .group_by("provider")
+            .order_by("provider")
+        )
         cap = int(settings.daily_token_budget_per_installation)
         daily_used = int(daily_tokens or 0)
         weekly_used = int(weekly_tokens or 0)
@@ -124,12 +146,47 @@ async def get_usage_summary(
         elif cap_ratio >= 0.8:
             cap_state = "near-cap"
 
+        provider_daily: dict[str, dict[str, object]] = {}
+        for provider, tokens, cost in provider_daily_rows.all():
+            provider_daily[str(provider)] = {
+                "provider": str(provider),
+                "daily_tokens": int(tokens or 0),
+                "daily_cost_usd": str(cost or 0),
+                "weekly_tokens": 0,
+                "weekly_cost_usd": "0",
+                "effective_cap_tokens": cap,
+            }
+        for provider, tokens, cost in provider_weekly_rows.all():
+            key = str(provider)
+            row = provider_daily.setdefault(
+                key,
+                {
+                    "provider": key,
+                    "daily_tokens": 0,
+                    "daily_cost_usd": "0",
+                    "weekly_tokens": 0,
+                    "weekly_cost_usd": "0",
+                    "effective_cap_tokens": cap,
+                },
+            )
+            row["weekly_tokens"] = int(tokens or 0)
+            row["weekly_cost_usd"] = str(cost or 0)
+
+        provider_caps = sorted(provider_daily.values(), key=lambda row: str(row["provider"]))
+
         return {
             "installation_id": installation_id,
             "service_breakdown": service_breakdown,
             "daily_requests": daily,
             "weekly_requests": weekly,
             "token_usage": {"daily": daily_used, "weekly": weekly_used},
+            "api_key_caps": provider_caps,
+            "cumulative_caps": {
+                "daily_tokens": daily_used,
+                "weekly_tokens": weekly_used,
+                "daily_token_budget": cap,
+                "state": cap_state,
+            },
             "session_cap": {
                 "daily_token_budget": cap,
                 "daily_used": daily_used,
