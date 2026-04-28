@@ -250,10 +250,20 @@ class GitHubClient:
         payload = response.json()
         if not isinstance(payload, list):
             return []
+        commits = [commit for commit in payload if isinstance(commit, dict)]
+        sem = asyncio.Semaphore(5)
+
+        async def _load_commit_files(commit: JsonDict) -> list[JsonDict]:
+            sha_raw = commit.get("sha")
+            sha = sha_raw if isinstance(sha_raw, str) else ""
+            if not sha:
+                return []
+            async with sem:
+                return await self.get_commit_files(owner, repo, sha)
+
+        commit_files = await asyncio.gather(*[_load_commit_files(commit) for commit in commits])
         normalized: list[JsonDict] = []
-        for commit in payload:
-            if not isinstance(commit, dict):
-                continue
+        for commit, files in zip(commits, commit_files):
             commit_obj = commit.get("commit")
             commit_meta = commit_obj if isinstance(commit_obj, dict) else {}
             commit_message = str(commit_meta.get("message", ""))
@@ -262,7 +272,7 @@ class GitHubClient:
                     "sha": commit.get("sha"),
                     "message": commit_message,
                     "co_authored_by": _extract_co_author(commit_message),
-                    "files": await self.get_commit_files(owner, repo, str(commit.get("sha", ""))),
+                    "files": files,
                 }
             )
         return normalized

@@ -767,6 +767,64 @@ async def test_get_file_history_returns_commits(monkeypatch: pytest.MonkeyPatch)
 
 
 # ---------------------------------------------------------------------------
+# get_commits_touching_file
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_commits_touching_file_normalizes_with_commit_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _fake_client()
+    commits_payload = [
+        {"sha": "a1", "commit": {"message": "feat: one\n\nCo-authored-by: dev@example.com"}},
+        {"sha": "b2", "commit": {"message": "fix: two"}},
+    ]
+    monkeypatch.setattr(
+        "app.github.client._request_with_retry",
+        AsyncMock(return_value=_json_response(commits_payload)),
+    )
+    files_mock = AsyncMock(side_effect=[[{"filename": "one.py"}], [{"filename": "two.py"}]])
+    monkeypatch.setattr(client, "get_commit_files", files_mock)
+
+    result = await client.get_commits_touching_file(
+        owner="acme",
+        repo="repo",
+        path="src/main.py",
+    )
+
+    assert [item["sha"] for item in result] == ["a1", "b2"]
+    assert result[0]["co_authored_by"] == "dev@example.com"
+    assert result[0]["files"] == [{"filename": "one.py"}]
+    assert result[1]["files"] == [{"filename": "two.py"}]
+    assert files_mock.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_get_commits_touching_file_skips_non_dict_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _fake_client()
+    commits_payload: list[object] = ["bad", {"sha": "a1", "commit": {"message": "ok"}}, 3]
+    monkeypatch.setattr(
+        "app.github.client._request_with_retry",
+        AsyncMock(return_value=_json_response(commits_payload)),
+    )
+    files_mock = AsyncMock(return_value=[{"filename": "main.py"}])
+    monkeypatch.setattr(client, "get_commit_files", files_mock)
+
+    result = await client.get_commits_touching_file(
+        owner="acme",
+        repo="repo",
+        path="src/main.py",
+    )
+
+    assert len(result) == 1
+    assert result[0]["sha"] == "a1"
+    files_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # smoke_check helpers
 # ---------------------------------------------------------------------------
 
