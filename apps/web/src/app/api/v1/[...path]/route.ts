@@ -4,7 +4,6 @@ import { cookies } from "next/headers";
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
 import { createDashboardUserToken } from "@/lib/auth/dashboard-token";
 import { parseSessionToken } from "@/lib/auth/session";
-import { hydrateApiProxyEnvFromAncestors } from "@/lib/monorepo-env";
 
 const DEFAULT_DEV_API = "http://localhost:8000";
 
@@ -46,7 +45,6 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   const session = await parseSessionToken(token);
   if (!session) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
 
-  hydrateApiProxyEnvFromAncestors();
   const apiAccessKey = process.env.API_ACCESS_KEY;
   if (!apiAccessKey) {
     return NextResponse.json({ detail: "API access key is not configured for the web proxy." }, { status: 503 });

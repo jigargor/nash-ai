@@ -46,10 +46,10 @@ async function checkRateLimit(request: NextRequest): Promise<NextResponse | null
 }
 
 // ---------------------------------------------------------------------------
-// Middleware
+// Proxy
 // ---------------------------------------------------------------------------
 
-export async function middleware(request: NextRequest): Promise<NextResponse> {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
   const pathname = request.nextUrl.pathname;
 
   // Rate-limit all auth endpoints

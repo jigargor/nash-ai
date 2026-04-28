@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const cookiesMock = vi.fn();
 const parseSessionTokenMock = vi.fn();
 const createDashboardUserTokenMock = vi.fn();
-const hydrateApiProxyEnvFromAncestorsMock = vi.fn();
 
 vi.mock("next/headers", () => ({
   cookies: cookiesMock,
@@ -15,10 +14,6 @@ vi.mock("@/lib/auth/session", () => ({
 
 vi.mock("@/lib/auth/dashboard-token", () => ({
   createDashboardUserToken: createDashboardUserTokenMock,
-}));
-
-vi.mock("@/lib/monorepo-env", () => ({
-  hydrateApiProxyEnvFromAncestors: hydrateApiProxyEnvFromAncestorsMock,
 }));
 
 describe("api v1 proxy route", () => {

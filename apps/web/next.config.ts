@@ -17,8 +17,9 @@ function findMonorepoRoot(startDir: string): string {
 
 // Repo-root `.env.local` (OAuth, etc.): Next only auto-loads `apps/web` by default; `__dirname` can
 // also be wrong when this file is bundled, so resolve root via `pnpm-workspace.yaml` when possible.
+const monorepoRoot = findMonorepoRoot(__dirname);
 loadEnvConfig(
-  findMonorepoRoot(__dirname),
+  monorepoRoot,
   process.env.NODE_ENV !== "production",
 );
 
@@ -53,6 +54,9 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  turbopack: {
+    root: monorepoRoot,
+  },
   images: {
     // Next.js 16+: local src with query strings must match localPatterns (omit `search` to allow any ?v=…).
     localPatterns: [{ pathname: "/logo.png" }, { pathname: "/me.png" }],

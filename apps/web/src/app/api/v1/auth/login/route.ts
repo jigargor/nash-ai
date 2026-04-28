@@ -9,7 +9,6 @@ import {
 } from "@/lib/auth/constants";
 import { buildGitHubAuthorizeUrl } from "@/lib/auth/github";
 import { createOAuthState } from "@/lib/auth/session";
-import { hydrateGithubOAuthEnvFromAncestors } from "@/lib/monorepo-env";
 
 function callbackUrl(requestUrl: string): string {
   const url = new URL("/api/v1/auth/callback", requestUrl);
@@ -46,7 +45,6 @@ function termsAccepted(cookieStore: Awaited<ReturnType<typeof cookies>>): boolea
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  hydrateGithubOAuthEnvFromAncestors();
   if (!process.env.GITHUB_CLIENT_ID?.trim() || !process.env.GITHUB_CLIENT_SECRET?.trim()) {
     return oauthNotConfiguredResponse();
   }
@@ -60,7 +58,6 @@ export async function GET(request: Request): Promise<NextResponse> {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  hydrateGithubOAuthEnvFromAncestors();
   if (!process.env.GITHUB_CLIENT_ID?.trim() || !process.env.GITHUB_CLIENT_SECRET?.trim()) {
     return oauthNotConfiguredResponse();
   }

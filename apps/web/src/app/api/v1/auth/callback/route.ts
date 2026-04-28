@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 
 import { AUTH_COOKIE_NAME, AUTH_COOKIE_TTL_SECONDS, AUTH_STATE_COOKIE_NAME } from "@/lib/auth/constants";
 import { createDashboardUserToken } from "@/lib/auth/dashboard-token";
-import { hydrateApiProxyEnvFromAncestors, hydrateGithubOAuthEnvFromAncestors } from "@/lib/monorepo-env";
 import { exchangeCodeForToken, getGitHubUser, listGitHubUserInstallations } from "@/lib/auth/github";
 import { createSessionToken } from "@/lib/auth/session";
 
@@ -17,8 +16,6 @@ function callbackUrl(requestUrl: string): string {
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  hydrateGithubOAuthEnvFromAncestors();
-  hydrateApiProxyEnvFromAncestors();
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
