@@ -111,6 +111,8 @@ jobs:
         run: pnpm --filter web typecheck
       - name: Web tests
         run: pnpm --filter web test
+      - name: Web build
+        run: pnpm --filter web build
       - name: Audit Node dependencies
         run: pnpm audit --audit-level high
 
