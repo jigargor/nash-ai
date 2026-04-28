@@ -43,7 +43,7 @@ dev = [
   "pytest-cov>=6.0.0",
   "mypy>=1.10.0",
   "bandit>=1.7.10",
-  "types-PyYAML>=6.0.12.20240808",
+  "types-PyYAML>=6.0.12.20260408",
   "types-unidiff>=0.1.0",
   "pip-audit>=2.10.0",
 ]
