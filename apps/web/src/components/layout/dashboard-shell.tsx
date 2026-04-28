@@ -16,6 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/dashboard" },
   { label: "All Reviews", href: "/reviews" },
   { label: "Repositories", href: "/repos" },
+  { label: "Models", href: "/models" },
   { label: "Evaluate External", href: "/evaluate-external" },
   { label: "Settings", href: "/settings" },
 ];
@@ -33,6 +34,7 @@ function pageTitle(pathname: string): string {
   if (pathname.startsWith("/reviews")) return "All Reviews";
   if (isPullRequestReviewRoute(pathname)) return "All Reviews";
   if (pathname.startsWith("/repos")) return "Repositories";
+  if (pathname.startsWith("/models")) return "Models";
   if (pathname.startsWith("/evaluate-external")) return "Evaluate External";
   if (pathname.startsWith("/settings")) return "Settings";
   return "Dashboard";
@@ -47,6 +49,7 @@ function isActive(pathname: string, href: string): boolean {
     if (isPullRequestReviewRoute(pathname)) return false;
     return pathname === "/repos" || pathname.startsWith("/repos/");
   }
+  if (href === "/models") return pathname === "/models" || pathname.startsWith("/models/");
   if (href === "/evaluate-external") {
     return pathname === "/evaluate-external" || pathname.startsWith("/evaluate-external/");
   }

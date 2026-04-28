@@ -15,6 +15,7 @@ from app.admin.router import router as admin_router
 from app.api.benchmarks import router as benchmarks_router
 from app.api.benchmarks import telemetry_router
 from app.api.external_evals import router as external_evals_router
+from app.api.models_catalog import router as models_catalog_router
 from app.api.router import router as api_router
 from app.api.usage import router as usage_router
 from app.api.users import router as users_router
@@ -86,6 +87,7 @@ app.include_router(benchmarks_router)
 app.include_router(telemetry_router)
 app.include_router(usage_router)
 app.include_router(external_evals_router)
+app.include_router(models_catalog_router)
 
 
 async def _record_usage_event(

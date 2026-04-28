@@ -24,7 +24,7 @@ _PROMPT_INJECTION_PATTERNS = [
 _FILLER_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
-        r"(lorem ipsum){2,}",
+        r"(lorem ipsum(?:\s+lorem ipsum)+)",
         r"(foo|bar|baz)[\s,;]+(foo|bar|baz)[\s,;]+(foo|bar|baz)",
         r"(test|dummy|sample)[-_ ]?(data|file|content){2,}",
     )
@@ -85,13 +85,15 @@ def _fast_pass_model() -> str:
 
 def _looks_like_filler(text: str) -> bool:
     compact = " ".join(text.split())
+    if any(pattern.search(compact) for pattern in _FILLER_PATTERNS):
+        return True
     if len(compact) < 80:
         return False
     if len(set(compact)) <= 6:
         return True
     if max(Counter(compact).values()) > len(compact) * 0.4:
         return True
-    return any(pattern.search(compact) for pattern in _FILLER_PATTERNS)
+    return False
 
 
 def _is_ignored_path(path: str) -> bool:
