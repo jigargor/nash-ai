@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
     web_app_url: str | None = None
+    snapshot_retention_days: int = 30
+    snapshot_archive_batch_size: int = 100
+    r2_endpoint_url: str | None = None
+    r2_bucket: str | None = None
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_region: str = "auto"
+    r2_snapshot_prefix: str = "review-snapshots"
 
     @field_validator("github_app_id", mode="before")
     @classmethod
@@ -134,6 +142,17 @@ class Settings(BaseSettings):
         return any(
             (key or "").strip()
             for key in (self.anthropic_api_key, self.openai_api_key, self.gemini_api_key)
+        )
+
+    def has_r2_snapshot_archive_configured(self) -> bool:
+        return all(
+            (value or "").strip()
+            for value in (
+                self.r2_endpoint_url,
+                self.r2_bucket,
+                self.r2_access_key_id,
+                self.r2_secret_access_key,
+            )
         )
 
 

@@ -294,11 +294,19 @@ class ReviewContextSnapshot(Base):
         unique=True,
         nullable=False,
     )
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("installations.installation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     captured_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now()
     )
+    expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    r2_object_key: Mapped[str | None] = mapped_column(Text)
     schema_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("1"))
-    snapshot_gz: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    snapshot_gz: Mapped[bytes | None] = mapped_column(LargeBinary)
 
 
 class BenchmarkResult(Base):

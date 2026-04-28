@@ -34,6 +34,7 @@ _logger.warning(
 )
 
 from app.agent.runner import run_review  # noqa: E402
+from app.agent.snapshot import archive_expired_snapshots  # noqa: E402
 from app.llm.maintenance import refresh_llm_catalog  # noqa: E402
 from app.telemetry.finding_outcomes import (  # noqa: E402
     classify_pending_outcomes_nightly,
@@ -77,6 +78,11 @@ async def classify_pending_outcomes(ctx: dict[str, Any]) -> None:
     await classify_pending_outcomes_nightly()
 
 
+async def archive_review_snapshots(ctx: dict[str, Any]) -> None:
+    archived = await archive_expired_snapshots()
+    ctx["archived_review_snapshots"] = archived
+
+
 async def worker_startup(ctx: dict[str, Any]) -> None:
     init_observability("worker")
     recovered = await recover_stale_running_reviews()
@@ -84,7 +90,13 @@ async def worker_startup(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [review_pr, classify_pr_outcomes, classify_pending_outcomes, refresh_llm_catalog]
+    functions = [
+        review_pr,
+        classify_pr_outcomes,
+        classify_pending_outcomes,
+        archive_review_snapshots,
+        refresh_llm_catalog,
+    ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = default_queue_name
     max_tries = 1
@@ -94,5 +106,6 @@ class WorkerSettings:
     on_startup = worker_startup
     cron_jobs = [
         cron(classify_pending_outcomes, hour=3, minute=0),
+        cron(archive_review_snapshots, hour=4, minute=15),
         cron(refresh_llm_catalog, hour=2, minute=30),
     ]

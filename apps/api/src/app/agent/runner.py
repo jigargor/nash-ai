@@ -397,7 +397,7 @@ async def _capture_context_snapshot(
             fetched_files=dict(context_bundle.fetched_files),
             chunk_plan=chunk_plan,
         )
-        await store_snapshot(payload)
+        await store_snapshot(payload, installation_id=int(context["installation_id"]))
         logger.debug("Context snapshot captured review_id=%s", context["review_id"])
     except Exception:
         logger.warning(
