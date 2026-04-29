@@ -36,14 +36,12 @@ Names below match **pydantic / Next** env unless noted. Railway/Vercel dashboard
 
 ### 2.2 Railway (API + worker)
 
-Mirror **both** services for shared config:
+Scope vars by service (least privilege). The authoritative matrix lives in `docs/secret-env-matrix.json`.
 
-- **Core:** `DATABASE_URL`, `REDIS_URL`, `FERNET_KEY`, `ENVIRONMENT=production` (and TLS on `DATABASE_URL` per `config.py`).
-- **GitHub:** `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `APP_PRIVATE_KEY_PEM` (preferred hosted form).
-- **Auth / limits:** `API_ACCESS_KEY`, `ADMIN_RETRY_API_KEY`, `DASHBOARD_USER_JWT_SECRET` (must match web if the BFF signs JWTs with the same secret), `DASHBOARD_USER_JWT_AUDIENCE`, `DASHBOARD_USER_JWT_ISSUER`.
-- **CORS / URLs:** `WEB_APP_URL` (exact frontend origin, no trailing slash).
-- **LLM:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` (set whichever providers you enable).
-- **Optional:** `SENTRY_DSN`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `R2_ENDPOINT_URL`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_REGION`, `R2_SNAPSHOT_PREFIX`, `ENABLE_REVIEWS`, rate/budget knobs.
+- **Both API + worker (required):** `DATABASE_URL`, `REDIS_URL`, `FERNET_KEY`, `ENVIRONMENT`, `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `APP_PRIVATE_KEY_PEM`.
+- **API-only (required):** `API_ACCESS_KEY`, `DASHBOARD_USER_JWT_SECRET`, `DASHBOARD_USER_JWT_AUDIENCE`, `DASHBOARD_USER_JWT_ISSUER`, `ADMIN_RETRY_API_KEY`, `WEB_APP_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`.
+- **Worker optional (only if used by worker code paths):** `ADMIN_RETRY_API_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`.
+- **Optional on both when enabled:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `SENTRY_DSN`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `R2_ENDPOINT_URL`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_REGION`, `R2_SNAPSHOT_PREFIX`, `ENABLE_REVIEWS`, rate/budget knobs.
 
 **`API_ACCESS_KEY`:** must match Vercel `API_ACCESS_KEY` (BFF sends `X-Api-Key`). Rotate both in the same change window.
 
@@ -214,15 +212,88 @@ pnpm exec husky init
 echo 'gitleaks protect --staged --config .gitleaks.toml' > .husky/pre-commit
 ```
 
+### 8.5 Environment matrix + drift audit (`docs/secret-env-matrix.json`, `.github/workflows/secret-env-audit.yml`)
+
+`docs/secret-env-matrix.json` is the machine-readable source of truth for secret-name governance:
+
+- Railway expectations are scoped by service (`api`, `worker`, `postgres`, `redis`).
+- Vercel expectations are scoped by environment (`production`, `preview`, `development`).
+- Rotation groups are defined once and reused by automation.
+
+Audit workflow behavior (`Secret Env Audit`):
+
+- Trigger: every Monday (`schedule`) and manually (`workflow_dispatch`).
+- Reads provider env names only (never prints secret values).
+- Computes `missing` + `extraneous` names against the matrix.
+- Fails the run on strict scopes (`api`, `worker`, all Vercel envs).
+- Keeps provider-managed services (`postgres`, `redis`) in advisory mode to avoid false blocking.
+
+Required Actions secrets for audit:
+
+- Railway: `RAILWAY_TOKEN`, `RAILWAY_PROJECT_ID`, `RAILWAY_ENVIRONMENT_ID`, `RAILWAY_SERVICE_API_ID`, `RAILWAY_SERVICE_WORKER_ID` (optional advisory: `RAILWAY_SERVICE_POSTGRES_ID`, `RAILWAY_SERVICE_REDIS_ID`).
+- Vercel: `VERCEL_TOKEN`, `VERCEL_PROJECT_ID` (optional: `VERCEL_TEAM_ID`).
+
+### 8.6 Distribution automation (`.github/workflows/secret-rotate.yml`)
+
+Manual rotation workflow behavior (`Secret Rotate`):
+
+- Trigger: `workflow_dispatch` only.
+- Inputs:
+  - `group`: one group from `docs/secret-env-matrix.json`.
+  - `target`: `all`, `railway`, or `vercel`.
+  - `dry_run`: preview mode (`true` by default).
+  - `confirm`: must be `ROTATE` when `dry_run=false`.
+- Supported automated groups:
+  - `api_access_key`
+  - `dashboard_jwt_secret`
+  - `auth_session_secret`
+  - `admin_retry_api_key`
+- Blocked manual-only groups:
+  - `fernet`
+  - `github_oauth`
+  - `app_private_key_pem`
+  - `webhook_secret`
+
+Safety and logging:
+
+- Generated values are randomized in-run and never echoed.
+- Provider updates are performed via API calls; logs include only provider/scope/key names.
+- The workflow writes `rotation-log.updated.json` as an artifact (date + metadata only), so you can review and then manually copy/commit to `docs/rotation-log.json`.
+- Workflow permissions remain least-privilege (`contents: read`).
+
+Safe sequence for an automated rotation window:
+
+1. Run `Secret Env Audit` and resolve drift first.
+2. Run `Secret Rotate` with `dry_run=true` and verify the plan.
+3. Re-run with `dry_run=false` and `confirm=ROTATE`.
+4. Smoke test: webhook delivery health, dashboard login, API auth path, worker jobs.
+5. Apply artifact changes to `docs/rotation-log.json`, commit, and run audit again.
+
+Rollback guidance:
+
+- If a rotated value causes incidents, immediately re-run `Secret Rotate` for the same group/target to issue a fresh value and deploy consistently.
+- For split systems (Railway + Vercel), prefer `target=all` to avoid transient mismatch.
+- For `AUTH_SESSION_SECRET` / `DASHBOARD_USER_JWT_SECRET`, user re-authentication is expected after rollback/redo.
+- Manual-only groups keep provider-native rollback procedures from Sections 3-4.
+
+Automation limitations:
+
+- This workflow does not auto-commit repository files.
+- `FERNET_KEY`, webhook secret, OAuth secret, and app private key rotation remain manual by design.
+- Postgres/Redis provider-managed variables are audited in advisory mode only.
+
 ---
 
 ## 9. Related files
 
 - Repo-root `.env.example` — backend and shared names.
 - `apps/web/.env.example` — Vercel / Next server secrets.
+- `docs/secret-env-matrix.json` — expected env names by Railway service and Vercel environment; rotation group routing.
 - `docs/rotation-log.json` — machine-readable rotation dates (update after every rotation).
 - `.gitleaks.toml` — gitleaks scan configuration and allowlists.
 - `README.md` — deployment targets (Railway API + worker, Vercel web).
 - `.github/workflows/secret-scan.yml` — gitleaks CI scan (every push/PR).
 - `.github/workflows/secret-rotation-reminder.yml` — weekly staleness check.
+- `.github/workflows/secret-env-audit.yml` — matrix drift audit for env variable names.
+- `.github/workflows/secret-rotate.yml` — manual distribution automation for allowed secret groups.
 - `.github/workflows/quality-gates.yml`, `api-db-security.yml`, `deepeval.yml` — Actions secret names.

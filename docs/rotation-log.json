@@ -3,7 +3,9 @@
     "Machine-readable rotation registry. Update last_rotated (YYYY-MM-DD) each time a secret is rotated.",
     "Do NOT record secret values here — dates only.",
     "Read by: .github/workflows/secret-rotation-reminder.yml",
-    "Guidance: docs/secrets-rotation.md"
+    "Also updated by: .github/workflows/secret-rotate.yml (artifact output, not auto-commit).",
+    "Guidance: docs/secrets-rotation.md",
+    "Matrix source: docs/secret-env-matrix.json"
   ],
   "secrets": [
     {
@@ -68,6 +70,36 @@
       "last_rotated": "2026-04-26",
       "max_age_days": 90,
       "rotation_guide": "docs/secrets-rotation.md#rotation-r2"
+    }
+  ],
+  "automation_groups": [
+    {
+      "group": "api_access_key",
+      "target": "all",
+      "last_rotated": null,
+      "last_mode": null,
+      "last_run_at": null
+    },
+    {
+      "group": "dashboard_jwt_secret",
+      "target": "all",
+      "last_rotated": null,
+      "last_mode": null,
+      "last_run_at": null
+    },
+    {
+      "group": "auth_session_secret",
+      "target": "vercel",
+      "last_rotated": null,
+      "last_mode": null,
+      "last_run_at": null
+    },
+    {
+      "group": "admin_retry_api_key",
+      "target": "railway",
+      "last_rotated": null,
+      "last_mode": null,
+      "last_run_at": null
     }
   ]
 }
