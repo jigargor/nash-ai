@@ -100,6 +100,21 @@ class AdaptiveThresholdConfig:
 
 
 @dataclass
+class ConsistencyProbeConfig:
+    """Optional LLM-backed probe for suspected silent finding suppression."""
+
+    enabled: bool = False
+    max_candidates_per_review: int = 8
+    mode: str = "deterministic_plus_llm"
+    only_high_critical: bool = False
+    model_provider: ModelProvider = DEFAULT_MODEL_PROVIDER
+    model_name: str = DEFAULT_MODEL_NAME
+    max_input_tokens: int = 12_000
+    max_output_tokens: int = 4096
+    daily_token_ceiling: int = 500_000
+
+
+@dataclass
 class ReviewConfig:
     confidence_threshold: int = DEFAULT_CONFIDENCE_THRESHOLD
     severity_threshold: str = DEFAULT_SEVERITY_THRESHOLD
@@ -116,6 +131,7 @@ class ReviewConfig:
     models: ModelsRoutingConfig = field(default_factory=ModelsRoutingConfig)
     fast_path: FastPathConfig = field(default_factory=FastPathConfig)
     adaptive_threshold: AdaptiveThresholdConfig = field(default_factory=AdaptiveThresholdConfig)
+    consistency_probe: ConsistencyProbeConfig = field(default_factory=ConsistencyProbeConfig)
 
 
 async def load_review_config(
@@ -153,6 +169,7 @@ async def load_review_config(
     chunking = _parse_chunking(parsed.get("chunking"))
     fast_path = _parse_fast_path(parsed.get("fast_path"))
     adaptive_threshold = _parse_adaptive_threshold(parsed.get("adaptive_threshold"))
+    consistency_probe = _parse_consistency_probe(parsed.get("consistency_probe"))
     return ReviewConfig(
         confidence_threshold=threshold,
         severity_threshold=severity_threshold,
@@ -169,6 +186,7 @@ async def load_review_config(
         chunking=chunking,
         fast_path=fast_path,
         adaptive_threshold=adaptive_threshold,
+        consistency_probe=consistency_probe,
     )
 
 
@@ -506,6 +524,41 @@ def _parse_adaptive_threshold(raw_value: object) -> AdaptiveThresholdConfig:
             raw_value.get("max_dismiss_rate"), 25, minimum=0, maximum=100
         ),
         min_samples=_normalize_positive_int(raw_value.get("min_samples"), 100),
+    )
+
+
+def _parse_consistency_probe(raw_value: object) -> ConsistencyProbeConfig:
+    if not isinstance(raw_value, Mapping):
+        return ConsistencyProbeConfig()
+    raw_mode = raw_value.get("mode")
+    mode = (
+        str(raw_mode).strip()
+        if isinstance(raw_mode, str) and raw_mode.strip()
+        else "deterministic_plus_llm"
+    )
+    provider_raw = raw_value.get("model_provider")
+    provider = _normalize_provider(provider_raw)
+    name_raw = raw_value.get("model_name")
+    fallback_name = _default_model_name_for_provider(provider)
+    model_name = (
+        str(name_raw).strip()
+        if isinstance(name_raw, str) and name_raw.strip()
+        else fallback_name
+    )
+    return ConsistencyProbeConfig(
+        enabled=bool(raw_value.get("enabled", False)),
+        max_candidates_per_review=_normalize_positive_int(
+            raw_value.get("max_candidates_per_review"), 8
+        ),
+        mode=mode,
+        only_high_critical=bool(raw_value.get("only_high_critical", False)),
+        model_provider=provider,
+        model_name=model_name,
+        max_input_tokens=_normalize_positive_int(raw_value.get("max_input_tokens"), 12_000),
+        max_output_tokens=_normalize_positive_int(raw_value.get("max_output_tokens"), 4096),
+        daily_token_ceiling=_normalize_positive_int(
+            raw_value.get("daily_token_ceiling"), 500_000
+        ),
     )
 
 
