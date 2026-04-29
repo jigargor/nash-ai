@@ -502,6 +502,85 @@ async def test_run_fast_path_stage_rotates_to_next_provider_after_quota_error(
     assert used_resolution == second
 
 
+@pytest.mark.anyio
+async def test_run_fast_path_stage_rotates_to_next_provider_after_non_quota_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = ModelResolution(
+        role="fast_path",
+        provider="openai",
+        model="gpt-5-mini",
+        tier="economy",
+        status="active",
+        catalog_version_hash="abc123",
+    )
+    second = ModelResolution(
+        role="fast_path",
+        provider="gemini",
+        model="gemini-2.5-flash-lite",
+        tier="economy",
+        status="active",
+        catalog_version_hash="abc123",
+    )
+    call_count = 0
+
+    def fake_resolve_attempts(*_args: object, **_kwargs: object) -> list[ModelResolution]:
+        return [first, second]
+
+    async def fake_prepass(**kwargs: object) -> tuple[FastPathDecision, list[object], str, str]:
+        nonlocal call_count
+        call_count += 1
+        provider = kwargs.get("provider")
+        if provider == "openai":
+            raise RuntimeError("temperature unsupported")
+        return (
+            FastPathDecision(
+                decision="light_review",
+                risk_labels=["low_risk"],
+                reason="fallback provider succeeded",
+                confidence=86,
+                review_surface=["src/app.py"],
+                requires_full_context=False,
+            ),
+            [],
+            "system",
+            "user",
+        )
+
+    async def fake_audit(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.agent.runner._resolve_runtime_attempt_chain", fake_resolve_attempts)
+    monkeypatch.setattr("app.agent.runner.run_fast_path_prepass", fake_prepass)
+    monkeypatch.setattr("app.agent.runner._record_model_audit", fake_audit)
+
+    context = {
+        "review_id": 123,
+        "installation_id": 1,
+        "run_id": "run",
+        "owner": "acme",
+        "repo": "repo",
+        "pr_number": 7,
+        "head_sha": "sha",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "tokens_used": 0,
+    }
+
+    decision, used_resolution = await _run_fast_path_stage(
+        context=context,
+        diff_text="diff --git a/src/app.py b/src/app.py\n+print('hi')",
+        pr={"title": "Code", "body": ""},
+        commits=[],
+        review_config=ReviewConfig(),
+        diff_tokens=20,
+    )
+
+    assert call_count == 2
+    assert decision.decision == "light_review"
+    assert used_resolution == second
+
+
 def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> None:
     config = ReviewConfig(
         models=ModelsRoutingConfig(

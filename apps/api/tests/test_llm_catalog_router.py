@@ -15,6 +15,7 @@ def test_baseline_catalog_validates_and_hashes() -> None:
 
     assert {"anthropic", "openai", "gemini"}.issubset(catalog.provider_ids())
     assert catalog.find_model("anthropic", "claude-sonnet-4-5") is not None
+    assert catalog.find_model("gemini", "gemini-2.5-flash-lite") is not None
     assert len(baseline_catalog_hash(catalog)) == 40
 
 
@@ -98,6 +99,22 @@ def test_router_supports_role_tier_config_without_model_pin() -> None:
     assert resolution.provider == "openai"
     assert resolution.model == "gpt-5-mini"
     assert resolution.tier == "economy"
+
+
+def test_fast_path_prefers_lowest_cost_economy_model() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            provider_order=["anthropic", "openai", "gemini"],
+            roles={"fast_path": ModelRoleRoutingConfig(tier="economy")},
+        )
+    )
+
+    resolution = resolve_model_for_role(
+        config, "fast_path", available_providers={"openai", "anthropic", "gemini"}
+    )
+
+    assert resolution.provider == "gemini"
+    assert resolution.model == "gemini-2.5-flash-lite"
 
 
 def test_resolve_model_attempt_chain_rotates_providers_then_lower_tiers() -> None:

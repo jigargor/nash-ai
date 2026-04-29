@@ -178,7 +178,9 @@ async def test_openai_compatible_structured_output_extracts_tool_payload(
         chat = SimpleNamespace(completions=_FakeCompletions())
 
     monkeypatch.setattr(
-        openai_module, "create_openai_compatible_client", lambda _provider: _FakeClient()
+        openai_module,
+        "create_openai_compatible_client",
+        lambda _provider, user_key_override=None: _FakeClient(),  # noqa: ARG005
     )
 
     adapter = get_provider_adapter(provider)
@@ -208,3 +210,61 @@ async def test_openai_compatible_structured_output_extracts_tool_payload(
             "cache_creation_input_tokens": 0,
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_adapter_prefers_user_provider_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.llm.providers import openai as openai_module
+
+    captured_key: str | None = None
+
+    class _FakeCompletions:
+        @staticmethod
+        async def create(**_kwargs: object) -> object:
+            return SimpleNamespace(
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            tool_calls=[
+                                SimpleNamespace(
+                                    function=SimpleNamespace(
+                                        name="submit_review",
+                                        arguments='{"summary":"ok","findings":[]}',
+                                    )
+                                )
+                            ]
+                        )
+                    )
+                ],
+            )
+
+    class _FakeClient:
+        chat = SimpleNamespace(completions=_FakeCompletions())
+
+    def fake_client_factory(_provider: str, user_key_override: str | None = None) -> object:
+        nonlocal captured_key
+        captured_key = user_key_override
+        return _FakeClient()
+
+    monkeypatch.setattr(openai_module, "create_openai_compatible_client", fake_client_factory)
+
+    adapter = get_provider_adapter("openai")
+    context: dict[str, object] = {"user_provider_keys": {"openai": "user-openai-key"}}
+    await adapter.structured_output(
+        request=StructuredOutputRequest(
+            model_name="gpt-5-mini",
+            system_prompt="system",
+            messages=[{"role": "user", "content": "go"}],
+            tool_name="submit_review",
+            tool_description="Submit review",
+            input_schema={"type": "object"},
+            context=context,
+            max_tokens=256,
+            temperature=0,
+        )
+    )
+
+    assert captured_key == "user-openai-key"

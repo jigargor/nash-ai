@@ -43,7 +43,12 @@ class OpenAIAdapter(BaseProviderAdapter):
         *,
         request: StructuredOutputRequest,
     ) -> StructuredOutputResult:
-        client = create_openai_compatible_client(self.provider)
+        user_key_override: str | None = request.context.get("user_provider_keys", {}).get(
+            self.provider
+        )
+        client = create_openai_compatible_client(
+            self.provider, user_key_override=user_key_override
+        )
         messages = list(request.messages)
         has_system = bool(messages and messages[0].get("role") == "system")
         if not has_system:
