@@ -58,7 +58,7 @@ FAST_PATH_TOOL = {
 
 
 def _fast_path_input_schema() -> dict[str, Any]:
-    schema = cast(dict[str, Any], FastPathDecision.model_json_schema())
+    schema = FastPathDecision.model_json_schema()
     required = schema.get("required")
     required_set = set(required) if isinstance(required, list) else set()
     required_set.update({"decision", "reason", "confidence"})

@@ -51,9 +51,9 @@ export function TermsAcceptanceModal({ isSubmitting, onAccept }: TermsAcceptance
         </div>
 
         <footer className="terms-modal-actions">
-          <a href="/api/v1/auth/logout" className="button button-ghost">
+          <Link href="/api/v1/auth/logout" className="button button-ghost">
             Cancel
-          </a>
+          </Link>
           <button type="button" className="button button-primary" onClick={onAccept} disabled={isSubmitting}>
             {isSubmitting ? "Saving..." : "I Agree"}
           </button>
