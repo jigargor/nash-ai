@@ -92,6 +92,25 @@ def test_normalize_recovers_confidence_from_alias_key() -> None:
     assert "confidence_recovered" in decision.risk_labels
 
 
+def test_normalize_keeps_model_confidence_without_recovery_label() -> None:
+    decision = normalize_fast_path_decision(
+        {
+            "decision": "light_review",
+            "risk_labels": ["config_only"],
+            "reason": "Small config-only change.",
+            "confidence": 88,
+            "review_surface": ["apps/web/next.config.ts"],
+            "requires_full_context": False,
+        },
+        FastPathConfig(light_review_min_confidence=80),
+        classify_diff_files([_file("apps/web/next.config.ts")], generated_paths=[], vendor_paths=[]),
+    )
+
+    assert decision.decision == "light_review"
+    assert decision.confidence == 88
+    assert "confidence_recovered" not in decision.risk_labels
+
+
 def test_normalize_recovers_confidence_from_low_risk_heuristic() -> None:
     decision = normalize_fast_path_decision(
         {

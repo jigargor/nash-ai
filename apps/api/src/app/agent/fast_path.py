@@ -90,18 +90,22 @@ def normalize_fast_path_decision(
         return fallback_full_review("Fast-path model returned an invalid decision schema.")
     payload = dict(raw)
     confidence_source = "model"
-    recovered = _recover_confidence(payload, classified)
-    if recovered is not None:
-        payload["confidence"] = recovered[0]
-        confidence_source = recovered[1]
-        labels = payload.get("risk_labels")
-        if isinstance(labels, list):
-            labels = [str(item) for item in labels]
-            if "confidence_recovered" not in labels:
-                labels.append("confidence_recovered")
-            payload["risk_labels"] = labels
-        else:
-            payload["risk_labels"] = ["confidence_recovered"]
+    normalized_confidence = _normalize_confidence_value(payload.get("confidence"))
+    if normalized_confidence is not None:
+        payload["confidence"] = normalized_confidence
+    else:
+        recovered = _recover_confidence(payload, classified)
+        if recovered is not None:
+            payload["confidence"] = recovered[0]
+            confidence_source = recovered[1]
+            labels = payload.get("risk_labels")
+            if isinstance(labels, list):
+                labels = [str(item) for item in labels]
+                if "confidence_recovered" not in labels:
+                    labels.append("confidence_recovered")
+                payload["risk_labels"] = labels
+            else:
+                payload["risk_labels"] = ["confidence_recovered"]
     payload["confidence_source"] = confidence_source
     if "confidence" not in payload:
         logger.warning("Fast-path decision missing confidence. Escalating to full review.")
@@ -175,7 +179,7 @@ def normalize_fast_path_decision(
 def _recover_confidence(
     payload: dict[str, Any], classified: list[ClassifiedDiffFile]
 ) -> tuple[int, str] | None:
-    for key in ("confidence", "confidence_score", "score", "certainty", "probability"):
+    for key in ("confidence_score", "score", "certainty", "probability"):
         raw_value = payload.get(key)
         candidate = _normalize_confidence_value(raw_value)
         if candidate is not None:
