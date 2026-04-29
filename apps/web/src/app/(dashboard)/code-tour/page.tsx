@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ExternalEvalActionChain } from "@/components/review/external-eval-action-chain";
 import { Panel } from "@/components/ui/panel";
@@ -80,7 +80,7 @@ export default function CodeTourPage() {
   const [ackConfirmed, setAckConfirmed] = useState(false);
   const [tokenBudgetCap, setTokenBudgetCap] = useState(2_000_000);
   const [costBudgetCapUsd, setCostBudgetCapUsd] = useState(25);
-  const [selectedEvalId, setSelectedEvalId] = useState<number | undefined>(undefined);
+  const [requestedEvalId, setRequestedEvalId] = useState<number | undefined>(undefined);
 
   const estimateMutation = useExternalEvalEstimate();
   const createMutation = useCreateExternalEval();
@@ -98,18 +98,14 @@ export default function CodeTourPage() {
     return selectedInstallation?.installation_id ?? activeInstallations[0]?.installation_id;
   }, [activeInstallations, selectedInstallationId]);
   const evalList = useExternalEvals(installationId);
+  const selectedEvalId = useMemo(() => {
+    const rows = evalList.data ?? [];
+    if (rows.length === 0) return undefined;
+    const requestedEval = rows.find((row) => row.id === requestedEvalId);
+    return requestedEval?.id ?? rows[0]?.id;
+  }, [evalList.data, requestedEvalId]);
   const evalDetail = useExternalEvalDetail(selectedEvalId, installationId);
 
-  useEffect(() => {
-    const rows = evalList.data ?? [];
-    if (rows.length === 0) {
-      setSelectedEvalId(undefined);
-      return;
-    }
-    if (selectedEvalId == null || !rows.some((row) => row.id === selectedEvalId)) {
-      setSelectedEvalId(rows[0].id);
-    }
-  }, [evalList.data, selectedEvalId]);
   const formErrors = useMemo(
     () => validateForm(repoUrl, targetRef, tokenBudgetCap, costBudgetCapUsd),
     [repoUrl, targetRef, tokenBudgetCap, costBudgetCapUsd],
@@ -138,7 +134,7 @@ export default function CodeTourPage() {
       },
       {
         onSuccess: (result) => {
-          setSelectedEvalId(result.external_eval_id);
+          setRequestedEvalId(result.external_eval_id);
         },
       },
     );
@@ -321,7 +317,7 @@ export default function CodeTourPage() {
                   type="button"
                   className="button button-ghost"
                   style={{ justifySelf: "start" }}
-                  onClick={() => setSelectedEvalId((previous) => (previous === row.id ? undefined : row.id))}
+                  onClick={() => setRequestedEvalId((previous) => (previous === row.id ? undefined : row.id))}
                 >
                   {isSelected ? "▼" : "▶"} #{row.id} · {row.owner}/{row.repo}@{row.target_ref}
                 </button>
