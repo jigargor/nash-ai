@@ -4,7 +4,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
-from app.db.base import Base
 from app.db.url import normalize_asyncpg_database_url
 
 connect_args: dict[str, object] = {
