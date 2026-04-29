@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hmac
+import time
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -57,6 +59,28 @@ class ExternalEvalCancelRequest(BaseModel):
     installation_id: int = Field(..., ge=1)
 
 
+@dataclass(slots=True)
+class _PreflightResult:
+    owner: str
+    repo: str
+    target_ref: str
+    default_branch: str
+    file_count: int
+    total_bytes: int
+    estimated_tokens: int
+    estimated_cost_usd: Decimal
+
+
+@dataclass(slots=True)
+class _PreflightCacheEntry:
+    result: _PreflightResult
+    expires_at_monotonic: float
+
+
+_PREFLIGHT_CACHE_TTL_SECONDS = 300
+_preflight_cache: dict[tuple[int, str, str], _PreflightCacheEntry] = {}
+
+
 async def _allowed_installation_ids(current_user: CurrentDashboardUser) -> set[int]:
     async with AsyncSessionLocal() as session:
         rows = (
@@ -94,6 +118,45 @@ def _estimate_cost(file_count: int, total_bytes: int) -> tuple[int, Decimal]:
     return estimated_tokens, estimated_cost.quantize(Decimal("0.000001"))
 
 
+def _preflight_cache_key(installation_id: int, repo_url: str, target_ref: str | None) -> tuple[int, str, str]:
+    return (
+        installation_id,
+        repo_url.strip().lower(),
+        (target_ref or "").strip(),
+    )
+
+
+async def _resolve_preflight(
+    installation_id: int, repo_url: str, target_ref: str | None
+) -> _PreflightResult:
+    cache_key = _preflight_cache_key(installation_id, repo_url, target_ref)
+    now_monotonic = time.monotonic()
+    cached = _preflight_cache.get(cache_key)
+    if cached and cached.expires_at_monotonic > now_monotonic:
+        return cached.result
+
+    owner, repo = parse_public_repo_url(repo_url)
+    repo_ref = await resolve_repo_ref(owner, repo, target_ref)
+    files = await list_repo_files(repo_ref)
+    total_bytes = sum(item.size_bytes for item in files)
+    estimated_tokens, estimated_cost = _estimate_cost(len(files), total_bytes)
+    result = _PreflightResult(
+        owner=owner,
+        repo=repo,
+        target_ref=repo_ref.ref,
+        default_branch=repo_ref.default_branch,
+        file_count=len(files),
+        total_bytes=total_bytes,
+        estimated_tokens=estimated_tokens,
+        estimated_cost_usd=estimated_cost,
+    )
+    _preflight_cache[cache_key] = _PreflightCacheEntry(
+        result=result,
+        expires_at_monotonic=now_monotonic + _PREFLIGHT_CACHE_TTL_SECONDS,
+    )
+    return result
+
+
 @router.post("/estimate")
 async def estimate_external_eval(
     payload: ExternalEvalEstimateRequest,
@@ -102,22 +165,18 @@ async def estimate_external_eval(
     allowed_installation_ids = await _allowed_installation_ids(current_user)
     _require_installation_access(allowed_installation_ids, payload.installation_id)
     try:
-        owner, repo = parse_public_repo_url(payload.repo_url)
-        repo_ref = await resolve_repo_ref(owner, repo, payload.target_ref)
-        files = await list_repo_files(repo_ref)
+        preflight = await _resolve_preflight(payload.installation_id, payload.repo_url, payload.target_ref)
     except PublicRepoError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
-    total_bytes = sum(item.size_bytes for item in files)
-    estimated_tokens, estimated_cost = _estimate_cost(len(files), total_bytes)
     return {
-        "owner": owner,
-        "repo": repo,
-        "target_ref": repo_ref.ref,
-        "default_branch": repo_ref.default_branch,
-        "file_count": len(files),
-        "total_bytes": total_bytes,
-        "estimated_tokens": estimated_tokens,
-        "estimated_cost_usd": str(estimated_cost),
+        "owner": preflight.owner,
+        "repo": preflight.repo,
+        "target_ref": preflight.target_ref,
+        "default_branch": preflight.default_branch,
+        "file_count": preflight.file_count,
+        "total_bytes": preflight.total_bytes,
+        "estimated_tokens": preflight.estimated_tokens,
+        "estimated_cost_usd": str(preflight.estimated_cost_usd),
         "ack_required": True,
         "warning": "Full-repository evaluation can be costly, especially for large repositories.",
     }
@@ -138,13 +197,27 @@ async def create_external_eval(
     _require_installation_access(allowed_installation_ids, payload.installation_id)
     user_id = await _current_user_row_id(current_user)
     try:
-        owner, repo = parse_public_repo_url(payload.repo_url)
-        repo_ref = await resolve_repo_ref(owner, repo, payload.target_ref)
-        files = await list_repo_files(repo_ref)
+        preflight = await _resolve_preflight(payload.installation_id, payload.repo_url, payload.target_ref)
     except PublicRepoError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
-    total_bytes = sum(item.size_bytes for item in files)
-    estimated_tokens, estimated_cost = _estimate_cost(len(files), total_bytes)
+
+    if payload.token_budget_cap < preflight.estimated_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Token budget cap ({payload.token_budget_cap}) is below the estimate "
+                f"({preflight.estimated_tokens})."
+            ),
+        )
+    if Decimal(str(payload.cost_budget_cap_usd)) < preflight.estimated_cost_usd:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Cost budget cap (${payload.cost_budget_cap_usd:.2f}) is below the estimate "
+                f"(${preflight.estimated_cost_usd})."
+            ),
+        )
+
     now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as session:
@@ -153,11 +226,11 @@ async def create_external_eval(
             installation_id=payload.installation_id,
             requested_by_user_id=user_id,
             repo_url=payload.repo_url,
-            owner=owner,
-            repo=repo,
-            target_ref=repo_ref.ref,
-            estimated_tokens=estimated_tokens,
-            estimated_cost_usd=estimated_cost,
+            owner=preflight.owner,
+            repo=preflight.repo,
+            target_ref=preflight.target_ref,
+            estimated_tokens=preflight.estimated_tokens,
+            estimated_cost_usd=preflight.estimated_cost_usd,
             token_budget_cap=payload.token_budget_cap,
             cost_budget_cap_usd=Decimal(str(payload.cost_budget_cap_usd)),
             ack_required=True,

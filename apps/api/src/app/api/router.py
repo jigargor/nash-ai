@@ -77,6 +77,13 @@ class RepoAccumulator(TypedDict):
     last_review_at: datetime
 
 
+class SearchResultItem(TypedDict):
+    type: str
+    label: str
+    href: str
+    subtitle: str | None
+
+
 REPO_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 DEFAULT_TEMPLATE_PROMPT = """You generate .codereview.yml configuration files for a PR review agent.
 Return ONLY valid YAML (no markdown fences, no explanation).
@@ -550,11 +557,7 @@ async def generate_repo_codereview_template(
                 )
                 session.add(row)
                 await session.flush()
-            if row.ai_generated_at is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="AI .codereview.yml can only be generated once per repository.",
-                )
+            was_previously_generated = row.ai_generated_at is not None
             row.config_yaml = cast(dict[str, object], normalized_payload)
             row.ai_generated_yaml = normalized_yaml
             row.ai_generated_at = now
@@ -571,12 +574,103 @@ async def generate_repo_codereview_template(
             ) from None
     return {
         "repo_full_name": repo_full_name,
-        "generated_once": True,
+        "generated_once": was_previously_generated,
         "generated_at": now.isoformat(),
         "provider": provider,
         "model": model_name,
         "config_yaml_text": normalized_yaml,
     }
+
+
+@router.get("/search")
+async def search_dashboard(
+    q: Annotated[str, Query(min_length=1, max_length=120)],
+    installation_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=12, ge=1, le=50),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
+) -> list[SearchResultItem]:
+    query = q.strip().lower()
+    if not query:
+        return []
+    async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
+        if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
+            scope_installation_ids = {installation_id}
+        else:
+            scope_installation_ids = allowed_installation_ids
+        if not scope_installation_ids:
+            return []
+        stmt = (
+            select(
+                Review.id,
+                Review.repo_full_name,
+                Review.pr_number,
+                Review.status,
+                Review.installation_id,
+                Review.created_at,
+            )
+            .where(Review.installation_id.in_(scope_installation_ids))
+            .order_by(Review.created_at.desc())
+            .limit(400)
+        )
+        rows = (
+            await session.execute(stmt)
+        ).all()
+    seen_repo: set[str] = set()
+    items: list[SearchResultItem] = []
+    for (
+        review_id,
+        repo_full_name,
+        pr_number,
+        review_status,
+        review_installation_id,
+        created_at,
+    ) in rows:
+        repo_name = str(repo_full_name or "")
+        pr_no = _as_int_or_none(pr_number)
+        review_row_id = _as_int_or_none(review_id)
+        installation_row_id = _as_int_or_none(review_installation_id)
+        if review_row_id is None or installation_row_id is None:
+            continue
+        if not repo_name:
+            continue
+        matches_repo = query in repo_name.lower()
+        matches_pr = pr_no is not None and query in str(pr_no)
+        if not matches_repo and not matches_pr:
+            continue
+        try:
+            owner_name, repo_name_only = _split_repo_full_name(repo_name)
+        except ValueError:
+            continue
+        if repo_name not in seen_repo and owner_name and repo_name_only:
+            items.append(
+                {
+                    "type": "repo",
+                    "label": repo_name,
+                    "href": f"https://github.com/{owner_name}/{repo_name_only}",
+                    "subtitle": f"Installation #{installation_row_id}",
+                }
+            )
+            seen_repo.add(repo_name)
+            if len(items) >= limit:
+                break
+        if pr_no is None:
+            continue
+        created_label = (
+            created_at.isoformat() if isinstance(created_at, datetime) else "unknown date"
+        )
+        items.append(
+            {
+                "type": "pr",
+                "label": f"{repo_name} · PR #{pr_no}",
+                "href": f"/repos/{repo_name}/prs/{pr_no}?reviewId={review_row_id}&installationId={installation_row_id}",
+                "subtitle": f"Latest status: {review_status} · {created_label}",
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items[:limit]
 
 
 @router.get("/reviews")

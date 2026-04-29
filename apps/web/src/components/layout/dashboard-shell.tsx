@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import type { PropsWithChildren } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useMemo, useState, type FormEvent, type PropsWithChildren } from "react";
 
 import { TermsAcceptanceModal } from "@/components/layout/terms-acceptance-modal";
+import { useDashboardSearch } from "@/hooks/use-dashboard-search";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useInstallations } from "@/hooks/use-installations";
 import { useAcceptTerms, useTermsStatus } from "@/hooks/use-terms-status";
@@ -19,7 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "All Reviews", href: "/reviews" },
   { label: "Repositories", href: "/repos" },
   { label: "Models", href: "/models" },
-  { label: "Evaluate External", href: "/evaluate-external" },
+  { label: "Code Tour", href: "/code-tour" },
   { label: "Settings", href: "/settings" },
 ];
 
@@ -37,7 +38,7 @@ function pageTitle(pathname: string): string {
   if (isPullRequestReviewRoute(pathname)) return "All Reviews";
   if (pathname.startsWith("/repos")) return "Repositories";
   if (pathname.startsWith("/models")) return "Models";
-  if (pathname.startsWith("/evaluate-external")) return "Evaluate External";
+  if (pathname.startsWith("/code-tour")) return "Code Tour";
   if (pathname.startsWith("/settings")) return "Settings";
   return "Dashboard";
 }
@@ -52,8 +53,8 @@ function isActive(pathname: string, href: string): boolean {
     return pathname === "/repos" || pathname.startsWith("/repos/");
   }
   if (href === "/models") return pathname === "/models" || pathname.startsWith("/models/");
-  if (href === "/evaluate-external") {
-    return pathname === "/evaluate-external" || pathname.startsWith("/evaluate-external/");
+  if (href === "/code-tour") {
+    return pathname === "/code-tour" || pathname.startsWith("/code-tour/");
   }
   if (href === "/settings") return pathname === "/settings" || pathname.startsWith("/settings/");
   return pathname === href || pathname.startsWith(`${href}/`);
@@ -61,13 +62,26 @@ function isActive(pathname: string, href: string): boolean {
 
 export function DashboardShell({ children }: PropsWithChildren) {
   const pathname = usePathname();
+  const router = useRouter();
   const currentUser = useCurrentUser();
   const installations = useInstallations();
+  const [searchInput, setSearchInput] = useState("");
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const searchQuery = useMemo(() => searchInput.trim(), [searchInput]);
+  const searchResults = useDashboardSearch(searchQuery);
   const activeInstallations = installations.data?.filter((item) => item.active).length ?? 0;
   const termsStatus = useTermsStatus();
   const acceptTerms = useAcceptTerms();
   const requiresTermsAcceptance =
     termsStatus.data?.requires_terms_acceptance === true && currentUser.data?.authenticated === true;
+
+  function handleSearchSubmit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const normalized = searchInput.trim();
+    if (!normalized) return;
+    setIsSearchOpen(false);
+    router.push(`/reviews?q=${encodeURIComponent(normalized)}`);
+  }
 
   return (
     <div className="app-shell">
@@ -115,7 +129,56 @@ export function DashboardShell({ children }: PropsWithChildren) {
               <h2 className="app-topbar-title">{pageTitle(pathname)}</h2>
               <p className="app-topbar-subtitle">Track usage, findings, and external evaluation risk.</p>
             </div>
-            <div className="app-topbar-actions" />
+            <div className="app-topbar-actions">
+              <form className="app-search-wrap" onSubmit={handleSearchSubmit}>
+                <input
+                  type="search"
+                  className="app-search"
+                  placeholder="Search PRs, repos, issues"
+                  value={searchInput}
+                  onChange={(event) => {
+                    setSearchInput(event.target.value);
+                    setIsSearchOpen(true);
+                  }}
+                  onFocus={() => setIsSearchOpen(true)}
+                />
+                {isSearchOpen && searchQuery.length >= 2 ? (
+                  <div className="app-search-results" role="listbox" aria-label="Search results">
+                    {searchResults.isLoading ? (
+                      <span className="app-search-result-empty">Searching…</span>
+                    ) : searchResults.data && searchResults.data.length > 0 ? (
+                      searchResults.data.map((item) =>
+                        item.href.startsWith("http") ? (
+                          <a
+                            key={`${item.type}:${item.href}`}
+                            href={item.href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="app-search-result-row"
+                            onClick={() => setIsSearchOpen(false)}
+                          >
+                            <span>{item.label}</span>
+                            {item.subtitle ? <small>{item.subtitle}</small> : null}
+                          </a>
+                        ) : (
+                          <Link
+                            key={`${item.type}:${item.href}`}
+                            href={item.href}
+                            className="app-search-result-row"
+                            onClick={() => setIsSearchOpen(false)}
+                          >
+                            <span>{item.label}</span>
+                            {item.subtitle ? <small>{item.subtitle}</small> : null}
+                          </Link>
+                        ),
+                      )
+                    ) : (
+                      <span className="app-search-result-empty">No matches found.</span>
+                    )}
+                  </div>
+                ) : null}
+              </form>
+            </div>
           </div>
         </header>
 

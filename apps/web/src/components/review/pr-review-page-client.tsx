@@ -302,6 +302,8 @@ function ProviderAvailabilityIndicator({
 }
 
 export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installationId }: PrReviewPageClientProps) {
+  const repoUrl = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const prUrl = `${repoUrl}/pull/${encodeURIComponent(prNumber)}`;
   const reviewQuery = useReview(reviewId, installationId);
   const rerunMutation = useRerunReview();
   const dismissMutation = useDismissFinding();
@@ -514,7 +516,13 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
       ) : null}
       <Panel elevated>
         <h1 style={{ margin: 0, fontFamily: "var(--font-instrument-serif)", overflowWrap: "anywhere", wordBreak: "break-word" }}>
-          {owner}/{repo} · PR #{prNumber}
+          <a href={repoUrl} target="_blank" rel="noopener noreferrer">
+            {owner}/{repo}
+          </a>{" "}
+          ·{" "}
+          <a href={prUrl} target="_blank" rel="noopener noreferrer">
+            PR #{prNumber}
+          </a>
         </h1>
         <p className="pr-review-summary-text" style={{ marginBottom: "0.25rem", color: "var(--text-muted)" }}>
           {summaryParagraph}

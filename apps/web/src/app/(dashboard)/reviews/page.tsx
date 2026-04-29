@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
@@ -62,13 +63,21 @@ function localInputToIsoStartOfDay(dateOnly: string): string | undefined {
   return d.toISOString();
 }
 
+function parseRepoFullName(repoFullName: string): { owner: string; repo: string } | null {
+  const [owner, repo] = repoFullName.split("/", 2);
+  if (!owner || !repo) return null;
+  return { owner, repo };
+}
+
 export default function ReviewsPage() {
+  const searchParams = useSearchParams();
   const installations = useInstallations();
   const [installationId, setInstallationId] = useState<number | undefined>(undefined);
   const [statusFilter, setStatusFilter] = useState("all");
   const [findingsFilter, setFindingsFilter] = useState<"all" | "zero" | "nonzero">("all");
   const [createdOnOrAfter, setCreatedOnOrAfter] = useState("");
   const [createdOnOrBefore, setCreatedOnOrBefore] = useState("");
+  const topbarQuery = searchParams?.get("q")?.trim().toLowerCase() ?? "";
 
   const reviewDateFilters = useMemo((): ReviewListFilters | undefined => {
     const filters: ReviewListFilters = {};
@@ -101,10 +110,32 @@ export default function ReviewsPage() {
     } else if (findingsFilter === "nonzero") {
       list = list.filter((item) => (item.findings_count ?? 0) > 0);
     }
+    if (topbarQuery) {
+      list = list.filter((item) => {
+        const repoName = item.repo_full_name.toLowerCase();
+        const prNumber = String(item.pr_number);
+        return repoName.includes(topbarQuery) || prNumber.includes(topbarQuery);
+      });
+    }
     return list;
-  }, [reviewsQuery.data, statusFilter, findingsFilter]);
+  }, [reviewsQuery.data, statusFilter, findingsFilter, topbarQuery]);
 
   const installationOptions = installations.data ?? [];
+
+  useEffect(() => {
+    if (installationOptions.length === 0) {
+      if (installationId !== undefined) setInstallationId(undefined);
+      return;
+    }
+    if (installationId === undefined) {
+      setInstallationId(installationOptions[0]?.installation_id);
+      return;
+    }
+    const stillPresent = installationOptions.some(
+      (installation) => installation.installation_id === installationId,
+    );
+    if (!stillPresent) setInstallationId(installationOptions[0]?.installation_id);
+  }, [installationOptions, installationId]);
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
@@ -212,11 +243,7 @@ export default function ReviewsPage() {
         <Panel>
           <div className="reviews-list-grid">
             {filteredReviews.map((review) => (
-              <Link
-                key={review.id}
-                href={`/repos/${review.repo_full_name}/prs/${review.pr_number}?reviewId=${review.id}&installationId=${review.installation_id}`}
-                className="review-row-link"
-              >
+              <div key={review.id} className="review-row-link">
                 <span className="review-row-left">
                   <span
                     className={statusVisualClass(review.status)}
@@ -224,7 +251,23 @@ export default function ReviewsPage() {
                     title={statusAriaLabel(review.status)}
                   />
                   <span className="review-row-title">
-                    {review.repo_full_name} · PR #{review.pr_number}
+                    {(() => {
+                      const parsedRepo = parseRepoFullName(review.repo_full_name);
+                      if (!parsedRepo) return review.repo_full_name;
+                      const repoUrl = `https://github.com/${encodeURIComponent(parsedRepo.owner)}/${encodeURIComponent(parsedRepo.repo)}`;
+                      const prUrl = `${repoUrl}/pull/${encodeURIComponent(String(review.pr_number))}`;
+                      return (
+                        <>
+                          <a href={repoUrl} target="_blank" rel="noopener noreferrer">
+                            {review.repo_full_name}
+                          </a>{" "}
+                          ·{" "}
+                          <a href={prUrl} target="_blank" rel="noopener noreferrer">
+                            PR #{review.pr_number}
+                          </a>
+                        </>
+                      );
+                    })()}
                   </span>
                 </span>
                 <span className="review-row-right">
@@ -233,6 +276,12 @@ export default function ReviewsPage() {
                   </span>
                   <span className="review-findings-pill">{review.findings_count ?? 0} findings</span>
                   <span className="review-cost-text">${review.cost_usd ?? "0.000000"}</span>
+                  <Link
+                    href={`/repos/${review.repo_full_name}/prs/${review.pr_number}?reviewId=${review.id}&installationId=${review.installation_id}`}
+                    className="review-open-link"
+                  >
+                    Open review
+                  </Link>
                 </span>
                 <span className="review-hover-card" aria-hidden>
                   <span className="review-hover-row">
@@ -258,7 +307,7 @@ export default function ReviewsPage() {
                     </span>
                   ) : null}
                 </span>
-              </Link>
+              </div>
             ))}
           </div>
         </Panel>

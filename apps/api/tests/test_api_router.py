@@ -106,7 +106,27 @@ async def test_list_installations_and_repos_include_template_state(
 
 
 @pytest.mark.anyio
-async def test_generate_template_success_and_once_limit(
+async def test_search_dashboard_returns_repo_and_pr_matches(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    await _insert_review(installation_id, repo_full_name="acme/repo-stream", pr_number=55, status="done")
+
+    response = await client.get(
+        f"/api/v1/search?q=repo-stream&installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(item["type"] == "repo" and item["label"] == "acme/repo-stream" for item in payload)
+    assert any(item["type"] == "pr" and "PR #55" in item["label"] for item in payload)
+
+
+@pytest.mark.anyio
+async def test_generate_template_success_and_regenerate(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -162,13 +182,15 @@ model:
     assert body["repo_full_name"] == "acme/repo"
     assert body["provider"] == "openai"
     assert body["model"] == "gpt-5.5"
+    assert body["generated_once"] is False
     assert "confidence_threshold" in body["config_yaml_text"]
 
     second = await client.post(
         f"/api/v1/repos/acme/repo/codereview-template/generate?installation_id={installation_id}",
         headers=_auth_headers(),
     )
-    assert second.status_code == 429
+    assert second.status_code == 200
+    assert second.json()["generated_once"] is True
 
 
 @pytest.mark.anyio
