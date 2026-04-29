@@ -55,7 +55,9 @@ Thumbs.db
 
 # Private docs
 private_docs/
-.cursor/
+
+# Cursor plans
+.cursor/plans/
 
 coverage.json
 

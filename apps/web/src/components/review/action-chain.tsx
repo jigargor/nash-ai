@@ -37,6 +37,45 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+function CopyDebugJsonButton({ getPayload }: { getPayload: () => Record<string, unknown> }) {
+  const [copied, setCopied] = useState(false);
+  async function handleClick(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(getPayload(), null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void handleClick()}
+      title={copied ? "Copied" : "Copy debug JSON (action chain, artifacts, findings)"}
+      aria-label={copied ? "Copied JSON to clipboard" : "Copy debug JSON to clipboard"}
+      style={{
+        flexShrink: 0,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "2.25rem",
+        height: "2.25rem",
+        borderRadius: "var(--radius-md)",
+        border: "1px solid var(--border-strong)",
+        background: copied ? "var(--accent-muted)" : "var(--card-muted)",
+        color: "var(--text-muted)",
+        cursor: "pointer",
+      }}
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+      </svg>
+    </button>
+  );
+}
+
 function getRaw(meta: Record<string, unknown> | null, key: string): unknown {
   return meta?.[key] ?? undefined;
 }
@@ -144,13 +183,44 @@ function FastPathBody({ meta }: { meta: Record<string, unknown> | null }) {
   );
 }
 
+function ContextBudgetHelpIcon() {
+  return (
+    <span
+      title="Segments removed to stay under the configured prompt token budget. Later stages (editor, filters) still run, but the model may have missed context tied to dropped hunks or files—increase chunking budgets or narrow the diff if reviews feel shallow."
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "1.1rem",
+        height: "1.1rem",
+        borderRadius: "999px",
+        border: "1px solid #fb923c66",
+        color: "#fb923c",
+        fontSize: "0.65rem",
+        fontWeight: 700,
+        cursor: "help",
+        flexShrink: 0,
+      }}
+      aria-label="Why dropped context matters"
+    >
+      ?
+    </span>
+  );
+}
+
 function PrimaryBody({ meta }: { meta: Record<string, unknown> | null }) {
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const sysTokens = getRaw(meta, "system_prompt_tokens") as number | undefined;
   const userTokens = getRaw(meta, "user_prompt_tokens") as number | undefined;
   const excerpt = getRaw(meta, "output_summary_excerpt") as string | undefined;
+  const fullSummary = getRaw(meta, "output_summary_full") as string | undefined;
   const contextLayers = getRaw(meta, "context_layers") as Record<string, unknown> | undefined;
   const layerUsage = contextLayers?.layer_token_usage as Record<string, number> | undefined;
   const dropped = contextLayers?.dropped_segments as string[] | undefined;
+  const baseSummary = excerpt ?? fullSummary ?? "";
+  const displaySummary =
+    summaryOpen && fullSummary && excerpt && fullSummary.length > excerpt.length ? fullSummary : baseSummary;
+  const canExpand = Boolean(fullSummary && excerpt && fullSummary.length > excerpt.length);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
@@ -183,23 +253,48 @@ function PrimaryBody({ meta }: { meta: Record<string, unknown> | null }) {
         </div>
       )}
       {dropped && dropped.length > 0 && (
-        <p style={{ margin: 0, fontSize: "0.75rem", color: "#fb923c" }}>
-          ⚠ {dropped.length} context segment{dropped.length !== 1 ? "s" : ""} dropped (token budget)
+        <p style={{ margin: 0, fontSize: "0.75rem", color: "#fb923c", display: "flex", alignItems: "center", gap: "0.35rem" }}>
+          <span>
+            ⚠ {dropped.length} context segment{dropped.length !== 1 ? "s" : ""} dropped (token budget)
+          </span>
+          <ContextBudgetHelpIcon />
         </p>
       )}
-      {excerpt && (
-        <blockquote
-          style={{
-            margin: 0,
-            borderLeft: "2px solid var(--border-strong)",
-            paddingLeft: "0.75rem",
-            fontSize: "0.78rem",
-            color: "var(--text-muted)",
-            fontStyle: "italic",
-          }}
-        >
-          {excerpt}
-        </blockquote>
+      {displaySummary && (
+        <div>
+          <blockquote
+            style={{
+              margin: 0,
+              borderLeft: "2px solid var(--border-strong)",
+              paddingLeft: "0.75rem",
+              fontSize: "0.78rem",
+              color: "var(--text-muted)",
+              fontStyle: "italic",
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              wordBreak: "break-word",
+            }}
+          >
+            {displaySummary}
+          </blockquote>
+          {canExpand ? (
+            <button
+              type="button"
+              onClick={() => setSummaryOpen((o) => !o)}
+              style={{
+                marginTop: "0.35rem",
+                background: "none",
+                border: "none",
+                color: "var(--accent)",
+                fontSize: "0.72rem",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              {summaryOpen ? "Show shorter excerpt" : "Show full primary summary"}
+            </button>
+          ) : null}
+        </div>
       )}
     </div>
   );
@@ -486,12 +581,49 @@ function StageCard({
 // Chunking callout
 // ---------------------------------------------------------------------------
 
+interface SkippedFileDetail {
+  path: string;
+  file_class?: string;
+  reason?: string;
+}
+
+function SkippedFilesHelpIcon() {
+  return (
+    <span
+      title="These paths were not part of the chunked primary review surface (often generated, lockfile, or docs-only). Risk: regressions there rely on other checks or human review—expand include_file_classes in .codereview.yml if they should be reviewed."
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "1.1rem",
+        height: "1.1rem",
+        borderRadius: "999px",
+        border: "1px solid var(--border-strong)",
+        color: "var(--text-muted)",
+        fontSize: "0.65rem",
+        fontWeight: 700,
+        cursor: "help",
+        flexShrink: 0,
+      }}
+      aria-label="Why skipped files matter"
+    >
+      ?
+    </span>
+  );
+}
+
 function ChunkingCallout({ plan }: { plan: Record<string, unknown> }) {
   const [open, setOpen] = useState(false);
+  const [skippedOpen, setSkippedOpen] = useState(false);
   const chunks = (plan.chunks as string[] | undefined) ?? [];
   const skipped = (plan.skipped_files as string[] | undefined) ?? [];
+  const skippedDetails = (plan.skipped_file_details as SkippedFileDetail[] | undefined) ?? [];
   const isPartial = plan.is_partial as boolean | undefined;
   const coverageNote = plan.coverage_note as string | undefined;
+  const skippedRows: SkippedFileDetail[] =
+    skippedDetails.length > 0
+      ? skippedDetails
+      : skipped.map((path) => ({ path, reason: "Excluded by chunking pre-pass (no detailed reason stored)." }));
 
   return (
     <div style={{ display: "flex", gap: "0.75rem", marginBottom: "0.5rem" }}>
@@ -507,7 +639,12 @@ function ChunkingCallout({ plan }: { plan: Record<string, unknown> }) {
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
             <span style={{ fontWeight: 600, fontSize: "0.82rem", color: "#818cf8" }}>Chunked into {chunks.length} group{chunks.length !== 1 ? "s" : ""}</span>
             {isPartial && <span style={{ fontSize: "0.7rem", color: "#fb923c", border: "1px solid #fb923c44", borderRadius: "4px", padding: "0.05rem 0.35rem" }}>partial</span>}
-            {skipped.length > 0 && <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>{skipped.length} file{skipped.length !== 1 ? "s" : ""} skipped</span>}
+            {skipped.length > 0 && (
+              <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
+                {skipped.length} file{skipped.length !== 1 ? "s" : ""} skipped
+                <SkippedFilesHelpIcon />
+              </span>
+            )}
             {coverageNote && <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginLeft: "auto" }}>{coverageNote}</span>}
             <span style={{ fontSize: "0.65rem", color: "var(--text-muted)", display: "inline-block", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
           </div>
@@ -519,7 +656,44 @@ function ChunkingCallout({ plan }: { plan: Record<string, unknown> }) {
                 chunk {i + 1}: {id}
               </span>
             ))}
-            {skipped.length > 0 && <span style={{ fontSize: "0.72rem", color: "#fb923c" }}>⚠ {skipped.length} files not reviewed</span>}
+            {skipped.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                <button
+                  type="button"
+                  onClick={() => setSkippedOpen((s) => !s)}
+                  style={{
+                    alignSelf: "flex-start",
+                    background: "none",
+                    border: "none",
+                    color: "#fb923c",
+                    fontSize: "0.72rem",
+                    cursor: "pointer",
+                    padding: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.3rem",
+                  }}
+                >
+                  <span style={{ display: "inline-block", transform: skippedOpen ? "rotate(90deg)" : "none", transition: "transform 0.1s" }}>▶</span>
+                  ⚠ {skipped.length} file{skipped.length !== 1 ? "s" : ""} not reviewed
+                </button>
+                {skippedOpen && (
+                  <ul style={{ margin: "0.15rem 0 0", paddingLeft: "1.1rem", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                    {skippedRows.map((row) => (
+                      <li key={row.path} style={{ marginBottom: "0.25rem" }}>
+                        <code style={{ fontSize: "0.7rem" }}>{row.path}</code>
+                        {row.file_class ? (
+                          <span style={{ marginLeft: "0.35rem" }}>
+                            · class <strong>{row.file_class}</strong>
+                          </span>
+                        ) : null}
+                        {row.reason ? <div style={{ marginTop: "0.1rem", fontStyle: "italic" }}>{row.reason}</div> : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -535,10 +709,12 @@ function TokenSummary({
   audits,
   costUsd,
   postedFindingsCount,
+  pipelineStagedFindingsPeak,
 }: {
   audits: ReviewModelAudit[];
   costUsd: string | null;
   postedFindingsCount: number;
+  pipelineStagedFindingsPeak: number;
 }) {
   let totalInput = 0,
     totalOutput = 0,
@@ -576,7 +752,14 @@ function TokenSummary({
             </span>
           ) : null}
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-            Findings: <strong style={{ color: "var(--text-primary)" }}>{postedFindingsCount}</strong>
+            Posted: <strong style={{ color: "var(--text-primary)" }}>{postedFindingsCount}</strong>
+            {pipelineStagedFindingsPeak > postedFindingsCount ? (
+              <>
+                {" "}
+                · pipeline max:{" "}
+                <strong style={{ color: "var(--text-primary)" }}>{pipelineStagedFindingsPeak}</strong>
+              </>
+            ) : null}
           </span>
         </span>
       </div>
@@ -594,8 +777,12 @@ interface ActionChainProps {
   costUsd?: string | null;
   /** Final posted findings count (matches PR review summary). */
   postedFindingsCount: number;
+  /** Largest `findings_count` from any pipeline stage (may exceed posted when a later stage failed). */
+  pipelineStagedFindingsPeak: number;
   /** Shown when there are no model-audit rows (e.g. still running or audits not persisted). */
   pipelineEmptyHint?: string | null;
+  /** When set, header shows a copy control for JSON export. */
+  getDebugExportPayload?: () => Record<string, unknown>;
 }
 
 const AUTO_OPEN_STAGES = new Set(["primary", "challenger", "tie_break"]);
@@ -605,7 +792,9 @@ export function ActionChain({
   debugArtifacts,
   costUsd,
   postedFindingsCount,
+  pipelineStagedFindingsPeak,
   pipelineEmptyHint,
+  getDebugExportPayload,
 }: ActionChainProps) {
   const chunkingPlan = debugArtifacts?.chunking_plan as Record<string, unknown> | undefined;
   const hasChunking = chunkingPlan && Array.isArray(chunkingPlan.chunks) && (chunkingPlan.chunks as unknown[]).length > 1;
@@ -622,9 +811,20 @@ export function ActionChain({
         padding: "1rem",
       }}
     >
-      <p style={{ margin: "0 0 0.75rem", fontSize: "0.8rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
-        Action chain
-      </p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          marginBottom: "0.65rem",
+        }}
+      >
+        <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
+          Action chain
+        </p>
+        {getDebugExportPayload ? <CopyDebugJsonButton getPayload={getDebugExportPayload} /> : null}
+      </div>
       <p style={{ margin: "0 0 0.65rem", fontSize: "0.78rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
         LLM pipeline stages (provider calls). This is not the GitHub HTTP trace—those requests happen inside each
         stage when the agent reads the repo or posts comments.
@@ -648,7 +848,12 @@ export function ActionChain({
           </div>
         ))}
       </div>
-      <TokenSummary audits={audits} costUsd={costUsd ?? null} postedFindingsCount={postedFindingsCount} />
+      <TokenSummary
+        audits={audits}
+        costUsd={costUsd ?? null}
+        postedFindingsCount={postedFindingsCount}
+        pipelineStagedFindingsPeak={pipelineStagedFindingsPeak}
+      />
     </div>
   );
 }

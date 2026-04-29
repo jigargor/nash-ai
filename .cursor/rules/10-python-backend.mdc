@@ -1,0 +1,71 @@
+---
+description: Python backend conventions
+globs: apps/api/**/*.py
+alwaysApply: false
+---
+
+# Python Backend Rules
+
+## Language and tooling
+
+- **Python 3.12+ only.** Use modern syntax: `list[str]` not `List[str]`, `X | None` not `Optional[X]`, `match`/`case` when it clarifies intent.
+- **uv** for dependency management. NEVER use pip directly in this repo. To add a dep: `uv add <package>` from `apps/api/`.
+- **ruff** for linting and formatting. Config in root `pyproject.toml`.
+- **mypy --strict** for typing. Run before every commit.
+- **pytest** with `pytest-asyncio` for tests. Test files in `apps/api/tests/`, mirroring `src/app/` structure.
+
+## Async-first
+
+- All I/O is async. FastAPI routes are `async def`. DB via `SQLAlchemy 2.0` async (`AsyncSession`). HTTP via `httpx.AsyncClient`.
+- Never block the event loop. If you must run CPU-bound work, use `asyncio.to_thread` or `run_in_executor`.
+- Close httpx clients properly — use `async with httpx.AsyncClient() as client:` blocks, not long-lived globals, unless you're managing the lifecycle intentionally.
+
+## Type hints
+
+- Every function signature MUST have complete type hints, including return type.
+- Prefer `Protocol` over abstract base classes for interfaces.
+- Use `TypedDict` for dict shapes that cross module boundaries; better yet, use Pydantic models.
+- `Any` is forbidden in this codebase. If you truly need it, use `object` + narrowing, or add `# type: ignore[reason]` with a real explanation.
+
+## Pydantic v2
+
+- All request/response models are Pydantic v2 `BaseModel`.
+- Use `Field(..., description="...")` to document fields — these show up in OpenAPI.
+- For enums, use `Literal["a", "b"]` over `StrEnum` when the set is small and stable.
+- Agent output schemas live in `apps/api/src/app/agent/schema.py`.
+
+## FastAPI
+
+- Route handlers are thin. Business logic lives in service modules.
+- Dependency injection for DB session: `db: AsyncSession = Depends(get_db)`.
+- Return Pydantic models, not dicts. FastAPI will serialize them correctly.
+- Use `status_code=` explicitly on non-200 responses.
+- Background tasks for fast fire-and-forget work. Use ARQ for anything that might take > 5 seconds.
+
+## Database (SQLAlchemy 2.0)
+
+- Use the new-style declarative syntax: `Mapped[int] = mapped_column(...)`.
+- Never use sync `Session` — always `AsyncSession`.
+- All queries via `select()`, `update()`, `delete()` — no legacy Query API.
+- Use Alembic for migrations. Never edit the DB schema without a migration.
+- For JSONB columns in Postgres, type as `Mapped[dict]` and validate with Pydantic on read/write.
+
+## GitHub API interaction
+
+- Always use `app.github.client.GitHubClient`. Never hand-roll httpx calls to `api.github.com`.
+- Always include `X-GitHub-Api-Version: 2022-11-28` header.
+- Check rate limit headers (`X-RateLimit-Remaining`) and back off gracefully.
+- Handle 404s explicitly for optional resources like `.codereview.yml`.
+
+## Secrets and config
+
+- All config comes from `app.config.settings` (pydantic-settings).
+- Never log secrets. Never `print` tokens or API keys. Never commit `.env`.
+- Private keys (`*.pem`) are gitignored and loaded from the path in settings.
+
+## Error handling
+
+- Don't swallow exceptions. If you catch, either handle or re-raise with context.
+- Log with `logging`, not `print`. Include structured context (review_id, installation_id).
+- Raise custom exceptions from `app.exceptions` for domain errors (e.g., `ReviewTooLargeError`).
+- In webhook handlers, catch all exceptions at the top level so one bad payload doesn't kill the process.

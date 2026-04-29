@@ -7,6 +7,7 @@ import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { useInstallations } from "@/hooks/use-installations";
 import { useReviews } from "@/hooks/use-reviews";
+import type { ReviewListFilters } from "@/lib/api/reviews";
 
 function statusVisualClass(status: string): string {
   if (status === "done") return "review-status-dot review-status-done";
@@ -29,12 +30,46 @@ function isPositiveNumber(value: number | null | undefined): value is number {
   return typeof value === "number" && value > 0;
 }
 
+function formatReviewInstant(iso: string | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function localInputToIsoEndOfDay(dateOnly: string): string | undefined {
+  if (!dateOnly.trim()) return undefined;
+  const d = new Date(`${dateOnly}T23:59:59`);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toISOString();
+}
+
+function localInputToIsoStartOfDay(dateOnly: string): string | undefined {
+  if (!dateOnly.trim()) return undefined;
+  const d = new Date(`${dateOnly}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toISOString();
+}
+
 export default function ReviewsPage() {
   const installations = useInstallations();
   const [installationId, setInstallationId] = useState<number | undefined>(undefined);
   const [statusFilter, setStatusFilter] = useState("all");
   const [findingsFilter, setFindingsFilter] = useState<"all" | "zero" | "nonzero">("all");
-  const reviewsQuery = useReviews(installationId);
+  const [createdOnOrAfter, setCreatedOnOrAfter] = useState("");
+  const [createdOnOrBefore, setCreatedOnOrBefore] = useState("");
+
+  const reviewDateFilters = useMemo((): ReviewListFilters | undefined => {
+    const filters: ReviewListFilters = {};
+    const afterIso = localInputToIsoStartOfDay(createdOnOrAfter);
+    const beforeIso = localInputToIsoEndOfDay(createdOnOrBefore);
+    if (afterIso) filters.createdAfter = afterIso;
+    if (beforeIso) filters.createdBefore = beforeIso;
+    if (!filters.createdAfter && !filters.createdBefore) return undefined;
+    return filters;
+  }, [createdOnOrAfter, createdOnOrBefore]);
+
+  const reviewsQuery = useReviews(installationId, reviewDateFilters);
 
   const allStatuses = useMemo(() => {
     const reviews = reviewsQuery.data ?? [];
@@ -113,7 +148,35 @@ export default function ReviewsPage() {
             <option value="zero">0 findings</option>
             <option value="nonzero">1+ findings</option>
           </select>
+
+          <label htmlFor="created-after" style={{ color: "var(--text-muted)" }}>
+            Started on or after
+          </label>
+          <input
+            id="created-after"
+            type="date"
+            className="app-search"
+            style={{ width: "160px" }}
+            value={createdOnOrAfter}
+            onChange={(event) => setCreatedOnOrAfter(event.target.value)}
+          />
+
+          <label htmlFor="created-before" style={{ color: "var(--text-muted)" }}>
+            Started on or before
+          </label>
+          <input
+            id="created-before"
+            type="date"
+            className="app-search"
+            style={{ width: "160px" }}
+            value={createdOnOrBefore}
+            onChange={(event) => setCreatedOnOrBefore(event.target.value)}
+          />
         </div>
+        <p style={{ margin: "0.35rem 0 0", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+          Date filters use your local calendar day converted to UTC bounds (start 00:00 / end 23:59:59) for the API{" "}
+          <code>created_after</code> / <code>created_before</code> query.
+        </p>
       </Panel>
 
       {reviewsQuery.isLoading ? (
@@ -151,6 +214,9 @@ export default function ReviewsPage() {
                   </span>
                 </span>
                 <span className="review-row-right">
+                  <span className="review-cost-text" style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                    {formatReviewInstant(review.created_at)}
+                  </span>
                   <span className="review-findings-pill">{review.findings_count ?? 0} findings</span>
                   <span className="review-cost-text">${review.cost_usd ?? "0.000000"}</span>
                 </span>

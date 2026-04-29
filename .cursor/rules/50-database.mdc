@@ -1,0 +1,54 @@
+---
+description: Database and data modeling rules
+globs: apps/api/src/app/db/**/*.py
+alwaysApply: false
+---
+
+# Database Rules
+
+## Schema changes
+
+- Every schema change goes through Alembic. NEVER hand-edit Postgres.
+- Generate migrations with `uv run alembic revision --autogenerate -m "<description>"`.
+- Always review the auto-generated migration — autogen isn't perfect (especially for indexes, JSONB, enums).
+- Migrations run in CI before deploy. If a migration fails in staging, don't deploy to prod.
+
+## Table conventions
+
+- Primary keys are `BIGSERIAL`. Use `id: Mapped[int] = mapped_column(BigInteger, primary_key=True)`.
+- Timestamps are `TIMESTAMPTZ` (timezone-aware UTC). Default `now()` at the DB level.
+- Soft deletes: add a `deleted_at TIMESTAMPTZ` column. Never DELETE rows that might be referenced historically.
+- Index any column used in a WHERE clause on a large table.
+- Unique constraints: declare via `__table_args__` with `UniqueConstraint`, not ad-hoc `unique=True` when multi-column.
+
+## JSONB usage
+
+- JSONB is great for write-once data with evolving shape (findings, config).
+- JSONB is bad for data you'll query with complex filters — use a normalized column.
+- When storing a Pydantic model as JSONB, always `.model_dump(mode="json")` to handle dates/enums. On read, `.model_validate()`.
+- Index JSONB paths you query often: `CREATE INDEX ON reviews ((findings -> 'summary'))`.
+
+## Queries
+
+- Use SQLAlchemy 2.0 syntax: `await session.execute(select(Review).where(...))`.
+- Never N+1. Use `selectinload` or `joinedload` for relationships.
+- For large result sets, stream with `session.stream(select(...))` and yield.
+- COUNT queries on large tables are expensive — consider caching or approximation.
+
+## Transactions
+
+- The default: each API request is one transaction, committed on response.
+- For background jobs, own the transaction explicitly: `async with session.begin():`.
+- Long-running jobs (like reviews) should use multiple short transactions, not one big one. Hold locks as briefly as possible.
+
+## Testing
+
+- Tests use a separate database (`codereview_test`), reset between tests with transactions.
+- Use pytest fixtures to set up test data: `fixtures/review_factory.py`.
+- Never `.commit()` in a test — let the fixture roll back.
+
+## Performance
+
+- `EXPLAIN ANALYZE` anything that's not obviously fast.
+- Watch for sequential scans on the `reviews` table — should be using the `(repo_full_name, pr_number)` index.
+- Postgres `pg_stat_statements` enabled in prod; review weekly.

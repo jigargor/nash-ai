@@ -1,0 +1,81 @@
+---
+description: Next.js + TypeScript frontend conventions
+globs: apps/web/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Frontend Rules
+
+## Language and tooling
+
+- **TypeScript strict mode.** No `any` unless followed by a comment explaining why.
+- **Next.js 15 App Router.** Never use the Pages Router. All routes under `src/app/`.
+- **pnpm** for packages. `pnpm --filter web add <pkg>` from repo root.
+- **ESLint + Prettier** enforced in CI. Run `pnpm --filter web lint --fix` before committing.
+- **Vitest** for unit tests, **Playwright** for E2E.
+
+## Component conventions
+
+- Functional components only. No class components.
+- Named exports for components: `export function FindingCard() {}`.
+- Default export only for Next.js page/layout files (framework requirement).
+- Props as TypeScript interfaces, one per component: `interface FindingCardProps { ... }`.
+- Destructure props at the function signature: `function FindingCard({ finding, onDismiss }: FindingCardProps)`.
+- Accept `className` prop for layout flexibility in reusable components.
+- Use `children` typed as `React.ReactNode` when wrapping.
+
+## State management boundary
+
+- **TanStack Query** for ALL server state. Every API call goes through a hook wrapping `useQuery` or `useMutation`.
+- **Zustand** for UI state only: selected finding, filter state, collapsed panels.
+- **NEVER** put server data in Zustand. **NEVER** put UI state in TanStack Query cache.
+- Custom hooks in `src/hooks/`. Query hooks are named `useFoo` (e.g., `useReview`, `useReviews`).
+
+## Styling
+
+- Design tokens from `docs/DESIGN.md`. Do NOT introduce new colors ad hoc.
+- Typography: `Instrument Serif` for display, `Geist` for body, `Geist Mono` for code. Load via `next/font`.
+- Dark mode only (for now). Light mode is explicitly NOT supported; do not add `prefers-color-scheme` queries.
+- Avoid inline styles except for dynamic values (e.g., computed colors). Prefer CSS Modules or Tailwind (whichever the repo uses — check first).
+- Animations: use CSS transitions for simple state changes; Motion library only for orchestrated sequences.
+
+## Server vs Client components
+
+- Default to Server Components. Only add `"use client"` when you need:
+  - Hooks (`useState`, `useEffect`, etc.)
+  - Browser APIs (`window`, `localStorage`, `EventSource`)
+  - Event handlers (`onClick`, `onChange`)
+- Keep `"use client"` boundaries close to the leaves. Don't mark a layout as client just because one deep child needs it.
+- Data fetching for Server Components: use `fetch()` directly with Next.js caching. For Client Components: TanStack Query.
+
+## Routes
+
+- Route groups `(auth)` and `(dashboard)` separate layouts.
+- API routes in `src/app/api/` proxy to FastAPI; never call Anthropic or GitHub directly from the browser.
+- Auth check: use middleware (`middleware.ts`) to gate `/dashboard/*` routes.
+
+## Forms
+
+- NEVER use HTML `<form>` elements with submit handlers in artifacts or interactive widgets.
+- For real forms (outside artifacts), use `react-hook-form` with Zod validation.
+- Client-side validation mirrors server-side validation; server is authoritative.
+
+## SSE streaming
+
+- Use native `EventSource`. Don't pull in a library.
+- Always clean up connections in `useEffect` cleanup.
+- Close the connection on `{type: "complete"}` events to free resources.
+
+## Accessibility
+
+- Every interactive element is keyboard accessible.
+- Use semantic HTML: `<button>` for buttons, `<a>` for links. Don't make `<div>` clickable.
+- ARIA labels on icon-only buttons.
+- Focus management in modals and overlays.
+- Keyboard shortcuts documented in a help overlay (`?` to open).
+
+## Shared types
+
+- Types used by both frontend and backend live in `packages/shared-types/src/index.ts`.
+- Import as `import type { Finding } from "@ai-code-review/shared-types"`.
+- If you add a field, update the Pydantic model in the API and regenerate/update the TS type in the same PR.

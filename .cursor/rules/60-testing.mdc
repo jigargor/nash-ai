@@ -1,0 +1,67 @@
+---
+description: Testing conventions
+globs: "**/*{test,spec}*.{py,ts,tsx}"
+alwaysApply: false
+---
+
+# Testing Rules
+
+## Backend (pytest)
+
+- Test files in `apps/api/tests/`, mirroring `src/app/` structure.
+- Use `pytest-asyncio` with `@pytest.mark.asyncio` for async tests.
+- Naming: `test_<unit>_<scenario>_<expected>` — e.g., `test_verify_signature_with_valid_hmac_returns_true`.
+- Fixtures in `conftest.py` at the level they're used. Don't over-centralize.
+- Mock external APIs (`httpx`, Anthropic, GitHub) with `pytest-httpx` or `respx`.
+- **Don't test private functions directly.** Test through the public interface.
+
+## What to test at each layer
+
+| Layer | What |
+|---|---|
+| Parsers (diff, config) | Edge cases: empty, malformed, huge, unicode |
+| Tool implementations | Normal case, error case, timeout, malicious input |
+| Agent loop | With mocked Anthropic client returning pre-recorded responses |
+| Pydantic schemas | Boundary validation (min/max, required fields) |
+| Webhook handlers | Signature verification, event filtering, enqueuing |
+| API routes | Auth, happy path, bad input returns 400, DB errors return 500 |
+| DB models | Constraints, indexes, cascade behavior |
+
+## Coverage targets
+
+- Agent core (`apps/api/src/app/agent/`): **80%+ line coverage**.
+- Webhook handlers: **90%+ line coverage** — these are security-critical.
+- UI components: lighter, focus on logic and accessibility.
+
+## Frontend (Vitest)
+
+- Test files next to components: `FindingCard.test.tsx`.
+- Use `@testing-library/react`. Query by accessible role/label, not by class or test ID (unless absolutely necessary).
+- Mock TanStack Query with `@tanstack/react-query`'s testing utilities.
+- For hooks, use `renderHook` from Testing Library.
+
+## E2E (Playwright)
+
+- Lives in `apps/web/e2e/`.
+- Runs against a real API (test DB) in CI, not mocked.
+- Happy-path scenarios only — unit tests cover the details.
+- Keep under 10 tests; these are slow and flaky if over-used.
+
+## Evals (separate from tests)
+
+- Evals are NOT unit tests. They're probabilistic quality checks.
+- Run on every prompt change via CI.
+- Report precision/recall/FP rate, compare to baseline, gate merges.
+- Never run evals on every push — they cost real money. Label-gated: add `prompt-change` label to trigger.
+
+## What not to test
+
+- Third-party library internals (FastAPI's request parsing, SQLAlchemy's query builder).
+- Trivial getters/setters.
+- Auto-generated code.
+
+## Tests in PRs
+
+- Every bug fix PR includes a regression test.
+- Every new feature PR includes tests before merging.
+- A PR that decreases coverage > 2% needs justification in the description.

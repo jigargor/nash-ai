@@ -71,6 +71,7 @@ from app.github.comments import post_review
 from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
 from app.llm.router import ModelRoleRoutingConfig, resolve_model_attempt_chain
 from app.llm.errors import LLMQuotaOrRateLimitError
+from app.llm.rate_limit_backoff import sleep_after_llm_rate_limit
 from app.llm.types import ModelProvider
 from app.observability import record_review_trace
 from app.agent.snapshot import SnapshotPayload, store_snapshot
@@ -314,7 +315,7 @@ async def _run_fast_path_stage(
     fallback_reason: str | None = fast_resolution.fallback_reason
     last_error: Exception | None = None
     decision: FastPathDecision | None = None
-    for attempt in fast_attempts:
+    for attempt_index, attempt in enumerate(fast_attempts):
         fallback_reason = attempt.fallback_reason
         try:
             decision, classified, _, _ = await run_fast_path_prepass(
@@ -340,6 +341,13 @@ async def _run_fast_path_stage(
                 attempt.provider,
                 attempt.model,
                 exc,
+            )
+            await sleep_after_llm_rate_limit(
+                provider=exc.provider,
+                model=exc.model,
+                attempt_index=attempt_index,
+                retry_after_seconds=exc.retry_after_seconds,
+                rate_limit_reset_hint=exc.rate_limit_reset_hint,
             )
             continue
         except Exception as exc:
@@ -602,7 +610,7 @@ async def run_review(
                 if not editor_attempts:
                     raise RuntimeError("No provider candidates available for editor stage")
                 last_chunk_editor_error: Exception | None = None
-                for attempt in editor_attempts:
+                for attempt_index, attempt in enumerate(editor_attempts):
                     try:
                         edited_result = await run_editor(
                             draft=final_result,
@@ -630,6 +638,13 @@ async def run_review(
                             attempt.provider,
                             attempt.model,
                             exc,
+                        )
+                        await sleep_after_llm_rate_limit(
+                            provider=exc.provider,
+                            model=exc.model,
+                            attempt_index=attempt_index,
+                            retry_after_seconds=exc.retry_after_seconds,
+                            rate_limit_reset_hint=exc.rate_limit_reset_hint,
                         )
                         continue
                 if editor_resolution is None:
@@ -713,7 +728,7 @@ async def run_review(
         primary_stage_started_at = monotonic()
         token_snapshot = _token_snapshot(context)
         last_primary_error: Exception | None = None
-        for attempt in primary_attempts:
+        for attempt_index, attempt in enumerate(primary_attempts):
             try:
                 messages = await run_agent(
                     system_prompt,
@@ -741,6 +756,13 @@ async def run_review(
                     attempt.model,
                     exc,
                 )
+                await sleep_after_llm_rate_limit(
+                    provider=exc.provider,
+                    model=exc.model,
+                    attempt_index=attempt_index,
+                    retry_after_seconds=exc.retry_after_seconds,
+                    rate_limit_reset_hint=exc.rate_limit_reset_hint,
+                )
                 continue
         else:
             raise RuntimeError(
@@ -760,6 +782,7 @@ async def run_review(
                 "system_prompt_tokens": count_tokens(system_prompt),
                 "user_prompt_tokens": count_tokens(user_prompt),
                 "output_summary_excerpt": (result.summary or "")[:400] or None,
+                "output_summary_full": (result.summary or "")[:16_000] or None,
                 "context_layers": context_bundle.telemetry.as_dict(),
             },
         )
@@ -992,7 +1015,7 @@ async def run_review(
             editor_stage_started_at = monotonic()
             editor_snapshot = _token_snapshot(context)
             last_editor_error: Exception | None = None
-            for attempt in editor_attempts:
+            for attempt_index, attempt in enumerate(editor_attempts):
                 try:
                     edited_result = await run_editor(
                         draft=draft_result,
@@ -1020,6 +1043,13 @@ async def run_review(
                         attempt.provider,
                         attempt.model,
                         exc,
+                    )
+                    await sleep_after_llm_rate_limit(
+                        provider=exc.provider,
+                        model=exc.model,
+                        attempt_index=attempt_index,
+                        retry_after_seconds=exc.retry_after_seconds,
+                        rate_limit_reset_hint=exc.rate_limit_reset_hint,
                     )
                     continue
             else:
@@ -1602,6 +1632,17 @@ async def _run_chunked_review(
         "chunking_plan": {
             "chunks": [chunk.chunk_id for chunk in chunk_plan.chunks],
             "skipped_files": [item.path for item in chunk_plan.skipped_files],
+            "skipped_file_details": [
+                {
+                    "path": item.path,
+                    "file_class": item.file_class,
+                    "reason": (
+                        f"File class '{item.file_class}' is excluded from chunked review "
+                        "for this repository's include_file_classes setting."
+                    ),
+                }
+                for item in chunk_plan.skipped_files
+            ],
             "is_partial": chunk_plan.is_partial,
             "coverage_note": chunk_plan.coverage_note,
         },

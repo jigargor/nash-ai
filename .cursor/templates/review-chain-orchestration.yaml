@@ -1,0 +1,108 @@
+orchestration:
+  goal: "Short-circuit the review pipeline when there are no findings to edit (skip wasteful max-mode LLM stages), fix the empty Editor pass UI, add structured quota-aware provider/model fallback and deterministic fast-path prompt compaction; implement branching review workflows with LangGraph, observability with LangSmith, and optional HTTP surfaces with LangServe—building on routing in router.py and context budgets in context_builder.py."
+  mode: "implement" # analyze|implement|review
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  scoring:
+    correctness: 0.35
+    maintainability: 0.25
+    risk: 0.25
+    performance: 0.15
+
+  workers:
+    - id: "w1"
+      agent: "backend-engineer"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Runner branching in runner.py: gate max_mode challenger/tie-break when draft findings are empty; skip run_editor when len(findings)==0 with EditedReview equivalent and deterministic filters/post_review; chunked path parity; audits with skipped/zero-token rows and optional chain_short_circuit metadata. Align execution paths with LangGraph graph nodes and conditional edges."
+
+    - id: "w2"
+      agent: "backend-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Provider resilience and Lang stack glue: LLMQuotaOrRateLimitError; attempt_chain from router.py + ReviewConfig + BYOK; wrap fast_path, finalize_review, run_editor, loop.py primary; LangSmith traces/spans per stage and subgraph; quota subgraph retries without masking fatal errors."
+
+    - id: "w3"
+      agent: "frontend-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "EditorBody empty/skipped states in action-chain.tsx; STAGE_META / DecisionBadge for skipped decisions; optional correlation IDs surfaced when LangSmith links exist for operator debugging."
+
+  lang_stack:
+    langgraph:
+      purpose: "Encode review branching as an explicit graph: fast-path → primary → conditional max_mode → conditional editor → deterministic config filters → post_review."
+      practices:
+        - "Use conditional edges for empty-findings short-circuit (skip challenger/tie-break/editor when nothing to transform)."
+        - "Model quota/rate-limit recovery as a subgraph or retry loop with capped attempts before surfacing failure."
+        - "Keep state serializable (counts, summaries, flags); avoid stuffing full findings into graph checkpoint unless bounded."
+        - "Compose subgraphs for chunked vs single-pass paths without duplicating policy logic."
+    langsmith:
+      purpose: "Trace runs end-to-end: stage latency, provider/model chosen, fallback attempts, short-circuit decisions."
+      practices:
+        - "Tag runs with installation/review identifiers suitable for dashboards without logging secrets."
+        - "Dataset/eval hooks optional for regression on runner branching (e.g. golden fixtures for empty-findings paths)."
+        - "Align span names with dashboard audit stages so UI and traces stay comparable."
+    langserve:
+      purpose: "Expose selected graphs or subgraphs over HTTP for internal tooling or controlled experimentation—not a substitute for authenticated FastAPI review APIs unless explicitly gated."
+      practices:
+        - "Reuse app.config secrets and network boundaries; never expose raw GitHub tokens."
+        - "If exposing a graph route, enforce auth/rate limits consistent with apps/api patterns."
+
+  pipeline_branching:
+    short_circuit_rules:
+      - "After fast-path, if the draft finding list is empty before an LLM stage that only transforms findings, do not call that stage's model."
+      - "Max mode (~731): gate challenger/tie-break with len(result.findings) > 0."
+      - "Post–draft (~823+): if len(draft_result.findings)==0, skip run_editor; EditedReview with findings=[], summary from draft, decisions=[]; then _apply_review_config_filters → post_review."
+      - "Chunked branch (~512+): if len(final_result.findings)==0 after merge, skip run_editor."
+    audits_and_dashboard:
+      - "Omit editor audit when skipped OR zero-token audit with decision=skipped and extra_metadata.reason=no_findings_to_edit."
+      - "Optional skipped challenger/tie-break audits when gated."
+      - "Optional metadata chain_short_circuit on final audit when editor skipped."
+    product_note:
+      - "Repos that relied on the editor to rewrite summary with zero findings lose that LLM pass; confirm summary-from-primary is acceptable."
+
+  ui_editor_pass:
+    goals:
+      - "Explicit empty state when keep/modify/drop counts are zero and no drop reasons."
+      - "If decision=skipped from API: copy such as Editor pass skipped — no findings from primary."
+
+  quota_fallback:
+    design:
+      - "Shared LLMQuotaOrRateLimitError for quota/rate-limit/overloaded (per-provider SDK mapping)."
+      - "attempt_chain(role, ReviewConfig, context): round 1 one candidate per configured provider (provider_order + cost); further rounds walk tiers frontier→balanced→economy until cap."
+      - "High-value sites: _request_fast_path_decision, finalize_review, run_editor, ReAct loop entry."
+      - "First success wins; all fail → re-raise last error."
+    byok:
+      - "Respect user_provider_keys consistent with _configured_provider_ids in router.py."
+
+  fast_path_compaction:
+    multi_provider:
+      - "Loop quota-aware attempt chain (economy-first cost sort) instead of single model then fallback_full_review only."
+      - "If all attempts fail: preserve full-review fallback; set debug/metadata e.g. fast_path_compaction."
+    deterministic_compaction:
+      - "prompt_compaction utility: tiktoken truncation; drop lockfile/vendor hunks first using ContextPackagingConfig / ignore patterns."
+      - "Dense manifest: sorted paths, +/- counts, extension histogram aligned with existing fast-path hints."
+    optional_tighten:
+      - "On fast_path_all_providers_failed, optionally tighten ContextBudgets for that run (surrounding_context, diff_hunks) with economy tier per _review_config_for_fast_path_decision."
+    later_optional:
+      - "Compaction when diff tokens exceed threshold without fast-path failure—behind config flag."
+
+  stage_handoff_data:
+    short_term:
+      - "counts + summary + optional fingerprint in audit metadata_json (incoming/outgoing_findings_count, short_circuit)."
+    medium_term:
+      - "Optional StageHandoff TypedDict/Pydantic on context.stage_handoff between stages."
+
+  constraints:
+    - "Quota detection stays conservative—only rotate on clear quota/rate-limit signals."
+    - "Do not weaken auth/session, webhook, or tenant isolation controls."
+    - "Preserve strict typing (mypy --strict) and existing .cursor/rules security constraints."
+    - "Runner changes must remain explainable in dashboard audits without leaking sensitive file contents at INFO."
+    - "LangServe endpoints must not bypass tenant isolation or webhook/API security guarantees."
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: false
+    include_data_contracts: true
+    include_review_pipeline_architecture: true

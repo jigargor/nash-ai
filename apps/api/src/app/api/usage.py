@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.config import settings
-from app.db.models import ApiUsageEvent, InstallationUser, Review, User
+from app.db.models import ApiUsageEvent, InstallationUser, Review, User, UserProviderKey
 from app.db.session import AsyncSessionLocal, set_installation_context
 
 
@@ -174,12 +174,23 @@ async def get_usage_summary(
 
         provider_caps = sorted(provider_daily.values(), key=lambda row: str(row["provider"]))
 
+        configured_rows = await session.execute(
+            select(UserProviderKey.provider)
+            .join(User, User.id == UserProviderKey.user_id)
+            .where(User.github_id == current_user.github_id)
+            .where(User.deleted_at.is_(None))
+            .order_by(UserProviderKey.provider)
+        )
+        configured_providers = sorted({str(row[0]) for row in configured_rows.all()})
+
         return {
             "installation_id": installation_id,
             "service_breakdown": service_breakdown,
             "daily_requests": daily,
             "weekly_requests": weekly,
             "token_usage": {"daily": daily_used, "weekly": weekly_used},
+            "configured_providers": configured_providers,
+            "configured_provider_count": len(configured_providers),
             "api_key_caps": provider_caps,
             "cumulative_caps": {
                 "daily_tokens": daily_used,

@@ -4,6 +4,7 @@ from typing import Any
 
 from app.agent.acknowledgments import CodeAcknowledgment
 from app.agent.review_config import ModelProvider
+from app.agent.finalize import parse_edited_review
 from app.agent.schema import EditedReview, ReviewResult
 from app.llm.providers import StructuredOutputRequest, get_provider_adapter
 
@@ -60,4 +61,4 @@ async def run_editor(
             temperature=0,
         )
     )
-    return EditedReview.model_validate(result.payload)
+    return parse_edited_review(result.payload)

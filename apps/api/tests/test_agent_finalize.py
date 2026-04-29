@@ -2,7 +2,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent import finalize as finalize_module
-from app.agent.finalize import _build_schema_feedback, _repair_review_input
+from app.agent.finalize import (
+    _build_schema_feedback,
+    _repair_review_input,
+    repair_edited_review_payload,
+)
+from app.agent.schema import EditedReview
 from app.agent.review_config import ModelProvider
 from app.agent.schema import ReviewResult
 from app.llm.providers import StructuredOutputResult
@@ -92,6 +97,55 @@ def test_repair_review_input_coerces_inference_confidence_and_vendor_high() -> N
     f = repaired["findings"][0]
     assert f["confidence"] <= 75
     assert f["severity"] == "medium"
+
+
+def test_repair_edited_review_payload_coerces_editor_severity_evidence_pairs() -> None:
+    raw = {
+        "summary": "Summary within limits.",
+        "findings": [
+            _minimal_finding(
+                severity="critical",
+                evidence="diff_visible",
+                line_start=1,
+            ),
+            _minimal_finding(
+                severity="high",
+                evidence="inference",
+                line_start=2,
+                target_line_content="x",
+            ),
+        ],
+        "decisions": [
+            {"original_index": 0, "action": "keep"},
+            {"original_index": 1, "action": "keep"},
+        ],
+    }
+    repaired = repair_edited_review_payload(raw)
+    edited = EditedReview.model_validate(repaired)
+    assert edited.findings[0].severity == "high"
+    assert edited.findings[0].evidence == "diff_visible"
+    assert edited.findings[1].severity == "medium"
+    assert edited.findings[1].evidence == "inference"
+    assert edited.findings[1].confidence <= 75
+
+
+def test_repair_edited_review_payload_demotes_tool_verified_without_calls() -> None:
+    raw = {
+        "summary": "ok",
+        "findings": [
+            _minimal_finding(
+                severity="critical",
+                evidence="tool_verified",
+                evidence_tool_calls=[],
+                line_start=1,
+            )
+        ],
+        "decisions": [{"original_index": 0, "action": "keep"}],
+    }
+    repaired = repair_edited_review_payload(raw)
+    edited = EditedReview.model_validate(repaired)
+    assert edited.findings[0].evidence == "diff_visible"
+    assert edited.findings[0].severity == "high"
 
 
 def test_repair_review_input_coerces_critical_without_tool_for_vendor() -> None:

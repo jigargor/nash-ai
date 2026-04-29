@@ -4,7 +4,7 @@ from typing import Any, Final, cast
 from pydantic import ValidationError
 
 from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
-from app.agent.schema import Finding, ReviewResult
+from app.agent.schema import EditedReview, Finding, ReviewResult
 from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
 from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.providers import StructuredOutputRequest, get_provider_adapter
@@ -125,6 +125,50 @@ def _repair_review_input(raw_input: object) -> object:
     return repaired
 
 
+def repair_edited_review_payload(raw: object) -> dict[str, Any]:
+    """Normalize editor structured output the same way as submit_review so EditedReview validates.
+
+    The editor model can emit severity/evidence pairs that violate Finding invariants; we coerce
+    before validation instead of failing the whole review job.
+    """
+    if not isinstance(raw, dict):
+        return {"findings": [], "summary": "Editor output was not a JSON object.", "decisions": []}
+
+    out: dict[str, Any] = dict(raw)
+    summary = out.get("summary")
+    if isinstance(summary, str):
+        out["summary"] = truncate_markdown_text(summary, 800)
+    else:
+        out["summary"] = "Review summary was missing from the editor."
+
+    findings_obj = out.get("findings")
+    if isinstance(findings_obj, list):
+        normalized_findings: list[object] = []
+        for finding in findings_obj:
+            if not isinstance(finding, dict):
+                normalized_findings.append(finding)
+                continue
+            normalized_finding = _coerce_finding_payload(dict(finding))
+            message = normalized_finding.get("message")
+            if isinstance(message, str):
+                normalized_finding["message"] = sanitize_markdown_text(message)
+            normalized_findings.append(normalized_finding)
+        out["findings"] = normalized_findings
+    else:
+        out["findings"] = []
+
+    decisions_obj = out.get("decisions")
+    if not isinstance(decisions_obj, list):
+        out["decisions"] = []
+
+    return out
+
+
+def parse_edited_review(raw: object) -> EditedReview:
+    """Validate editor LLM output after the same finding coercion as finalize_review."""
+    return EditedReview.model_validate(repair_edited_review_payload(raw))
+
+
 def _parse_confidence(raw: object) -> int:
     if isinstance(raw, bool):
         return 50
@@ -174,6 +218,16 @@ def _coerce_finding_payload(finding: dict[str, Any]) -> dict[str, Any]:
         d["evidence"] = "diff_visible"
         d.pop("evidence_fact_id", None)
         ev = "diff_visible"
+
+    if ev == "tool_verified":
+        calls = d.get("evidence_tool_calls")
+        has_calls = isinstance(calls, list) and any(
+            isinstance(c, str) and c.strip() for c in calls
+        )
+        if not has_calls:
+            d["evidence"] = "diff_visible"
+            d.pop("evidence_tool_calls", None)
+            ev = "diff_visible"
 
     vendor = bool(d.get("is_vendor_claim"))
 
