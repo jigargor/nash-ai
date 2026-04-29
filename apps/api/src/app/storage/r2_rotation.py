@@ -75,8 +75,8 @@ def assert_r2_credentials_within_rotation_policy(settings: Settings) -> None:
             f"rotated_at={rotated_at.date().isoformat()}, max_age_days={max_days}, "
             f"environment={settings.environment!r}. Rotate keys in Cloudflare, update "
             "Railway (API + worker) R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY, then set "
-            f"R2_CREDENTIALS_ROTATED_AT to today's date (UTC)."
-        )
+            "R2_CREDENTIALS_ROTATED_AT to today's date (UTC)."
+        )  # nosec B608 — RuntimeError message text, not SQL execution
 
     logger.info(
         "R2 credential rotation policy OK (rotated_at=%s, max_age_days=%s, environment=%s).",
