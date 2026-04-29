@@ -3,6 +3,7 @@ from typing import Any, Final, cast
 
 from pydantic import ValidationError
 
+from app.agent.prompts.system import load_verified_fact_by_id
 from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.schema import EditedReview, Finding, ReviewResult
 from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
@@ -21,6 +22,7 @@ _CATEGORY_ALIASES: Final[dict[str, str]] = {
     "reliability": "correctness",
     "testing": "correctness",
 }
+_SEVERITY_ORDER: Final[dict[str, int]] = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 FINAL_TOOL = {
     "name": "submit_review",
@@ -76,6 +78,7 @@ async def finalize_review(
         )
 
     repaired_input = _repair_review_input(structured.payload)
+    _record_verified_fact_cap_debug_artifacts(context, repaired_input)
     try:
         return ReviewResult.model_validate(repaired_input)
     except ValidationError as exc:
@@ -256,7 +259,64 @@ def _coerce_finding_payload(finding: dict[str, Any]) -> dict[str, Any]:
     if vendor and ev != "tool_verified":
         d["confidence"] = min(d["confidence"], 85)
 
+    _apply_verified_fact_ceilings(d)
+
     return d
+
+
+def _apply_verified_fact_ceilings(finding: dict[str, Any]) -> None:
+    evidence = finding.get("evidence")
+    fact_id = finding.get("evidence_fact_id")
+    if evidence != "verified_fact" or not isinstance(fact_id, str) or not fact_id.strip():
+        return
+    fact = load_verified_fact_by_id(fact_id.strip())
+    if fact is None:
+        return
+
+    cap_event: dict[str, object] = {"fact_id": fact_id.strip()}
+    severity = finding.get("severity")
+    severity_cap = str(fact.get("severity_ceiling_without_tool", "")).strip().lower()
+    if isinstance(severity, str) and severity in _SEVERITY_ORDER and severity_cap in _SEVERITY_ORDER:
+        if _SEVERITY_ORDER[severity] > _SEVERITY_ORDER[severity_cap]:
+            finding["severity"] = severity_cap
+            cap_event["severity_from"] = severity
+            cap_event["severity_to"] = severity_cap
+
+    confidence_cap_raw = fact.get("confidence_ceiling_without_tool")
+    if isinstance(confidence_cap_raw, int):
+        confidence_before = _parse_confidence(finding.get("confidence"))
+        if confidence_before > confidence_cap_raw:
+            finding["confidence"] = confidence_cap_raw
+            cap_event["confidence_from"] = confidence_before
+            cap_event["confidence_to"] = confidence_cap_raw
+
+    if len(cap_event) > 1:
+        finding["_verified_fact_cap"] = cap_event
+
+
+def _record_verified_fact_cap_debug_artifacts(context: dict[str, Any], repaired_input: object) -> None:
+    if not isinstance(repaired_input, dict):
+        return
+    findings = repaired_input.get("findings")
+    if not isinstance(findings, list):
+        return
+
+    cap_events: list[dict[str, object]] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        cap_event = finding.pop("_verified_fact_cap", None)
+        if isinstance(cap_event, dict):
+            cap_events.append(cap_event)
+
+    if not cap_events:
+        return
+
+    context.setdefault("debug_artifacts", {})
+    debug_artifacts = context.get("debug_artifacts")
+    if not isinstance(debug_artifacts, dict):
+        return
+    debug_artifacts["verified_fact_caps"] = cap_events
 
 
 def _safe_partial_review_result(

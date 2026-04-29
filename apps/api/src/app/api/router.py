@@ -13,6 +13,11 @@ import httpx
 import yaml
 from app.agent.profiler import profile_repo
 from app.agent.provider_clients import create_openai_compatible_client, get_provider_api_key
+from app.agent.telemetry_audit import (
+    summarize_target_line_mismatch_telemetry,
+    summarize_verified_fact_cap_telemetry,
+    summarize_verified_fact_retrieval_telemetry,
+)
 from app.agent.review_config import (
     DEFAULT_MAX_FINDINGS_PER_PR,
     ModelProvider,
@@ -961,10 +966,28 @@ async def get_outcome_summary(
         installation_id=installation_id,
         repo_full_name=repo_full_name,
     )
+    mismatch_summary = await summarize_target_line_mismatch_telemetry(
+        limit=200,
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
+    )
+    retrieval_summary = await summarize_verified_fact_retrieval_telemetry(
+        limit=200,
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
+    )
+    cap_summary = await summarize_verified_fact_cap_telemetry(
+        limit=200,
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
+    )
     return {
         "installation_id": installation_id,
         "repo_full_name": repo_full_name,
         **summary,
+        "target_line_mismatch_telemetry": mismatch_summary,
+        "verified_fact_retrieval_telemetry": retrieval_summary,
+        "verified_fact_cap_telemetry": cap_summary,
     }
 
 

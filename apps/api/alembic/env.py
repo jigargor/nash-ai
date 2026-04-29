@@ -1,5 +1,6 @@
 import asyncio
 import os
+import warnings
 from logging.config import fileConfig
 
 from alembic import context
@@ -11,17 +12,20 @@ from app.db.url import normalize_asyncpg_database_url
 # access to the values within the .ini file in use.
 config = context.config
 
-# The app settings object is strict; provide benign defaults so app modules
-# can be imported without a fully populated .env. DATABASE_URL must be set
-# explicitly — the local fallback is intentional for dev only and warns loudly.
-_explicit_db_url = os.environ.get("DATABASE_URL")
-os.environ.setdefault(
-    "DATABASE_URL",
-    "postgresql+asyncpg://dev:dev@localhost:5433/codereview",
-)
-if not _explicit_db_url:
-    import warnings
-
+# The app settings object is strict; allow local convenience defaults only in
+# non-production environments. Worker/API production containers must provide an
+# explicit DATABASE_URL so Alembic never points at localhost by mistake.
+environment = os.environ.get("ENVIRONMENT", "development").strip().lower()
+explicit_database_url = (os.environ.get("DATABASE_URL") or "").strip()
+if explicit_database_url:
+    os.environ["DATABASE_URL"] = explicit_database_url
+elif environment == "production":
+    raise RuntimeError(
+        "DATABASE_URL is required for Alembic in production. "
+        "Set DATABASE_URL explicitly for worker/API containers."
+    )
+else:
+    os.environ["DATABASE_URL"] = "postgresql+asyncpg://dev:dev@localhost:5433/codereview"
     warnings.warn(
         "DATABASE_URL not set — using local dev default (localhost:5433/codereview). "
         "Set DATABASE_URL explicitly in CI/CD to avoid accidental migrations against the wrong database.",
@@ -46,7 +50,7 @@ if database_url:
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-from app.db.session import Base  # noqa: E402
+from app.db.base import Base  # noqa: E402
 import app.db.models  # noqa: F401,E402
 
 target_metadata = Base.metadata
