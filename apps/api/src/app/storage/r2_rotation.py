@@ -70,17 +70,19 @@ def assert_r2_credentials_within_rotation_policy(settings: Settings) -> None:
     deadline = rotated_at + timedelta(days=max_days)
     now = datetime.now(timezone.utc)
     if now > deadline:
-        rotated = rotated_at.date().isoformat()
-        env_repr = repr(settings.environment)
+        logger.error(
+            "R2 snapshot archive credentials exceed configured max age",
+            extra={
+                "rotated_at": rotated_at.date().isoformat(),
+                "max_age_days": max_days,
+                "environment": settings.environment,
+            },
+        )
         raise RuntimeError(
-            "R2 API credentials exceed the configured max age: rotated_at="
-            + rotated
-            + ", max_age_days="
-            + str(max_days)
-            + ", environment="
-            + env_repr
-            + ". Rotate keys in Cloudflare, update Railway (API + worker) R2_ACCESS_KEY_ID and "
-            "R2_SECRET_ACCESS_KEY, then set R2_CREDENTIALS_ROTATED_AT to today's date (UTC)."
+            "R2 snapshot archive credentials exceed the configured rotation policy. "
+            "Rotate Cloudflare R2 keys, update Railway (API + worker) secrets, set "
+            "R2_CREDENTIALS_ROTATED_AT to today's UTC date, then redeploy. "
+            "See docs/secrets-rotation.md section on R2 rotation."
         )
 
     logger.info(

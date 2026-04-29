@@ -78,7 +78,7 @@ def test_assert_r2_fails_when_credentials_too_old() -> None:
         r2_access_key_max_age_days_production=30,
         r2_access_key_max_age_days_development=90,
     )
-    with pytest.raises(RuntimeError, match="exceed the configured max age"):
+    with pytest.raises(RuntimeError, match="exceed the configured rotation policy"):
         r2_rotation.assert_r2_credentials_within_rotation_policy(s)
 
 
