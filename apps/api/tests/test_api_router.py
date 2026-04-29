@@ -3,6 +3,7 @@
 Pure-function unit tests for router helpers live in test_api_router_helpers.py.
 Shared DB helpers and fixtures are imported from conftest.py.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -70,6 +71,14 @@ async def test_verify_api_access_rejects_invalid_key(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.anyio
+async def test_verify_api_access_accepts_matching_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "api_access_key", "api-key-plaintext-test-value")
+
+    api_router._verify_api_access("api-key-plaintext-test-value")
+
+
+@pytest.mark.anyio
 async def test_list_installations_and_repos_include_template_state(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -113,7 +122,9 @@ async def test_search_dashboard_returns_repo_and_pr_matches(
     monkeypatch.setattr(settings, "api_access_key", None)
     installation_id = _random_installation_id()
     await _insert_installation(installation_id)
-    await _insert_review(installation_id, repo_full_name="acme/repo-stream", pr_number=55, status="done")
+    await _insert_review(
+        installation_id, repo_full_name="acme/repo-stream", pr_number=55, status="done"
+    )
 
     response = await client.get(
         f"/api/v1/search?q=repo-stream&installation_id={installation_id}",
@@ -242,8 +253,10 @@ async def test_telemetry_outcomes_summary_uses_public_summarizer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
+
     async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
         return {777}
+
     monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
 
     async def _fake_summary(
@@ -489,6 +502,7 @@ async def test_validate_repo_segment_rejects_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.api import router as api_router
+
     with pytest.raises(api_router.HTTPException) as exc_info:
         api_router._validate_repo_segment("bad/segment", "owner")
     assert exc_info.value.status_code == 400
@@ -497,6 +511,7 @@ async def test_validate_repo_segment_rejects_invalid(
 @pytest.mark.anyio
 async def test_extract_yaml_payload_strips_fenced_block() -> None:
     from app.api import router as api_router
+
     raw = "```yaml\nkey: value\n```"
     assert api_router._extract_yaml_payload(raw) == "key: value"
 
@@ -522,6 +537,7 @@ async def test_stream_review_events_returns_not_found_event(
 
     async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
         return {999999}
+
     monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
     monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _MissingSessionContext())
 
@@ -762,13 +778,13 @@ async def test_list_installations_active_only_false_includes_suspended(
     suspended_id = _random_installation_id()
     await _insert_installation(suspended_id, suspended=True)
 
-    resp = await client.get(
-        "/api/v1/installations?active_only=false", headers=_auth_headers()
-    )
+    resp = await client.get("/api/v1/installations?active_only=false", headers=_auth_headers())
     assert resp.status_code == 200
     ids = [item["installation_id"] for item in resp.json()]
     assert suspended_id in ids
-    assert any(item["active"] is False for item in resp.json() if item["installation_id"] == suspended_id)
+    assert any(
+        item["active"] is False for item in resp.json() if item["installation_id"] == suspended_id
+    )
 
 
 @pytest.mark.anyio
@@ -878,6 +894,7 @@ async def test_stream_review_emits_status_change(
             call_count += 1
             from types import SimpleNamespace
             from datetime import datetime, timezone
+
             status_val = "running" if call_count == 1 else "done"
             return SimpleNamespace(
                 id=review_id,
@@ -904,6 +921,7 @@ async def test_stream_review_emits_status_change(
 
         async def execute(self, *_: object, **__: object) -> object:
             from unittest.mock import MagicMock
+
             m = MagicMock()
             m.scalars.return_value.all.return_value = []
             return m
@@ -913,6 +931,7 @@ async def test_stream_review_emits_status_change(
 
     async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
         return {installation_id}
+
     monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
     monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
@@ -973,9 +992,7 @@ async def test_get_review_model_audits_without_installation_id(
     await _insert_installation(installation_id)
     review_id = await _insert_review(installation_id)
 
-    resp = await client.get(
-        f"/api/v1/reviews/{review_id}/model-audits", headers=_auth_headers()
-    )
+    resp = await client.get(f"/api/v1/reviews/{review_id}/model-audits", headers=_auth_headers())
     assert resp.status_code == 200
     assert resp.json()["review_id"] == review_id
 
@@ -1202,3 +1219,241 @@ async def test_stream_review_installation_mismatch_emits_error(
     )
     assert resp.status_code == 200
     assert "installation_id mismatch" in resp.text
+
+
+@pytest.mark.anyio
+async def test_search_dashboard_blank_query_returns_empty(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single-space q satisfies min_length=1 then strip() yields empty internal query → []."""
+    monkeypatch.setattr(settings, "api_access_key", None)
+
+    resp = await client.get(
+        "/api/v1/search",
+        params={"q": " ", "installation_id": "123"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.anyio
+async def test_search_dashboard_no_linked_installations_returns_empty(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return set()
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
+
+    resp = await client.get("/api/v1/search?q=reposearch", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.anyio
+async def test_telemetry_outcomes_summary_without_installation_forwarded_to_summarizer(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+
+    async def _fake_summary(
+        *, installation_id: int | None = None, repo_full_name: str | None = None
+    ) -> dict[str, object]:
+        assert installation_id is None
+        assert repo_full_name == "solo/repo"
+        return {"classified": True}
+
+    monkeypatch.setattr(api_router, "summarize_finding_outcomes", _fake_summary)
+
+    response = await client.get(
+        "/api/v1/telemetry/outcomes/summary?repo_full_name=solo/repo",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["installation_id"] is None
+    assert body["repo_full_name"] == "solo/repo"
+    assert body["classified"] is True
+
+
+@pytest.mark.anyio
+async def test_get_repo_codereview_config_list_yaml_leaves_config_json_none(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """YAML that parses to a non-dict skips config_json."""
+    monkeypatch.setattr(settings, "api_access_key", None)
+
+    class _NonDbSessionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    async def _fake_allowed_installation_ids(_session: object, _user: object) -> set[int]:
+        return {777_220}
+
+    async def _fake_for_installation(_iid: int) -> object:
+        return object()
+
+    async def _fake_safe_fetch(_gh: object, _o: str, _r: str, _p: str, _ref: str) -> str:
+        return "- item_one\n"
+
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _NonDbSessionContext())
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
+    monkeypatch.setattr(api_router.GitHubClient, "for_installation", _fake_for_installation)
+    monkeypatch.setattr(api_router, "safe_fetch_file", _fake_safe_fetch)
+
+    resp = await client.get(
+        "/api/v1/repos/acme/repo/codereview-config?installation_id=777220",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["found"] is True
+    assert payload["yaml_text"] == "- item_one\n"
+    assert payload["config_json"] is None
+
+
+@pytest.mark.anyio
+async def test_generate_template_502_when_generated_yaml_not_object(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No DB: access check uses stub session; 502 happens before RepoConfig write."""
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-anthropic-key")
+    monkeypatch.setattr(
+        api_router,
+        "resolve_model_for_role",
+        lambda _config, _role: SimpleNamespace(provider="openai", model="gpt-5.5"),
+    )
+
+    class _NonDbSessionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    async def _fake_allowed_installation_ids(_session: object, _user: object) -> set[int]:
+        return {777_101}
+
+    async def _fake_for_installation(_installation_id: int) -> object:
+        return object()
+
+    async def _fake_resolve_head_sha(_gh: object, _owner: str, _repo: str) -> str:
+        return "main"
+
+    async def _fake_profile_repo(
+        _gh: object, _owner: str, _repo: str, _ref: str
+    ) -> SimpleNamespace:
+        return SimpleNamespace(frameworks=[])
+
+    async def _scalar_yaml_not_mapping(**_kwargs: object) -> str:
+        return "- one\n"
+
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _NonDbSessionContext())
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
+    monkeypatch.setattr(api_router.GitHubClient, "for_installation", _fake_for_installation)
+    monkeypatch.setattr(api_router, "_resolve_repo_head_sha", _fake_resolve_head_sha)
+    monkeypatch.setattr(api_router, "profile_repo", _fake_profile_repo)
+    monkeypatch.setattr(api_router, "_generate_yaml_with_model", _scalar_yaml_not_mapping)
+
+    resp = await client.post(
+        "/api/v1/repos/acme/repo/codereview-template/generate?installation_id=777101",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Generated config was not valid YAML object."
+
+
+@pytest.mark.anyio
+async def test_generate_template_502_when_normalized_yaml_roundtrip_not_dict(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second yaml.safe_load in generate path rejects non-mapping normalized payload."""
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-anthropic-key")
+    monkeypatch.setattr(
+        api_router,
+        "resolve_model_for_role",
+        lambda _config, _role: SimpleNamespace(provider="openai", model="gpt-5.5"),
+    )
+
+    class _NonDbSessionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    async def _fake_allowed_installation_ids(_session: object, _user: object) -> set[int]:
+        return {777_102}
+
+    async def _fake_for_installation(_installation_id: int) -> object:
+        return object()
+
+    async def _fake_resolve_head_sha(_gh: object, _owner: str, _repo: str) -> str:
+        return "main"
+
+    async def _fake_profile_repo(
+        _gh: object, _owner: str, _repo: str, _ref: str
+    ) -> SimpleNamespace:
+        return SimpleNamespace(frameworks=[])
+
+    async def _valid_generate(**_kwargs: object) -> str:
+        return (
+            "confidence_threshold: 0.9\n"
+            "severity_threshold: medium\n"
+            "categories: [correctness]\n"
+            "review_drafts: false\n"
+        )
+
+    def _serialized_not_dict_yaml(_cfg: object) -> str:
+        return "- serialized_list\n"
+
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _NonDbSessionContext())
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
+    monkeypatch.setattr(api_router.GitHubClient, "for_installation", _fake_for_installation)
+    monkeypatch.setattr(api_router, "_resolve_repo_head_sha", _fake_resolve_head_sha)
+    monkeypatch.setattr(api_router, "profile_repo", _fake_profile_repo)
+    monkeypatch.setattr(api_router, "_generate_yaml_with_model", _valid_generate)
+    monkeypatch.setattr(api_router, "_serialize_review_config_yaml", _serialized_not_dict_yaml)
+
+    resp = await client.post(
+        "/api/v1/repos/acme/repo/codereview-template/generate?installation_id=777102",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Normalized YAML serialization failed."
+
+
+@pytest.mark.anyio
+async def test_stream_review_sse_when_installation_forbidden_returns_not_found(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return set()
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
+
+    resp = await client.get(
+        "/api/v1/reviews/42/stream?installation_id=12345",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert '"message": "Review not found"' in resp.text
+
+

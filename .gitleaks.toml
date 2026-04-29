@@ -1,0 +1,58 @@
+# Nash AI — gitleaks configuration
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+title = "nash-ai"
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Allowlists
+# ---------------------------------------------------------------------------
+
+[[allowlists]]
+description = "CI-only test credentials hard-coded in workflow YAML"
+paths = [
+  '''^\.github/workflows/.*\.yml$''',
+]
+regexes = [
+  # Non-sensitive test Fernet key used only in CI; never a production credential.
+  # If this value ever appears outside .github/workflows/, it IS a leak.
+  '''4nYA5RU2f22W4DvwW8Hpt4W6YKfYwQMUqlGQv6ygfA4=''',
+  # CI fallback env-var sentinel values that carry no real access
+  '''test-webhook-secret''',
+  '''test-client-id''',
+  '''test-client-secret''',
+  '''test-anthropic-key''',
+]
+
+[[allowlists]]
+description = "Intentional placeholder values in .env.example files"
+paths = [
+  '''(^|/)\.env\.example$''',
+]
+regexes = [
+  # Placeholder OAuth client-ID pattern in root .env.example
+  '''Iv1\.\w{3}\d{3}''',
+  # Generic placeholder patterns — not real credentials
+  '''your_[\w_]+_here''',
+  '''change-me[\w-]*''',
+  '''replace_with_[\w_]+''',
+  '''your_github_oauth_client_id''',
+  '''your_github_oauth_client_secret''',
+  '''replace_with_32_byte_random_secret''',
+]
+
+[[allowlists]]
+description = "Documentation files that cite example / redacted credential shapes"
+paths = [
+  '''^docs/''',
+  '''^README''',
+  '''^SECURITY''',
+]
+regexes = [
+  # The docs/secrets-rotation.md shows the leaked-and-rotated values
+  # as a historical reference — they are revoked and must stay documented.
+  '''Ov23liZAOcxLLZxEJ904''',
+  '''9d11b258a93c104726f7c6e68f4512843c28726f''',
+  '''zC4dRrq1eti4jTByLbPnwy4SU63PT\+SCOigV\/L\/dOF4=''',
+]

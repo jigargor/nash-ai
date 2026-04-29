@@ -132,9 +132,97 @@ After any production rotation:
 
 ---
 
-## 7. Related files
+## 7. Credential incident record
+
+| Date | Incident | Resolution |
+|------|----------|------------|
+| 2026-04-26 | Real `GITHUB_CLIENT_ID` (`Ov23liZAOcxLLZxEJ904`), `GITHUB_CLIENT_SECRET`, and `AUTH_SESSION_SECRET` were committed to `apps/web/.env.example` in git history (commits `22e87d6`, `cde3c35`). | Credentials rotated 2026-04-29. File corrected in-tree. `docs/rotation-log.json` seeded with rotation dates. Gitleaks CI scan and weekly reminder added (see §8). |
+
+The revoked values are allowlisted in `.gitleaks.toml` under `docs/` so the scanner does not re-alert on this historical record.
+
+---
+
+## 8. Automated enforcement
+
+Three artefacts implement the rotation policy without manual tracking:
+
+### 8.1 Secret scan (`.github/workflows/secret-scan.yml`)
+
+Runs on every push to `main`/`develop` and on every pull request using **gitleaks**.
+
+- **On PR:** scans only the new commits in the diff — fast, zero false positives from old history.
+- **On push:** full-depth checkout; scans all pushed commits.
+- Results upload as SARIF to the **Security → Code scanning** tab.
+- Configuration lives in `.gitleaks.toml`, which allowlists:
+  - CI-only test credentials hard-coded in workflow YAML (e.g. the test `FERNET_KEY`).
+  - Placeholder values in `.env.example` files.
+  - The revoked credentials documented in this runbook.
+
+If the scan fails on a PR, the merge is blocked until the secret is removed from the branch history (use `git rebase -i` / `git filter-repo`).
+
+### 8.2 Rotation log (`docs/rotation-log.json`)
+
+Machine-readable registry: one entry per secret group with:
+
+| Field | Meaning |
+|-------|---------|
+| `name` | Human-readable secret name (matches the env var) |
+| `platform` | Where the value lives (Railway, Vercel, GitHub Actions, etc.) |
+| `last_rotated` | ISO 8601 date of the most recent rotation |
+| `max_age_days` | Policy lifetime before rotation is required |
+| `rotation_guide` | Anchor link into this runbook |
+
+**Maintenance rule:** after every rotation, update `last_rotated` in `rotation-log.json` and push to `main`. This is the single source of truth for staleness.
+
+### 8.3 Rotation reminder (`.github/workflows/secret-rotation-reminder.yml`)
+
+Runs every **Monday at 09:00 UTC** (and on `workflow_dispatch`).
+
+- Reads `docs/rotation-log.json`.
+- For each secret, computes `age = today − last_rotated`.
+- **Overdue** (`age ≥ max_age_days`): opens (or updates) a GitHub issue labelled `secret-rotation,security` with a per-secret table and direct links to rotation procedures.
+- **Due within 14 days**: included in the same issue as an early-warning section.
+- If a `secret-rotation` issue is already open, the workflow updates its body rather than opening a duplicate.
+- Closes itself: once `rotation-log.json` is updated and all secrets are within their window, the next Monday run finds nothing overdue and produces no issue.
+
+### 8.4 Developer pre-commit setup (optional but recommended)
+
+Install gitleaks locally to catch secrets before they reach CI:
+
+```bash
+# macOS
+brew install gitleaks
+
+# Linux (replace version/arch as needed)
+curl -sSfL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_x64.tar.gz | tar xz
+sudo mv gitleaks /usr/local/bin/
+```
+
+Add a pre-commit hook:
+
+```bash
+# .git/hooks/pre-commit  (chmod +x)
+#!/usr/bin/env bash
+gitleaks protect --staged --config .gitleaks.toml
+```
+
+Or with Husky (if you add it to the root `package.json`):
+
+```bash
+pnpm add -wD husky
+pnpm exec husky init
+echo 'gitleaks protect --staged --config .gitleaks.toml' > .husky/pre-commit
+```
+
+---
+
+## 9. Related files
 
 - Repo-root `.env.example` — backend and shared names.
 - `apps/web/.env.example` — Vercel / Next server secrets.
+- `docs/rotation-log.json` — machine-readable rotation dates (update after every rotation).
+- `.gitleaks.toml` — gitleaks scan configuration and allowlists.
 - `README.md` — deployment targets (Railway API + worker, Vercel web).
+- `.github/workflows/secret-scan.yml` — gitleaks CI scan (every push/PR).
+- `.github/workflows/secret-rotation-reminder.yml` — weekly staleness check.
 - `.github/workflows/quality-gates.yml`, `api-db-security.yml`, `deepeval.yml` — Actions secret names.

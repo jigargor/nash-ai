@@ -6,6 +6,7 @@ instrumentation differences.
 
 Endpoint integration tests live in test_api_router.py.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -116,16 +117,18 @@ def test_status_clause_non_running_matches_exact_value() -> None:
 
 
 def test_diff_stats_returns_values() -> None:
-    review = SimpleNamespace(debug_artifacts={
-        "fast_path_decision": {"changed_file_count": 5, "changed_line_count": 120}
-    })
+    review = SimpleNamespace(
+        debug_artifacts={"fast_path_decision": {"changed_file_count": 5, "changed_line_count": 120}}
+    )
     files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
     assert files == 5
     assert lines == 120
 
 
 def test_diff_stats_none_artifacts() -> None:
-    files, lines = api_router._diff_stats_from_debug_artifacts(SimpleNamespace(debug_artifacts=None))  # type: ignore[attr-defined]
+    files, lines = api_router._diff_stats_from_debug_artifacts(
+        SimpleNamespace(debug_artifacts=None)
+    )  # type: ignore[attr-defined]
     assert files is None and lines is None
 
 
@@ -225,6 +228,7 @@ def test_validate_repo_segment_valid() -> None:
 def test_validate_repo_segment_invalid_slash() -> None:
     from fastapi import HTTPException
     import pytest
+
     with pytest.raises(HTTPException) as exc_info:
         api_router._validate_repo_segment("bad/segment", "owner")  # type: ignore[attr-defined]
     assert exc_info.value.status_code == 400
@@ -233,6 +237,7 @@ def test_validate_repo_segment_invalid_slash() -> None:
 def test_validate_repo_segment_empty() -> None:
     from fastapi import HTTPException
     import pytest
+
     with pytest.raises(HTTPException):
         api_router._validate_repo_segment("  ", "owner")  # type: ignore[attr-defined]
 
@@ -269,11 +274,13 @@ def test_normalize_generated_config_defaults() -> None:
 
 
 def test_normalize_generated_config_with_fields() -> None:
-    config = api_router._normalize_generated_config({  # type: ignore[attr-defined]
-        "confidence_threshold": 90,
-        "severity_threshold": "high",
-        "categories": ["security", "correctness"],
-    })
+    config = api_router._normalize_generated_config(
+        {  # type: ignore[attr-defined]
+            "confidence_threshold": 90,
+            "severity_threshold": "high",
+            "categories": ["security", "correctness"],
+        }
+    )
     assert config.confidence_threshold == 90
     assert config.severity_threshold == "high"
     assert "security" in config.categories
@@ -496,9 +503,7 @@ async def test_list_installations_direct_formats_output(monkeypatch: pytest.Monk
     monkeypatch.setattr(api_router, "_list_installation_rows", _fake_list_rows)
 
     result = await api_router.list_installations(
-        active_only=True,
-        limit=50,
-        current_user=CurrentDashboardUser(github_id=1, login="tester")
+        active_only=True, limit=50, current_user=CurrentDashboardUser(github_id=1, login="tester")
     )
     assert result[0]["installation_id"] == 123
     assert "active" in result[0]
@@ -515,7 +520,9 @@ class _FakeReviewSession:
             model_provider="anthropic",
             model="claude-sonnet-4-5",
             findings={"findings": []},
-            debug_artifacts={"fast_path_decision": {"changed_file_count": 3, "changed_line_count": 42}},
+            debug_artifacts={
+                "fast_path_decision": {"changed_file_count": 3, "changed_line_count": 42}
+            },
             tokens_used=10,
             cost_usd=0.01,
         )
@@ -577,6 +584,46 @@ async def test_list_reviews_direct_installation_branch_with_status_filter(
     )
     assert len(result) == 1
     assert result[0]["id"] == 99
+
+
+@pytest.mark.anyio
+async def test_list_reviews_direct_installation_created_window_invokes_ensure_utc_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cover time_filter + combined where() on list_reviews scoped to one installation."""
+    session = _FakeReviewSession()
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
+
+    async def _fake_allowed(_session: object, _user: CurrentDashboardUser) -> set[int]:
+        return {321}
+
+    async def _fake_set_ctx(_session: object, _installation_id: int) -> None:
+        return None
+
+    saw: list[datetime] = []
+
+    original_ensure = api_router._ensure_utc
+
+    def _tracking_ensure(dt: datetime) -> datetime:
+        saw.append(dt)
+        return original_ensure(dt)
+
+    created_after = datetime(2025, 6, 1, 0, 0, 0)
+    created_before = datetime(2030, 1, 15, 12, 30, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed)
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
+    monkeypatch.setattr(api_router, "_ensure_utc", _tracking_ensure)
+
+    result = await api_router.list_reviews(
+        installation_id=321,
+        limit=50,
+        created_after=created_after,
+        created_before=created_before,
+        current_user=CurrentDashboardUser(github_id=1, login="tester"),
+    )
+    assert len(result) == 1
+    assert len(saw) == 2
 
 
 @pytest.mark.anyio
