@@ -2,6 +2,7 @@ import asyncio
 import httpx
 
 from app.agent.review_config import (
+    _parse_adaptive_threshold,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_SEVERITY_THRESHOLD,
     _parse_budgets,
@@ -39,6 +40,8 @@ def test_parse_fast_path_reads_thresholds_and_flags() -> None:
             "light_review_min_confidence": 82,
             "max_diff_excerpt_tokens": 1200,
             "allow_skip": False,
+            "confidence_bug_check": False,
+            "zero_confidence_limit": 7,
         }
     )
 
@@ -47,6 +50,33 @@ def test_parse_fast_path_reads_thresholds_and_flags() -> None:
     assert fast_path.light_review_min_confidence == 82
     assert fast_path.max_diff_excerpt_tokens == 1200
     assert fast_path.allow_skip is False
+    assert fast_path.confidence_bug_check is False
+    assert fast_path.zero_confidence_limit == 7
+
+
+def test_parse_adaptive_threshold_reads_guardrails() -> None:
+    adaptive = _parse_adaptive_threshold(
+        {
+            "enabled": True,
+            "initial_threshold": 90,
+            "minimum_threshold": 70,
+            "step_down": 3,
+            "target_disagreement_low": 5,
+            "target_disagreement_high": 12,
+            "max_false_accept_rate": 4,
+            "max_dismiss_rate": 20,
+            "min_samples": 200,
+        }
+    )
+    assert adaptive.enabled is True
+    assert adaptive.initial_threshold == 90
+    assert adaptive.minimum_threshold == 70
+    assert adaptive.step_down == 3
+    assert adaptive.target_disagreement_low == 5
+    assert adaptive.target_disagreement_high == 12
+    assert adaptive.max_false_accept_rate == 4
+    assert adaptive.max_dismiss_rate == 20
+    assert adaptive.min_samples == 200
 
 
 def test_parse_model_config_accepts_legacy_direct_pricing_keys() -> None:

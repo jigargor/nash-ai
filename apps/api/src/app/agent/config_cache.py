@@ -7,8 +7,8 @@ from typing import cast
 import redis.exceptions as redis_exc
 from redis.asyncio import Redis
 
-from app.agent.review_config import ChunkingConfig, ContextPackagingConfig, FastPathConfig
-from app.agent.review_config import MaxModeConfig, ReviewConfig, ReviewModelConfig
+from app.agent.review_config import AdaptiveThresholdConfig, ChunkingConfig, ContextPackagingConfig
+from app.agent.review_config import FastPathConfig, MaxModeConfig, ReviewConfig, ReviewModelConfig
 from app.agent.schema import ContextBudgets
 from app.config import settings
 from app.llm.router import ModelRoleRoutingConfig, ModelsRoutingConfig
@@ -100,6 +100,20 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         light_review_min_confidence=int(fast_path_data.get("light_review_min_confidence", 80)),
         max_diff_excerpt_tokens=int(fast_path_data.get("max_diff_excerpt_tokens", 3000)),
         allow_skip=bool(fast_path_data.get("allow_skip", True)),
+        confidence_bug_check=bool(fast_path_data.get("confidence_bug_check", True)),
+        zero_confidence_limit=int(fast_path_data.get("zero_confidence_limit", 5)),
+    )
+    adaptive_threshold_data = dict(data.get("adaptive_threshold") or {})
+    adaptive_threshold = AdaptiveThresholdConfig(
+        enabled=bool(adaptive_threshold_data.get("enabled", True)),
+        initial_threshold=int(adaptive_threshold_data.get("initial_threshold", 90)),
+        minimum_threshold=int(adaptive_threshold_data.get("minimum_threshold", 60)),
+        step_down=int(adaptive_threshold_data.get("step_down", 2)),
+        target_disagreement_low=int(adaptive_threshold_data.get("target_disagreement_low", 5)),
+        target_disagreement_high=int(adaptive_threshold_data.get("target_disagreement_high", 15)),
+        max_false_accept_rate=int(adaptive_threshold_data.get("max_false_accept_rate", 5)),
+        max_dismiss_rate=int(adaptive_threshold_data.get("max_dismiss_rate", 25)),
+        min_samples=int(adaptive_threshold_data.get("min_samples", 100)),
     )
     models_data = dict(data.get("models") or {})
     roles: dict[str, ModelRoleRoutingConfig] = {}
@@ -132,6 +146,7 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
     data["chunking"] = chunking
     data["models"] = models
     data["fast_path"] = fast_path
+    data["adaptive_threshold"] = adaptive_threshold
     return ReviewConfig(**data)
 
 

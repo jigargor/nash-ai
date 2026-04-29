@@ -18,6 +18,7 @@ from app.api.external_evals import router as external_evals_router
 from app.api.models_catalog import router as models_catalog_router
 from app.api.router import router as api_router
 from app.api.usage import router as usage_router
+from app.api.usage_metrics import router as usage_metrics_router
 from app.api.users import router as users_router
 from app.config import settings
 from app.db.models import ApiUsageEvent
@@ -86,6 +87,7 @@ app.include_router(users_router)
 app.include_router(benchmarks_router)
 app.include_router(telemetry_router)
 app.include_router(usage_router)
+app.include_router(usage_metrics_router)
 app.include_router(external_evals_router)
 app.include_router(models_catalog_router)
 

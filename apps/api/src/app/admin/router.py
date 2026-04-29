@@ -4,6 +4,7 @@ import logging
 import time
 
 from app.agent.snapshot import load_snapshot
+from app.agent.threshold_tuner import rollback_fast_path_threshold
 from app.config import settings
 from app.db.models import Review
 from app.queue.connection import require_app_redis
@@ -196,3 +197,19 @@ async def get_review_snapshot(
         )
 
     return dataclasses.asdict(snapshot)
+
+
+@router.post("/thresholds/rollback/{installation_id}")
+async def rollback_threshold(
+    installation_id: int,
+    x_admin_api_key: str | None = Header(default=None),
+) -> dict[str, object]:
+    _require_admin_key(x_admin_api_key)
+    if installation_id <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid installation_id")
+    rolled_back = await rollback_fast_path_threshold(installation_id)
+    if rolled_back is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No threshold history found for installation"
+        )
+    return {"ok": True, "installation_id": installation_id, "threshold": rolled_back}

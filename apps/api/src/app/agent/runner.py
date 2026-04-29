@@ -54,6 +54,7 @@ from app.agent.fast_path import (
     fast_path_metadata,
     run_fast_path_prepass,
 )
+from app.agent.threshold_tuner import get_effective_fast_path_threshold
 from app.agent.loop import run_agent
 from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
@@ -327,12 +328,23 @@ async def _run_fast_path_stage(
             "Fast-path pre-pass is disabled.", risk_labels=["disabled"]
         ), None
 
+    runtime_fast_path_config = review_config.fast_path
+    if review_config.adaptive_threshold.enabled:
+        dynamic_threshold = await get_effective_fast_path_threshold(
+            int(context["installation_id"]), review_config.adaptive_threshold
+        )
+        runtime_fast_path_config = replace(
+            review_config.fast_path,
+            skip_min_confidence=dynamic_threshold,
+            light_review_min_confidence=max(0, dynamic_threshold - 10),
+        )
+
     files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
     fast_attempts = _resolve_runtime_attempt_chain(
         context,
         review_config,
         "fast_path",
-        context_tokens=min(diff_tokens, review_config.fast_path.max_diff_excerpt_tokens),
+        context_tokens=min(diff_tokens, runtime_fast_path_config.max_diff_excerpt_tokens),
     )
     fast_resolution = fast_attempts[0] if fast_attempts else None
     if fast_resolution is None:
@@ -355,7 +367,7 @@ async def _run_fast_path_stage(
                 commits=commits,
                 generated_paths=review_config.packaging.generated_paths,
                 vendor_paths=review_config.packaging.vendor_paths,
-                config=review_config.fast_path,
+                config=runtime_fast_path_config,
                 context=context,
                 model_name=attempt.model,
                 provider=attempt.provider,
@@ -401,12 +413,39 @@ async def _run_fast_path_stage(
         if isinstance(debug_artifacts, dict):
             debug_artifacts["fast_path_all_providers_failed"] = True
             debug_artifacts["fast_path_compaction"] = True
+    else:
+        zero_count, flagged = await _track_fast_path_confidence_anomaly(
+            context=context,
+            provider=fast_resolution.provider,
+            model=fast_resolution.model,
+            confidence=decision.confidence,
+            limit=runtime_fast_path_config.zero_confidence_limit,
+            enabled=runtime_fast_path_config.confidence_bug_check,
+        )
+        if flagged:
+            decision = fallback_full_review(
+                "Fast-path confidence appears stuck at 0; escalated to full review.",
+                risk_labels=["confidence_anomaly", "fast_path_bug_check"],
+            )
+        context.setdefault("debug_artifacts", {})
+        debug_artifacts = context.get("debug_artifacts")
+        if isinstance(debug_artifacts, dict):
+            debug_artifacts["fast_path_confidence_anomaly"] = {
+                "enabled": runtime_fast_path_config.confidence_bug_check,
+                "zero_confidence_count": zero_count,
+                "zero_confidence_limit": runtime_fast_path_config.zero_confidence_limit,
+                "flagged": flagged,
+            }
 
     metadata = fast_path_metadata(
         decision,
         classified=classified,
         diff_tokens=diff_tokens,
         fallback_reason=fallback_reason,
+    )
+    metadata["skip_min_confidence_applied"] = runtime_fast_path_config.skip_min_confidence
+    metadata["light_review_min_confidence_applied"] = (
+        runtime_fast_path_config.light_review_min_confidence
     )
     context.setdefault("debug_artifacts", {})
     debug_artifacts = context.get("debug_artifacts")
@@ -425,6 +464,46 @@ async def _run_fast_path_stage(
         stage_started_at=stage_started_at,
     )
     return decision, fast_resolution
+
+
+async def _track_fast_path_confidence_anomaly(
+    *,
+    context: dict[str, Any],
+    provider: str,
+    model: str,
+    confidence: int | None,
+    limit: int,
+    enabled: bool,
+) -> tuple[int, bool]:
+    if not enabled:
+        return 0, False
+    redis = context.get("_redis")
+    if redis is None:
+        if confidence == 0:
+            logger.warning(
+                "Fast-path confidence=0 without redis anomaly tracking installation_id=%s provider=%s model=%s",
+                context.get("installation_id"),
+                provider,
+                model,
+            )
+        return 0, False
+    installation_id = int(context["installation_id"])
+    key = f"fast-path-zero-confidence:{installation_id}:{provider}:{model}"
+    try:
+        if confidence == 0:
+            count = int(await redis.incr(key))
+            await redis.expire(key, 300)
+            return count, count >= max(1, int(limit))
+        await redis.delete(key)
+        return 0, False
+    except redis_exc.RedisError:
+        logger.warning(
+            "Fast-path anomaly counter unavailable installation_id=%s provider=%s model=%s",
+            installation_id,
+            provider,
+            model,
+        )
+        return 0, confidence == 0
 
 
 def _review_config_for_fast_path_decision(
