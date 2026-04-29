@@ -276,3 +276,25 @@ async def test_usage_scorecard_returns_404_when_installation_not_allowed(
         headers=_auth_headers(),
     )
     assert response.status_code == 404
+
+
+def test_redact_metadata_scrubs_user_like_keys() -> None:
+    payload = {
+        "user_id": "123",
+        "actor_name": "alice",
+        "email": "a@example.com",
+        "model": "gpt-5.5",
+    }
+    redacted = usage_metrics._redact_metadata(payload, ["user_id", "email"])
+    assert redacted["user_id"] == "[REDACTED]"
+    assert redacted["email"] == "[REDACTED]"
+    assert redacted["actor_name"] == "[REDACTED]"
+    assert redacted["model"] == "gpt-5.5"
+
+
+def test_verify_api_access_rejects_invalid_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "api_access_key", "secret")
+    with pytest.raises(usage_metrics.HTTPException) as exc_info:
+        usage_metrics._verify_api_access("wrong")
+    assert exc_info.value.status_code == 401
