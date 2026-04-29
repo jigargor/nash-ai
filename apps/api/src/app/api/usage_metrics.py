@@ -13,6 +13,7 @@ from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.db.models import InstallationUser, ProviderMetricConfig, Review, ReviewModelAudit, User
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.llm.catalog.loader import load_baseline_catalog
+from app.agent.threshold_tuner import get_cached_judge_gate_window
 from app.telemetry.finding_outcomes import summarize_finding_outcomes
 from app.config import settings
 
@@ -267,6 +268,32 @@ async def get_fast_path_scorecard(
     disagreement_rate = (
         int(disagreements or 0) / total_debate_int if total_debate_int > 0 else 0.0
     )
+    judge_window = await get_cached_judge_gate_window(installation_id)
+    judge_metrics_raw = (
+        judge_window.get("judge_gate_metrics", {})
+        if isinstance(judge_window, dict)
+        else {}
+    )
+    judge_metrics = judge_metrics_raw if isinstance(judge_metrics_raw, dict) else {}
+    tuner_action = (
+        str(judge_window.get("tuner_action"))
+        if isinstance(judge_window, dict) and judge_window.get("tuner_action") is not None
+        else None
+    )
+    lowering_authorized = bool(
+        tuner_action == "lower_threshold"
+        or (
+            isinstance(tuner_action, str)
+            and tuner_action.startswith("raise")
+            and "hold_judge_gate_" not in tuner_action
+        )
+        or (
+            isinstance(judge_metrics.get("is_available"), bool)
+            and isinstance(judge_metrics.get("provider_independent"), bool)
+            and bool(judge_metrics.get("is_available"))
+            and bool(judge_metrics.get("provider_independent"))
+        )
+    )
     return {
         "installation_id": installation_id,
         "repo_full_name": repo_full_name,
@@ -279,5 +306,37 @@ async def get_fast_path_scorecard(
         "dismiss_rate": float(metrics.get("dismiss_rate", 0.0) or 0.0),
         "ignore_rate": float(metrics.get("ignore_rate", 0.0) or 0.0),
         "useful_rate": float(metrics.get("useful_rate", 0.0) or 0.0),
+        "threshold_lowering_authorized": lowering_authorized,
+        "judge_gate_window": {
+            "is_available": bool(judge_metrics.get("is_available", False)),
+            "provider_independent": bool(judge_metrics.get("provider_independent", False)),
+            "sample_size": int(judge_metrics.get("sample_size", 0) or 0),
+            "false_negative_rate": (
+                float(judge_metrics["false_negative_rate"])
+                if judge_metrics.get("false_negative_rate") is not None
+                else None
+            ),
+            "false_positive_rate": (
+                float(judge_metrics["false_positive_rate"])
+                if judge_metrics.get("false_positive_rate") is not None
+                else None
+            ),
+            "inconclusive_rate": (
+                float(judge_metrics["inconclusive_rate"])
+                if judge_metrics.get("inconclusive_rate") is not None
+                else None
+            ),
+            "reliability_score": (
+                float(judge_metrics["reliability_score"])
+                if judge_metrics.get("reliability_score") is not None
+                else None
+            ),
+            "tuner_action": tuner_action,
+            "recorded_at": (
+                str(judge_window.get("recorded_at"))
+                if isinstance(judge_window, dict) and judge_window.get("recorded_at") is not None
+                else None
+            ),
+        },
         "goldilocks_target": {"min_disagreement_rate": 0.05, "max_disagreement_rate": 0.15},
     }
