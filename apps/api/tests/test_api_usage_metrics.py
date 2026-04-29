@@ -256,3 +256,23 @@ async def test_usage_scorecard_handles_zero_fast_path_rows(
     payload = response.json()
     assert payload["total_fast_path_calls"] == 0
     assert payload["fast_path_accept_rate"] == 0.0
+
+
+@pytest.mark.anyio
+async def test_usage_scorecard_returns_404_when_installation_not_allowed(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return set()
+
+    monkeypatch.setattr(usage_metrics, "_allowed_installation_ids", _fake_allowed_installation_ids)
+
+    response = await client.get(
+        f"/api/v1/usage/scorecard?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 404
