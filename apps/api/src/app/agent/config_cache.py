@@ -120,6 +120,24 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         max_false_accept_rate=int(adaptive_threshold_data.get("max_false_accept_rate", 5)),
         max_dismiss_rate=int(adaptive_threshold_data.get("max_dismiss_rate", 25)),
         min_samples=int(adaptive_threshold_data.get("min_samples", 100)),
+        judge_feedback_enabled=bool(adaptive_threshold_data.get("judge_feedback_enabled", False)),
+        judge_collect_only=bool(adaptive_threshold_data.get("judge_collect_only", True)),
+        judge_provider_family_must_differ=bool(
+            adaptive_threshold_data.get("judge_provider_family_must_differ", True)
+        ),
+        min_judge_samples=int(adaptive_threshold_data.get("min_judge_samples", 40)),
+        max_judge_false_negative_rate=int(
+            adaptive_threshold_data.get("max_judge_false_negative_rate", 15)
+        ),
+        max_judge_false_positive_rate=int(
+            adaptive_threshold_data.get("max_judge_false_positive_rate", 25)
+        ),
+        max_judge_inconclusive_rate=int(
+            adaptive_threshold_data.get("max_judge_inconclusive_rate", 20)
+        ),
+        min_judge_reliability_for_lowering=int(
+            adaptive_threshold_data.get("min_judge_reliability_for_lowering", 82)
+        ),
     )
     models_data = dict(data.get("models") or {})
     roles: dict[str, ModelRoleRoutingConfig] = {}

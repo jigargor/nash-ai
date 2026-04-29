@@ -10,6 +10,8 @@ from redis.asyncio import Redis
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.judge_feedback.contracts import JudgeGateMetrics
+from app.agent.judge_feedback.policy_engine import authorize_threshold_lowering
 from app.agent.review_config import AdaptiveThresholdConfig
 from app.config import settings
 from app.db.models import FastPathThresholdConfig, FastPathThresholdHistory, ReviewModelAudit
@@ -48,6 +50,12 @@ def decide_next_threshold(
     false_accept_rate: float,
     sample_size: int,
     min_samples: int,
+    judge_metrics: JudgeGateMetrics | None = None,
+    min_judge_samples: int = 40,
+    max_judge_false_negative_rate: int = 15,
+    max_judge_false_positive_rate: int = 25,
+    max_judge_inconclusive_rate: int = 20,
+    min_judge_reliability_for_lowering: int = 82,
 ) -> tuple[int, str]:
     if sample_size < min_samples:
         return previous_threshold, "hold_low_sample"
@@ -59,6 +67,16 @@ def decide_next_threshold(
     if disagreement_rate >= 0.40 or excessive_false_accept or excessive_dismiss:
         return min(100, previous_threshold + step_down), "raise_or_rollback_guardrail"
     if low_disagreement:
+        allow_lowering, reason = authorize_threshold_lowering(
+            judge_metrics=judge_metrics,
+            min_judge_samples=min_judge_samples,
+            max_judge_false_negative_rate=max_judge_false_negative_rate,
+            max_judge_false_positive_rate=max_judge_false_positive_rate,
+            max_judge_inconclusive_rate=max_judge_inconclusive_rate,
+            min_judge_reliability_for_lowering=min_judge_reliability_for_lowering,
+        )
+        if not allow_lowering:
+            return previous_threshold, f"hold_judge_gate_{reason}"
         return max(minimum_threshold, previous_threshold - step_down), "lower_threshold"
     if high_disagreement:
         return min(100, previous_threshold + step_down), "raise_threshold"
@@ -129,6 +147,11 @@ async def tune_fast_path_threshold(
         dismiss_rate = float(global_metrics.get("dismiss_rate", 0.0) or 0.0)
         # In this pipeline, dismissed+ignored are a practical proxy for false accepts.
         false_accept_rate = dismiss_rate + float(global_metrics.get("ignore_rate", 0.0) or 0.0)
+        judge_metrics: JudgeGateMetrics | None = None
+        if config.judge_feedback_enabled and not config.judge_collect_only:
+            # Judge metrics collection/aggregation wiring lands in follow-up changes.
+            # Fail safe until then by denying lowering when judge gating is on.
+            judge_metrics = JudgeGateMetrics(is_available=False, provider_independent=False)
 
         new_threshold, action = decide_next_threshold(
             previous_threshold=previous_threshold,
@@ -143,6 +166,12 @@ async def tune_fast_path_threshold(
             false_accept_rate=false_accept_rate,
             sample_size=sample_size,
             min_samples=int(row.min_samples),
+            judge_metrics=judge_metrics,
+            min_judge_samples=int(config.min_judge_samples),
+            max_judge_false_negative_rate=int(config.max_judge_false_negative_rate),
+            max_judge_false_positive_rate=int(config.max_judge_false_positive_rate),
+            max_judge_inconclusive_rate=int(config.max_judge_inconclusive_rate),
+            min_judge_reliability_for_lowering=int(config.min_judge_reliability_for_lowering),
         )
 
         row.current_threshold = int(new_threshold)

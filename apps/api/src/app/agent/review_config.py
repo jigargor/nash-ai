@@ -97,6 +97,14 @@ class AdaptiveThresholdConfig:
     max_false_accept_rate: int = 5
     max_dismiss_rate: int = 25
     min_samples: int = 100
+    judge_feedback_enabled: bool = False
+    judge_collect_only: bool = True
+    judge_provider_family_must_differ: bool = True
+    min_judge_samples: int = 40
+    max_judge_false_negative_rate: int = 15
+    max_judge_false_positive_rate: int = 25
+    max_judge_inconclusive_rate: int = 20
+    min_judge_reliability_for_lowering: int = 82
 
 
 @dataclass
@@ -524,6 +532,24 @@ def _parse_adaptive_threshold(raw_value: object) -> AdaptiveThresholdConfig:
             raw_value.get("max_dismiss_rate"), 25, minimum=0, maximum=100
         ),
         min_samples=_normalize_positive_int(raw_value.get("min_samples"), 100),
+        judge_feedback_enabled=bool(raw_value.get("judge_feedback_enabled", False)),
+        judge_collect_only=bool(raw_value.get("judge_collect_only", True)),
+        judge_provider_family_must_differ=bool(
+            raw_value.get("judge_provider_family_must_differ", True)
+        ),
+        min_judge_samples=_normalize_positive_int(raw_value.get("min_judge_samples"), 40),
+        max_judge_false_negative_rate=_normalize_bounded_int(
+            raw_value.get("max_judge_false_negative_rate"), 15, minimum=0, maximum=100
+        ),
+        max_judge_false_positive_rate=_normalize_bounded_int(
+            raw_value.get("max_judge_false_positive_rate"), 25, minimum=0, maximum=100
+        ),
+        max_judge_inconclusive_rate=_normalize_bounded_int(
+            raw_value.get("max_judge_inconclusive_rate"), 20, minimum=0, maximum=100
+        ),
+        min_judge_reliability_for_lowering=_normalize_bounded_int(
+            raw_value.get("min_judge_reliability_for_lowering"), 82, minimum=0, maximum=100
+        ),
     )
 
 

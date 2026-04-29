@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.agent.judge_feedback.contracts import JudgeGateMetrics
 from app.agent.threshold_tuner import decide_next_threshold
 
 
@@ -39,3 +40,59 @@ def test_decide_next_threshold_raises_on_guardrail_breach() -> None:
     )
     assert action == "raise_or_rollback_guardrail"
     assert threshold == 82
+
+
+def test_decide_next_threshold_holds_when_judge_gate_fails() -> None:
+    threshold, action = decide_next_threshold(
+        previous_threshold=90,
+        minimum_threshold=70,
+        step_down=2,
+        target_disagreement_low=5,
+        target_disagreement_high=15,
+        max_false_accept_rate=5,
+        max_dismiss_rate=25,
+        disagreement_rate=0.02,
+        dismiss_rate=0.01,
+        false_accept_rate=0.02,
+        sample_size=220,
+        min_samples=100,
+        judge_metrics=JudgeGateMetrics(
+            is_available=True,
+            provider_independent=False,
+            sample_size=100,
+            false_negative_rate=0.01,
+            false_positive_rate=0.01,
+            inconclusive_rate=0.05,
+            reliability_score=0.95,
+        ),
+    )
+    assert action == "hold_judge_gate_provider_mismatch"
+    assert threshold == 90
+
+
+def test_decide_next_threshold_lowers_when_judge_gate_is_healthy() -> None:
+    threshold, action = decide_next_threshold(
+        previous_threshold=90,
+        minimum_threshold=70,
+        step_down=2,
+        target_disagreement_low=5,
+        target_disagreement_high=15,
+        max_false_accept_rate=5,
+        max_dismiss_rate=25,
+        disagreement_rate=0.02,
+        dismiss_rate=0.01,
+        false_accept_rate=0.02,
+        sample_size=220,
+        min_samples=100,
+        judge_metrics=JudgeGateMetrics(
+            is_available=True,
+            provider_independent=True,
+            sample_size=100,
+            false_negative_rate=0.01,
+            false_positive_rate=0.01,
+            inconclusive_rate=0.05,
+            reliability_score=0.95,
+        ),
+    )
+    assert action == "lower_threshold"
+    assert threshold == 88
