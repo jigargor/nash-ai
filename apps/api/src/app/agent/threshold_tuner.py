@@ -124,7 +124,8 @@ async def tune_fast_path_threshold(
         previous_threshold = int(row.current_threshold)
         disagreement_rate, sample_size = await _disagreement_rate(session, installation_id)
         summary = await summarize_finding_outcomes(installation_id=installation_id)
-        global_metrics = summary.get("global_metrics", {})
+        global_metrics_raw = summary.get("global_metrics", {})
+        global_metrics = global_metrics_raw if isinstance(global_metrics_raw, dict) else {}
         dismiss_rate = float(global_metrics.get("dismiss_rate", 0.0) or 0.0)
         # In this pipeline, dismissed+ignored are a practical proxy for false accepts.
         false_accept_rate = dismiss_rate + float(global_metrics.get("ignore_rate", 0.0) or 0.0)

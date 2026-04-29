@@ -215,7 +215,8 @@ async def get_fast_path_scorecard(
     outcomes = await summarize_finding_outcomes(
         installation_id=installation_id, repo_full_name=repo_full_name
     )
-    metrics = outcomes.get("global_metrics", {})
+    metrics_raw = outcomes.get("global_metrics", {})
+    metrics = metrics_raw if isinstance(metrics_raw, dict) else {}
     total_fast_int = int(total_fast or 0)
     total_debate_int = int(total_debate or 0)
     disagreement_rate = (
