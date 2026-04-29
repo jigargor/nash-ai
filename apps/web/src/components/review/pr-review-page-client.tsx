@@ -8,7 +8,6 @@ import { ReviewPipeline } from "@/components/review/action-chain";
 import { DiffViewer } from "@/components/review/diff-viewer";
 import { FileTree } from "@/components/review/file-tree";
 import { FindingsPanel } from "@/components/review/findings-panel";
-import { ReviewTimeline } from "@/components/review/review-timeline";
 import { StreamingStatus } from "@/components/review/streaming-status";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
@@ -302,7 +301,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const modelAudits = useReviewModelAudits(reviewId, installationId);
   const selectedFindingIndex = useReviewUiStore((state) => state.selectedFindingIndex);
   const setSelectedFindingIndex = useReviewUiStore((state) => state.setSelectedFindingIndex);
-  const { events, connectionState } = useReviewStream(reviewId, installationId);
+  const { connectionState } = useReviewStream(reviewId, installationId);
   const [userSelectedRunId, setUserSelectedRunId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -413,7 +412,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   ]);
 
   if (reviewQuery.isLoading) {
-    return <StateBlock title="Loading review details" description="Preparing findings, stream status, and timeline." />;
+    return <StateBlock title="Loading review details" description="Preparing findings, stream status, and pipeline." />;
   }
 
   if (reviewQuery.isError) {
@@ -599,12 +598,6 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         </Panel>
       )}
 
-      <ReviewTimeline
-        events={events}
-        reviewStartedAt={data.started_at ?? data.created_at}
-        reviewCompletedAt={data.completed_at}
-        isInFlight={isInFlight}
-      />
     </section>
   );
 }
