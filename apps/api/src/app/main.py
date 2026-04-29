@@ -26,6 +26,7 @@ from app.db.session import engine
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.observability import init_observability
 from app.queue.connection import create_redis_pool, format_redis_target, require_app_redis
+from app.storage.r2_rotation import assert_r2_credentials_within_rotation_policy
 from app.webhooks.router import router as webhook_router
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_observability("api")
+    assert_r2_credentials_within_rotation_policy(settings)
     # Database schema is managed by Alembic migrations.
     db = urlparse(settings.database_url)
     logger.info(

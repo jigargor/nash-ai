@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -83,6 +84,11 @@ class Settings(BaseSettings):
     r2_snapshot_prefix: str = "review-snapshots"
     turnstile_secret_key: str | None = None
     turnstile_siteverify_url: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    # When R2 archive is enabled: UTC instant you last rotated R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY.
+    r2_credentials_rotated_at: datetime | None = None
+    # Max age for those keys before startup fails (production vs non-production).
+    r2_access_key_max_age_days_production: int = 30
+    r2_access_key_max_age_days_development: int = 90
 
     @field_validator("github_app_id", mode="before")
     @classmethod
@@ -111,6 +117,13 @@ class Settings(BaseSettings):
             return None
         text = str(v).strip()
         return text or None
+
+    @field_validator("r2_credentials_rotated_at", mode="before")
+    @classmethod
+    def parse_r2_credentials_rotated_at(cls, v: object) -> datetime | None:
+        from app.storage.r2_rotation import parse_r2_credentials_rotated_at
+
+        return parse_r2_credentials_rotated_at(v)
 
     @field_validator("web_app_url", mode="before")
     @classmethod
