@@ -24,8 +24,8 @@ def validate_findings_against_samples(
             dropped_count += 1
             continue
         lines = sample.splitlines() or [sample]
-        line_end = finding.line_end or finding.line_start
-        if finding.line_start > len(lines):
+        end_line = finding.line_end or finding.line_start
+        if finding.line_start > len(lines) or end_line > len(lines):
             dropped_count += 1
             continue
         excerpt = finding.evidence.get("excerpt")

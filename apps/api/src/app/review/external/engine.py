@@ -23,6 +23,8 @@ import time
 from collections.abc import Callable, Iterable
 from decimal import Decimal
 
+import httpx
+
 from app.review.external.analyzer import RuleRegistry, analyze_file, default_registry
 from app.review.external.errors import BudgetExceededError, RepoAccessError
 from app.review.external.models import (
@@ -210,155 +212,163 @@ class ReviewEngine:
                 ref=ref or "",
             )
 
-        stage_started = time.perf_counter()
-        files = await self.list_files(repo_ref)
-        telemetry.append(
-            StageTelemetry(
-                stage="list_files",
-                duration_ms=int((time.perf_counter() - stage_started) * 1000),
-                details={"file_count": len(files)},
-            )
-        )
-        stage_started = time.perf_counter()
-        signals, plan = await self.prepass(repo_ref, files)
-        telemetry.append(
-            StageTelemetry(
-                stage="prepass",
-                duration_ms=int((time.perf_counter() - stage_started) * 1000),
-                details={
-                    "inspected_file_count": signals.inspected_file_count,
-                    "injection_paths": len(signals.prompt_injection_paths),
-                    "filler_paths": len(signals.filler_paths),
-                },
-            )
-        )
-        excluded = set(signals.prompt_injection_paths) | set(signals.filler_paths)
-        shards = self.plan_shards(files, plan, excluded_paths=excluded)
-
-        estimated_tokens, estimated_cost = self._estimate_total_usage(
-            file_count=len(files)
-        )
-
-        shard_results: list[ShardResult] = []
-        sample_by_path: dict[str, str] = {}
-        used_tokens = 0
-        used_cost = Decimal("0")
-        truncated = False
-        stage_started = time.perf_counter()
-        for shard in shards:
-            shard_tokens, shard_cost = self._estimate_shard_usage(
-                file_count=shard.file_count
-            )
-            if (
-                used_tokens + shard_tokens > self._config.token_budget_cap
-                or (used_cost + Decimal(str(shard_cost)))
-                > Decimal(str(self._config.cost_budget_cap_usd))
-            ):
-                shard_results.append(
-                    ShardResult(
-                        shard_key=shard.shard_key,
-                        status="skipped",
-                        file_count=shard.file_count,
-                        findings=[],
-                        tokens_used=0,
-                        cost_usd=0.0,
-                        skip_reason="budget_cap_reached",
-                    )
+        try:
+            stage_started = time.perf_counter()
+            files = await self.list_files(repo_ref)
+            telemetry.append(
+                StageTelemetry(
+                    stage="list_files",
+                    duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                    details={"file_count": len(files)},
                 )
-                truncated = True
-                continue
-            result, shard_samples = await self._analyze_shard_with_samples(repo_ref, shard)
-            shard_results.append(result)
-            sample_by_path.update(shard_samples)
-            used_tokens += result.tokens_used
-            used_cost += Decimal(str(result.cost_usd))
-        telemetry.append(
-            StageTelemetry(
-                stage="analyze_shards",
-                duration_ms=int((time.perf_counter() - stage_started) * 1000),
-                details={
-                    "shard_count": len(shards),
-                    "completed_shards": len(
-                        [item for item in shard_results if item.status == "done"]
-                    ),
-                    "skipped_shards": len(
-                        [item for item in shard_results if item.status == "skipped"]
-                    ),
-                },
             )
-        )
+            stage_started = time.perf_counter()
+            signals, plan = await self.prepass(repo_ref, files)
+            telemetry.append(
+                StageTelemetry(
+                    stage="prepass",
+                    duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                    details={
+                        "inspected_file_count": signals.inspected_file_count,
+                        "injection_paths": len(signals.prompt_injection_paths),
+                        "filler_paths": len(signals.filler_paths),
+                    },
+                )
+            )
+            excluded = set(signals.prompt_injection_paths) | set(signals.filler_paths)
+            shards = self.plan_shards(files, plan, excluded_paths=excluded)
 
-        stage_started = time.perf_counter()
-        raw_findings: list[Finding] = []
-        for result in shard_results:
-            raw_findings.extend(result.findings)
-        synthesized = synthesize(raw_findings)
-        telemetry.append(
-            StageTelemetry(
-                stage="synthesize",
-                duration_ms=int((time.perf_counter() - stage_started) * 1000),
-                details={
-                    "raw_findings": len(raw_findings),
-                    "synthesized_findings": len(synthesized),
-                },
-            )
-        )
-        stage_started = time.perf_counter()
-        validated_findings, dropped_findings = validate_findings_against_samples(
-            synthesized, sample_by_path
-        )
-        telemetry.append(
-            StageTelemetry(
-                stage="validate_findings",
-                duration_ms=int((time.perf_counter() - stage_started) * 1000),
-                details={
-                    "input_findings": len(synthesized),
-                    "dropped_findings": dropped_findings,
-                },
-            )
-        )
-
-        status: EvaluationStatus = "partial" if truncated else "complete"
-        summary = (
-            f"Completed external evaluation with {len(validated_findings)} critical findings."
-            if validated_findings
-            else "Completed external evaluation with no critical findings."
-        )
-        if truncated:
-            summary += " Some shards were skipped after hitting the configured budget cap."
-        if dropped_findings:
-            summary += (
-                f" Validation dropped {dropped_findings} findings that were not reproducible."
+            estimated_tokens, estimated_cost = self._estimate_total_usage(
+                file_count=len(files)
             )
 
-        _LOGGER.info(
-            "external_review_completed repo=%s/%s status=%s files=%s findings=%s tokens=%s cost_usd=%.4f",
-            repo_ref.owner,
-            repo_ref.repo,
-            status,
-            len(files),
-            len(validated_findings),
-            int(used_tokens),
-            float(used_cost),
-        )
+            shard_results: list[ShardResult] = []
+            sample_by_path: dict[str, str] = {}
+            used_tokens = 0
+            used_cost = Decimal("0")
+            truncated = False
+            stage_started = time.perf_counter()
+            for shard in shards:
+                shard_tokens, shard_cost = self._estimate_shard_usage(
+                    file_count=shard.file_count
+                )
+                if (
+                    used_tokens + shard_tokens > self._config.token_budget_cap
+                    or (used_cost + Decimal(str(shard_cost)))
+                    > Decimal(str(self._config.cost_budget_cap_usd))
+                ):
+                    shard_results.append(
+                        ShardResult(
+                            shard_key=shard.shard_key,
+                            status="skipped",
+                            file_count=shard.file_count,
+                            findings=[],
+                            tokens_used=0,
+                            cost_usd=0.0,
+                            skip_reason="budget_cap_reached",
+                        )
+                    )
+                    truncated = True
+                    continue
+                result, shard_samples = await self._analyze_shard_with_samples(repo_ref, shard)
+                shard_results.append(result)
+                sample_by_path.update(shard_samples)
+                used_tokens += result.tokens_used
+                used_cost += Decimal(str(result.cost_usd))
+            telemetry.append(
+                StageTelemetry(
+                    stage="analyze_shards",
+                    duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                    details={
+                        "shard_count": len(shards),
+                        "completed_shards": len(
+                            [item for item in shard_results if item.status == "done"]
+                        ),
+                        "skipped_shards": len(
+                            [item for item in shard_results if item.status == "skipped"]
+                        ),
+                    },
+                )
+            )
 
-        return ReviewReport(
-            repo_ref=repo_ref,
-            status=status,
-            file_count=len(files),
-            inspected_file_count=signals.inspected_file_count,
-            signals=signals,
-            plan=plan,
-            shards=shard_results,
-            findings=validated_findings,
-            tokens_used=int(used_tokens),
-            cost_usd=float(used_cost),
-            estimated_tokens=estimated_tokens,
-            estimated_cost_usd=estimated_cost,
-            summary=summary,
-            truncated=truncated,
-            telemetry=telemetry,
-        )
+            stage_started = time.perf_counter()
+            raw_findings: list[Finding] = []
+            for result in shard_results:
+                raw_findings.extend(result.findings)
+            synthesized = synthesize(raw_findings)
+            telemetry.append(
+                StageTelemetry(
+                    stage="synthesize",
+                    duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                    details={
+                        "raw_findings": len(raw_findings),
+                        "synthesized_findings": len(synthesized),
+                    },
+                )
+            )
+            stage_started = time.perf_counter()
+            validated_findings, dropped_findings = validate_findings_against_samples(
+                synthesized, sample_by_path
+            )
+            telemetry.append(
+                StageTelemetry(
+                    stage="validate_findings",
+                    duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                    details={
+                        "input_findings": len(synthesized),
+                        "dropped_findings": dropped_findings,
+                    },
+                )
+            )
+
+            status: EvaluationStatus = "partial" if truncated else "complete"
+            summary = (
+                f"Completed external evaluation with {len(validated_findings)} critical findings."
+                if validated_findings
+                else "Completed external evaluation with no critical findings."
+            )
+            if truncated:
+                summary += " Some shards were skipped after hitting the configured budget cap."
+            if dropped_findings:
+                summary += (
+                    f" Validation dropped {dropped_findings} findings that were not reproducible."
+                )
+
+            _LOGGER.info(
+                "external_review_completed repo=%s/%s status=%s files=%s findings=%s tokens=%s cost_usd=%.4f",
+                repo_ref.owner,
+                repo_ref.repo,
+                status,
+                len(files),
+                len(validated_findings),
+                int(used_tokens),
+                float(used_cost),
+            )
+
+            return ReviewReport(
+                repo_ref=repo_ref,
+                status=status,
+                file_count=len(files),
+                inspected_file_count=signals.inspected_file_count,
+                signals=signals,
+                plan=plan,
+                shards=shard_results,
+                findings=validated_findings,
+                tokens_used=int(used_tokens),
+                cost_usd=float(used_cost),
+                estimated_tokens=estimated_tokens,
+                estimated_cost_usd=estimated_cost,
+                summary=summary,
+                truncated=truncated,
+                telemetry=telemetry,
+            )
+        except (RepoAccessError, ValueError, httpx.HTTPError) as exc:
+            return _failed_report(
+                repo_ref=repo_ref,
+                message=str(exc) or type(exc).__name__,
+                repo_url=repo_url,
+                ref=ref or "",
+            )
 
     def _estimate_shard_usage(self, *, file_count: int) -> tuple[int, float]:
         estimated_tokens = max(file_count * 120, 400)

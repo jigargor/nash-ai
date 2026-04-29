@@ -21,6 +21,7 @@ from app.review.external.models import (
     FileDescriptor,
     PrepassPlan,
     PrepassSignals,
+    RepoRef,
     ServiceTier,
 )
 from app.review.external.sources.base import RepoSource
@@ -165,7 +166,7 @@ def recommended_plan(
 async def run_prepass(
     *,
     source: RepoSource,
-    repo_ref: "RepoRef",  # type: ignore[name-defined]  # forward ref via imports in caller
+    repo_ref: RepoRef,
     files: list[FileDescriptor],
     cheap_pass_model: str,
     sample_limit: int = 80,
@@ -177,8 +178,6 @@ async def run_prepass(
     Fetches up to ``sample_limit`` files concurrently (bounded by
     ``concurrency``) so even moderately sized repos prepass in seconds.
     """
-
-    from app.review.external.models import RepoRef  # noqa: F401  (documentation)
 
     inspectable, ignored_paths, risky_paths = partition_files(files)
 

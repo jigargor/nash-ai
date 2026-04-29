@@ -45,7 +45,6 @@ from app.mcp.tools import (
     run_prepass_tool,
     synthesize_findings_tool,
 )
-from app.review.external.models import EngineConfig
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -110,5 +110,6 @@ def analyze_file(
                     confidence=rule.confidence,
                 )
             )
+            # One finding per rule per file (first pattern hit only) to avoid duplicate spam.
             break
     return matches

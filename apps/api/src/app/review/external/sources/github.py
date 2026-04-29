@@ -17,6 +17,7 @@ module it replaces:
 from __future__ import annotations
 
 import base64
+import logging
 from collections import OrderedDict
 from typing import Any
 
@@ -27,6 +28,10 @@ from app.review.external.models import FileDescriptor, RepoRef
 
 _GITHUB_API_ROOT = "https://api.github.com"
 _USER_AGENT = "codereview-agent-external-review/1.0"
+# Cap bytes stored per path in the file LRU so larger max_bytes reuses one decode.
+_FILE_CACHE_MAX_DECODED_BYTES = 65_536
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _LruCache:
@@ -74,13 +79,22 @@ class GitHubRepoSource:
             "User-Agent": _USER_AGENT,
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        if github_token:
+        if github_token and client is None:
             headers["Authorization"] = f"Bearer {github_token}"
         self._client = client or httpx.AsyncClient(
             base_url=_GITHUB_API_ROOT,
             timeout=timeout_seconds,
             headers=headers,
         )
+        if client is not None and github_token:
+            prior = self._client.headers.get("Authorization")
+            if prior and str(prior).strip():
+                _LOGGER.warning(
+                    "github_token was provided alongside a custom httpx client that already "
+                    "sets Authorization; leaving the client's Authorization header unchanged."
+                )
+            else:
+                self._client.headers["Authorization"] = f"Bearer {github_token}"
 
     async def aclose(self) -> None:
         if self._owned_client:
@@ -136,18 +150,23 @@ class GitHubRepoSource:
     async def fetch_file(
         self, repo_ref: RepoRef, path: str, *, max_bytes: int = 5_000
     ) -> str:
-        cache_key = (
-            f"{repo_ref.owner}/{repo_ref.repo}@{repo_ref.ref}::{path}::{max_bytes}"
-        )
+        # Cache key omits max_bytes so one successful decode can serve multiple sample sizes.
+        cache_key = f"{repo_ref.owner}/{repo_ref.repo}@{repo_ref.ref}::{path}"
         cached = self._file_cache.get(cache_key)
         if isinstance(cached, str):
-            return cached
+            if cached == "":
+                return ""
+            if len(cached) >= max_bytes:
+                return cached[:max_bytes]
         response = await self._client.get(
             f"/repos/{repo_ref.owner}/{repo_ref.repo}/contents/{path}",
             params={"ref": repo_ref.ref},
         )
-        if response.status_code >= 400:
+        if response.status_code == 404:
             self._file_cache.set(cache_key, "")
+            return ""
+        if response.status_code >= 400:
+            # Transient or permission errors: do not cache empty (avoids poisoning the LRU).
             return ""
         payload = response.json()
         if not isinstance(payload, dict):
@@ -163,9 +182,9 @@ class GitHubRepoSource:
         except (ValueError, TypeError):
             self._file_cache.set(cache_key, "")
             return ""
-        snippet = decoded[:max_bytes].decode("utf-8", errors="ignore")
-        self._file_cache.set(cache_key, snippet)
-        return snippet
+        full_text = decoded[:_FILE_CACHE_MAX_DECODED_BYTES].decode("utf-8", errors="ignore")
+        self._file_cache.set(cache_key, full_text)
+        return full_text[:max_bytes]
 
 
 def _extract_blobs(payload: Any, *, max_files: int) -> list[FileDescriptor]:
