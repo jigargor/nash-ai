@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     langsmith_tracing_enabled: bool = False
     review_chain_graph_enabled: bool = False
     langserve_review_chain_enabled: bool = False
+    review_benchmark_shadow_enabled: bool = False
+    review_benchmark_sample_rate: float = 0.2
     web_app_url: str | None = None
     snapshot_retention_days: int = 30
     snapshot_archive_batch_size: int = 100
@@ -134,6 +136,11 @@ class Settings(BaseSettings):
                 f"FERNET_KEY is invalid (must be a 32-byte URL-safe base64 key): {exc}"
             ) from exc
         return v
+
+    @field_validator("review_benchmark_sample_rate", mode="after")
+    @classmethod
+    def validate_review_benchmark_sample_rate(cls, v: float) -> float:
+        return min(max(v, 0.0), 1.0)
 
     @model_validator(mode="after")
     def validate_production_database_tls(self) -> "Settings":

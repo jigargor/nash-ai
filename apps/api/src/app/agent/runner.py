@@ -60,6 +60,7 @@ from app.agent.profiler import profile_repo
 from app.agent.prompts import build_initial_user_prompt, build_system_prompt, load_verified_fact_ids
 from app.agent.prompt_compaction import compact_fast_path_prompt_context
 from app.agent.review_config import ReviewConfig, load_review_config
+from app.agent.benchmark_shadow import should_enqueue_shadow_benchmark
 from app.agent.review_chain_graph import compute_branch_flags, run_branching_preview
 from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
 from app.agent.validator import FindingValidator
@@ -1146,6 +1147,22 @@ async def _mark_review_done(
                     "Circuit breaker record_provider_success failed (best-effort)",
                     exc_info=True,
                 )
+            if settings.review_benchmark_shadow_enabled and should_enqueue_shadow_benchmark(
+                cast(int, context["review_id"])
+            ):
+                try:
+                    await _redis.enqueue_job(
+                        "benchmark_shadow_review",
+                        cast(int, context["review_id"]),
+                        installation_id,
+                        cast(str, context["run_id"]),
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to enqueue benchmark_shadow_review review_id=%s",
+                        context.get("review_id"),
+                        exc_info=True,
+                    )
 
 
 def _estimate_cost_usd(

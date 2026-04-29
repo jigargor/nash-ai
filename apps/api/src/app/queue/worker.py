@@ -34,6 +34,7 @@ _logger.warning(
 )
 
 from app.agent.runner import run_review  # noqa: E402
+from app.agent.benchmark_shadow import run_shadow_benchmark  # noqa: E402
 from app.agent.snapshot import archive_expired_snapshots  # noqa: E402
 from app.agent.external.orchestrator import (  # noqa: E402
     run_external_eval_prepass,
@@ -100,6 +101,19 @@ async def external_eval_synthesize(ctx: dict[str, Any], external_eval_id: int) -
     await run_external_eval_synthesize(eval_id=external_eval_id)
 
 
+async def benchmark_shadow_review(
+    ctx: dict[str, Any],
+    review_id: int,
+    installation_id: int,
+    control_run_id: str,
+) -> None:
+    await run_shadow_benchmark(
+        review_id=review_id,
+        installation_id=installation_id,
+        control_run_id=control_run_id,
+    )
+
+
 async def worker_startup(ctx: dict[str, Any]) -> None:
     init_observability("worker")
     recovered = await recover_stale_running_reviews()
@@ -116,6 +130,7 @@ class WorkerSettings:
         external_eval_prepass,
         external_eval_shard,
         external_eval_synthesize,
+        benchmark_shadow_review,
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = default_queue_name
