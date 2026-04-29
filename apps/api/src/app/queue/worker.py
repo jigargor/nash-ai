@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 from app.config import settings
 from app.observability import init_observability
+from app.storage.r2_rotation import assert_r2_credentials_within_rotation_policy
 from app.queue.connection import format_redis_target
 from app.queue.recovery import recover_stale_running_reviews
 from arq.connections import RedisSettings
@@ -111,6 +112,7 @@ async def external_eval_synthesize(ctx: dict[str, Any], external_eval_id: int) -
 
 async def worker_startup(ctx: dict[str, Any]) -> None:
     init_observability("worker")
+    assert_r2_credentials_within_rotation_policy(settings)
     recovered = await recover_stale_running_reviews()
     ctx["recovered_stale_reviews"] = recovered
 

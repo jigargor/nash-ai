@@ -274,6 +274,7 @@ Frontend deployment target: Vercel.
 - Required backend URL wiring should use your deployed API domain.
 - Set `WEB_APP_URL` in API env to the exact frontend origin for strict CORS.
 - Vercel typically does not need `APP_PRIVATE_KEY_PEM` (web uses OAuth client ID/secret), unless you add a server route there that signs GitHub App JWTs.
+- Optional **Cloudflare R2** snapshot archive: when `R2_*` credentials are set on the API and worker, set **`R2_CREDENTIALS_ROTATED_AT`** (UTC date you last rotated those keys). Startup enforces max credential age (**30 days** when `ENVIRONMENT=production`, **90 days** otherwise; override with `R2_ACCESS_KEY_MAX_AGE_DAYS_PRODUCTION` / `R2_ACCESS_KEY_MAX_AGE_DAYS_DEVELOPMENT`). See `docs/secrets-rotation.md`.
 
 ### 12. Production security checklist
 
