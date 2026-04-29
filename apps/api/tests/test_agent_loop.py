@@ -31,9 +31,16 @@ def _response(
     )
 
 
+def _fake_provider_api_key(
+    _provider: object, *, user_key_override: str | None = None
+) -> str:
+    return user_key_override or "test-api-key"
+
+
 @pytest.mark.anyio
 async def test_run_agent_end_turn_records_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
     context: dict[str, object] = {}
+    monkeypatch.setattr(loop, "get_provider_api_key", _fake_provider_api_key)
     monkeypatch.setattr(
         loop,
         "create_async_anthropic_client",
@@ -62,6 +69,7 @@ async def test_run_agent_tool_use_executes_tools_and_continues(
         _response("end_turn", []),
     ]
     context: dict[str, object] = {}
+    monkeypatch.setattr(loop, "get_provider_api_key", _fake_provider_api_key)
     monkeypatch.setattr(
         loop, "create_async_anthropic_client", lambda _api_key: _FakeClient(responses)
     )
@@ -90,6 +98,7 @@ async def test_run_agent_stops_after_max_iterations(monkeypatch: pytest.MonkeyPa
         type="tool_use", name="search_codebase", id="tool-1", input={"pattern": "jwt"}
     )
     monkeypatch.setattr(loop, "MAX_ITERATIONS", 2)
+    monkeypatch.setattr(loop, "get_provider_api_key", _fake_provider_api_key)
     monkeypatch.setattr(
         loop,
         "create_async_anthropic_client",

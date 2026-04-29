@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,10 +21,13 @@ try:
 except Exception:  # pragma: no cover - depends on local deepeval package availability
     pytest.skip("deepeval test_case module unavailable", allow_module_level=True)
 
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 
 def _external_review_dataset_cases() -> list[Path]:
-    repo_root = Path(__file__).resolve().parents[4]
-    datasets_root = repo_root / "evals" / "datasets"
+    datasets_root = _REPO_ROOT / "evals" / "datasets"
     return sorted(
         case_dir
         for case_dir in datasets_root.iterdir()

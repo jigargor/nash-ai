@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,7 @@ from typing import Any
 import pytest
 
 from app.agent.offline_eval import replay_case_directory_to_review_result
+from app.config import settings
 
 deepeval_module = pytest.importorskip("deepeval")
 if not hasattr(deepeval_module, "assert_test"):
@@ -82,8 +82,8 @@ def test_deepeval_metric_smoke() -> None:
 def test_deepeval_live_agent_replay(case_dir: Path) -> None:
     from .overlap_metric import FindingOverlapMetric
 
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        pytest.skip("ANTHROPIC_API_KEY is not set")
+    if not settings.anthropic_api_key:
+        pytest.skip("ANTHROPIC_API_KEY is not configured in settings")
     expected_payload = json.loads((case_dir / "expected.json").read_text(encoding="utf-8"))
     review_result = asyncio.run(replay_case_directory_to_review_result(case_dir))
     predicted_payload = _as_prediction_payload(review_result)
