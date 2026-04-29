@@ -123,6 +123,17 @@ class UserResponse(BaseModel):
     github_id: int
     login: str
     created_at: str
+    accepted_terms_version: str | None = None
+    accepted_terms_at: str | None = None
+    terms_version: str
+    requires_terms_acceptance: bool
+
+
+class TermsStatusResponse(BaseModel):
+    terms_version: str
+    accepted_terms_version: str | None = None
+    accepted_terms_at: str | None = None
+    requires_terms_acceptance: bool
 
 
 class UpsertKeyRequest(BaseModel):
@@ -182,7 +193,11 @@ async def upsert_current_user(
     }
     if token_enc is not None:
         update_values["token_enc"] = token_enc
-    stmt = (
+    async with AsyncSessionLocal() as session:
+        existing = (
+            await session.execute(select(User).where(User.github_id == current_user.github_id))
+        ).scalar_one_or_none()
+        stmt = (
         pg_insert(User)
         .values(**insert_values)
         .on_conflict_do_update(
@@ -190,15 +205,62 @@ async def upsert_current_user(
             set_=update_values,
         )
         .returning(User)
-    )
-    async with AsyncSessionLocal() as session:
+        )
         row = (await session.execute(stmt)).scalar_one()
         await session.commit()
+    requires_terms_acceptance = (
+        existing is None or row.accepted_terms_version != settings.terms_version
+    )
     return UserResponse(
         id=row.id,
         github_id=row.github_id,
         login=row.login,
         created_at=row.created_at.isoformat(),
+        accepted_terms_version=row.accepted_terms_version,
+        accepted_terms_at=row.accepted_terms_at.isoformat() if row.accepted_terms_at else None,
+        terms_version=settings.terms_version,
+        requires_terms_acceptance=requires_terms_acceptance,
+    )
+
+
+@router.get("/me/terms-status", response_model=TermsStatusResponse)
+async def get_terms_status(
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
+) -> TermsStatusResponse:
+    row = await _resolve_user(current_user.github_id)
+    return TermsStatusResponse(
+        terms_version=settings.terms_version,
+        accepted_terms_version=row.accepted_terms_version,
+        accepted_terms_at=row.accepted_terms_at.isoformat() if row.accepted_terms_at else None,
+        requires_terms_acceptance=row.accepted_terms_version != settings.terms_version,
+    )
+
+
+@router.post("/me/terms-acceptance", response_model=TermsStatusResponse)
+async def accept_terms(
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
+) -> TermsStatusResponse:
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as session:
+        await set_user_context(session, current_user.github_id)
+        row = (
+            await session.execute(select(User).where(User.github_id == current_user.github_id))
+        ).scalar_one_or_none()
+        if row is None or row.deleted_at is not None:
+            raise HTTPException(
+                status_code=404,
+                detail="Account not found — please log out and back in to register your account.",
+            )
+        row.accepted_terms_version = settings.terms_version
+        row.accepted_terms_at = now
+        await session.commit()
+        await session.refresh(row)
+
+    return TermsStatusResponse(
+        terms_version=settings.terms_version,
+        accepted_terms_version=row.accepted_terms_version,
+        accepted_terms_at=row.accepted_terms_at.isoformat() if row.accepted_terms_at else None,
+        requires_terms_acceptance=False,
     )
 
 

@@ -1,7 +1,7 @@
 "use server";
 
 import { serverBffFetch } from "@/lib/api/server-bff-fetch";
-import type { AuthMeResponse } from "@/lib/api/auth";
+import type { AuthMeResponse, TermsStatusResponse } from "@/lib/api/auth";
 import type {
   ExternalEvalCreateRequest,
   ExternalEvalDetail,
@@ -119,6 +119,16 @@ export async function actionDismissFinding(
 
 export async function actionFetchCurrentUser(): Promise<AuthMeResponse> {
   return serverBffFetch<AuthMeResponse>("/api/v1/auth/me");
+}
+
+export async function actionFetchTermsStatus(): Promise<TermsStatusResponse> {
+  return serverBffFetch<TermsStatusResponse>("/api/v1/users/me/terms-status");
+}
+
+export async function actionAcceptTerms(): Promise<TermsStatusResponse> {
+  return serverBffFetch<TermsStatusResponse>("/api/v1/users/me/terms-acceptance", {
+    method: "POST",
+  });
 }
 
 export async function actionFetchModelsCatalog(): Promise<ModelsCatalogResponse> {

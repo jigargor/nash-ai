@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AUTH_PKCE_VERIFIER_COOKIE_NAME,
   AUTH_STATE_COOKIE_NAME,
-  TERMS_ACCEPTANCE_COOKIE_NAME,
 } from "@/lib/auth/constants";
 
 const cookiesMock = vi.fn();
@@ -28,7 +27,7 @@ describe("auth login route", () => {
     vi.stubEnv("GITHUB_CLIENT_ID", "test-client-id");
     vi.stubEnv("GITHUB_CLIENT_SECRET", "test-client-secret");
 
-    const requestBody = new URLSearchParams({ accept_terms: "on" });
+    const requestBody = new URLSearchParams();
     const request = new Request("https://nash-ai.app/api/v1/auth/login", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -51,24 +50,6 @@ describe("auth login route", () => {
 
     expect(response.cookies.get(AUTH_STATE_COOKIE_NAME)?.value).toBeTruthy();
     expect(response.cookies.get(AUTH_PKCE_VERIFIER_COOKIE_NAME)?.value).toBeTruthy();
-    expect(response.cookies.get(TERMS_ACCEPTANCE_COOKIE_NAME)?.value).toBe("1");
-  });
-
-  it("returns 303 to login with terms error when checkbox is not checked", async () => {
-    vi.stubEnv("GITHUB_CLIENT_ID", "test-client-id");
-    vi.stubEnv("GITHUB_CLIENT_SECRET", "test-client-secret");
-
-    const request = new Request("https://nash-ai.app/api/v1/auth/login", {
-      method: "POST",
-      body: new URLSearchParams().toString(),
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-    });
-
-    const routeModule = await loadRouteModule();
-    const response = await routeModule.POST(request);
-
-    expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("https://nash-ai.app/login?error=terms");
   });
 
   it("returns 503 JSON when OAuth env is not configured", async () => {
@@ -77,7 +58,7 @@ describe("auth login route", () => {
 
     const request = new Request("https://nash-ai.app/api/v1/auth/login", {
       method: "POST",
-      body: new URLSearchParams({ accept_terms: "on" }).toString(),
+      body: new URLSearchParams().toString(),
       headers: { "content-type": "application/x-www-form-urlencoded" },
     });
 
@@ -89,7 +70,7 @@ describe("auth login route", () => {
     expect(body.error).toContain("GitHub OAuth is not configured");
   });
 
-  it("GET redirects to login when terms cookie is missing", async () => {
+  it("GET redirects directly to GitHub authorize URL", async () => {
     vi.stubEnv("GITHUB_CLIENT_ID", "test-client-id");
     vi.stubEnv("GITHUB_CLIENT_SECRET", "test-client-secret");
     cookiesMock.mockResolvedValue({
@@ -100,6 +81,6 @@ describe("auth login route", () => {
     const response = await routeModule.GET(new Request("https://nash-ai.app/api/v1/auth/login"));
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("https://nash-ai.app/login?error=terms_required");
+    expect(response.headers.get("location")?.startsWith("https://github.com/login/oauth/authorize?")).toBe(true);
   });
 });

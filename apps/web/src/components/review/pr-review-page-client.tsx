@@ -371,10 +371,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     [currentRunAudits],
   );
   const postedFindingsCount = displayedFindings.length;
-  const findingsStatusLabel =
-    pipelineStagedFindingsPeak > postedFindingsCount
-      ? `${postedFindingsCount} posted · ${pipelineStagedFindingsPeak} pipeline`
-      : `${postedFindingsCount} findings`;
+  const nodeCount = currentRunAudits.length;
 
   const summaryParagraph = useMemo(() => {
     if (!isInFlight && selectedRunOutput?.summary?.trim()) return selectedRunOutput.summary.trim();
@@ -523,8 +520,31 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         </p>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
           <StreamingStatus state={connectionState} />
-          <div style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
-            {data.tokens_used ?? 0} tokens · ${displayedCostUsd ?? "0.000000"} · {findingsStatusLabel}
+        </div>
+        <div
+          style={{
+            marginTop: "0.65rem",
+            display: "flex",
+            justifyContent: "center",
+            width: "100%",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "1rem",
+              fontWeight: 700,
+              letterSpacing: "0.01em",
+              color: "var(--text-primary)",
+              background: "var(--card-muted)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: "999px",
+              padding: "0.45rem 0.9rem",
+              textAlign: "center",
+              boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
+            }}
+          >
+            {data.tokens_used ?? 0} tokens · ${displayedCostUsd ?? "0.000000"} · {postedFindingsCount} posted
+            {nodeCount > 0 ? ` · ${nodeCount} node${nodeCount === 1 ? "" : "s"}` : ""}
           </div>
         </div>
         <p style={{ color: "var(--text-muted)", marginBottom: 0, marginTop: "0.45rem", fontSize: "0.85rem" }}>

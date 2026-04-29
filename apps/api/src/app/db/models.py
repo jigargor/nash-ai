@@ -32,6 +32,8 @@ class User(Base):
     token_enc: Mapped[bytes | None] = mapped_column(
         LargeBinary
     )  # Fernet-encrypted OAuth token (reserved)
+    accepted_terms_version: Mapped[str | None] = mapped_column(Text)
+    accepted_terms_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now()
     )

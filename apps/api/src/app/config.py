@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     dashboard_user_jwt_secret: str | None = None
     dashboard_user_jwt_audience: str = "dashboard-api"
     dashboard_user_jwt_issuer: str = "nash-web-dashboard"
+    terms_version: str = "2026-04-29"
     enable_reviews: bool = True
     reviews_per_hour_limit: int = 30
     daily_token_budget_per_installation: int = 10_000_000

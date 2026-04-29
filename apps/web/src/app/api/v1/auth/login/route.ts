@@ -1,12 +1,9 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import {
   AUTH_COOKIE_TTL_SECONDS,
   AUTH_PKCE_VERIFIER_COOKIE_NAME,
   AUTH_STATE_COOKIE_NAME,
-  TERMS_ACCEPTANCE_COOKIE_NAME,
-  TERMS_ACCEPTANCE_COOKIE_TTL_SECONDS,
 } from "@/lib/auth/constants";
 import { buildGitHubAuthorizeUrl } from "@/lib/auth/github";
 import { createOAuthState, createPkceCodeVerifier, derivePkceCodeChallenge } from "@/lib/auth/session";
@@ -52,18 +49,9 @@ async function redirectToGitHub(request: Request, statusCode?: number): Promise<
   return response;
 }
 
-function termsAccepted(cookieStore: Awaited<ReturnType<typeof cookies>>): boolean {
-  return cookieStore.get(TERMS_ACCEPTANCE_COOKIE_NAME)?.value === "1";
-}
-
 export async function GET(request: Request): Promise<NextResponse> {
   if (!process.env.GITHUB_CLIENT_ID?.trim() || !process.env.GITHUB_CLIENT_SECRET?.trim()) {
     return oauthNotConfiguredResponse();
-  }
-
-  const cookieStore = await cookies();
-  if (!termsAccepted(cookieStore)) {
-    return NextResponse.redirect(new URL("/login?error=terms_required", request.url));
   }
 
   return await redirectToGitHub(request);
@@ -74,19 +62,6 @@ export async function POST(request: Request): Promise<NextResponse> {
     return oauthNotConfiguredResponse();
   }
 
-  const formData = await request.formData();
-  const acceptTerms = formData.get("accept_terms");
-  if (acceptTerms !== "on") {
-    return NextResponse.redirect(new URL("/login?error=terms", request.url), 303);
-  }
-
-  const response = await redirectToGitHub(request, 303);
-  response.cookies.set(TERMS_ACCEPTANCE_COOKIE_NAME, "1", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: true,
-    path: "/",
-    maxAge: TERMS_ACCEPTANCE_COOKIE_TTL_SECONDS,
-  });
-  return response;
+  await request.formData();
+  return await redirectToGitHub(request, 303);
 }

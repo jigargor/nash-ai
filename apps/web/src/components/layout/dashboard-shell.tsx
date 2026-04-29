@@ -4,8 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { PropsWithChildren } from "react";
 
+import { TermsAcceptanceModal } from "@/components/layout/terms-acceptance-modal";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useInstallations } from "@/hooks/use-installations";
+import { useAcceptTerms, useTermsStatus } from "@/hooks/use-terms-status";
 
 interface NavItem {
   label: string;
@@ -62,6 +64,10 @@ export function DashboardShell({ children }: PropsWithChildren) {
   const currentUser = useCurrentUser();
   const installations = useInstallations();
   const activeInstallations = installations.data?.filter((item) => item.active).length ?? 0;
+  const termsStatus = useTermsStatus();
+  const acceptTerms = useAcceptTerms();
+  const requiresTermsAcceptance =
+    termsStatus.data?.requires_terms_acceptance === true && currentUser.data?.authenticated === true;
 
   return (
     <div className="app-shell">
@@ -123,6 +129,14 @@ export function DashboardShell({ children }: PropsWithChildren) {
 
         <div className="app-content">{children}</div>
       </main>
+      {requiresTermsAcceptance ? (
+        <TermsAcceptanceModal
+          isSubmitting={acceptTerms.isPending}
+          onAccept={() => {
+            void acceptTerms.mutateAsync();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
