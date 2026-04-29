@@ -480,6 +480,43 @@ async def test_list_reviews_direct_installation_branch_with_status_filter(
 
 
 @pytest.mark.anyio
+async def test_list_reviews_all_installations_branch_with_status_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeReviewSession()
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
+
+    async def _fake_allowed(_session: object, _user: CurrentDashboardUser) -> set[int]:
+        return {321}
+
+    async def _fake_set_ctx(_session: object, _installation_id: int) -> None:
+        return None
+
+    async def _fake_list_rows(_session: object, **_kwargs: object) -> list[Installation]:
+        return [
+            Installation(
+                installation_id=321,
+                account_login="acme",
+                account_type="Organization",
+                suspended_at=None,
+            )
+        ]
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed)
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
+    monkeypatch.setattr(api_router, "_list_installation_rows", _fake_list_rows)
+
+    result = await api_router.list_reviews(
+        installation_id=None,
+        limit=50,
+        status="skipped",
+        current_user=CurrentDashboardUser(github_id=1, login="tester"),
+    )
+    assert len(result) == 1
+    assert result[0]["id"] == 99
+
+
+@pytest.mark.anyio
 async def test_list_repos_direct_installation_branch_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeEmptyRepoSession()
     monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
