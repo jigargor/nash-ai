@@ -31,6 +31,7 @@ src/app/agent/normalization.py
 src/app/agent/offline_eval.py
 src/app/agent/profiler.py
 src/app/agent/profiler_cache.py
+src/app/agent/prompt_compaction.py
 src/app/agent/provider_clients.py
 src/app/agent/review_config.py
 src/app/agent/runner.py
@@ -38,6 +39,7 @@ src/app/agent/schema.py
 src/app/agent/snapshot.py
 src/app/agent/telemetry_audit.py
 src/app/agent/text_sanitizer.py
+src/app/agent/threshold_tuner.py
 src/app/agent/tools.py
 src/app/agent/validator.py
 src/app/agent/vendor_detect.py
@@ -69,6 +71,7 @@ src/app/api/external_evals.py
 src/app/api/models_catalog.py
 src/app/api/router.py
 src/app/api/usage.py
+src/app/api/usage_metrics.py
 src/app/api/users.py
 src/app/db/__init__.py
 src/app/db/models.py
@@ -82,7 +85,9 @@ src/app/github/smoke_check.py
 src/app/github/utils.py
 src/app/llm/__init__.py
 src/app/llm/circuit_breaker.py
+src/app/llm/errors.py
 src/app/llm/maintenance.py
+src/app/llm/rate_limit_backoff.py
 src/app/llm/router.py
 src/app/llm/types.py
 src/app/llm/catalog/__init__.py
@@ -155,6 +160,8 @@ tests/test_agent_vendor_detect.py
 tests/test_api_benchmarks.py
 tests/test_api_router.py
 tests/test_api_router_helpers.py
+tests/test_api_usage.py
+tests/test_api_usage_metrics.py
 tests/test_api_users.py
 tests/test_config_cache.py
 tests/test_database_transaction_isolation.py
@@ -173,10 +180,12 @@ tests/test_llm_provider_adapters.py
 tests/test_mcp_tools.py
 tests/test_queue_recovery.py
 tests/test_queue_worker.py
+tests/test_rate_limit_backoff.py
 tests/test_ratelimit.py
 tests/test_review_engine.py
 tests/test_snapshot.py
 tests/test_telemetry_audit.py
 tests/test_text_sanitizer.py
+tests/test_threshold_tuner.py
 tests/test_webhooks_handlers.py
 tests/test_webhooks_router.py

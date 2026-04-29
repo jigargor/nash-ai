@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { useUsageSummary } from "@/hooks/use-usage-summary";
 import { useInstallations } from "@/hooks/use-installations";
 
-type CapViewMode = "per_key" | "cumulative" | "combination";
+type CapViewMode = "per_key" | "cumulative";
 
 function formatUsd(value: string): string {
   const numeric = Number(value);
@@ -33,7 +33,7 @@ export default function DashboardHomePage() {
   const cumulativeCaps = usageSummary.data?.cumulative_caps;
 
   const selectedCapRows = useMemo(() => {
-    if (capViewMode !== "combination") return [];
+    if (capViewMode !== "cumulative") return [];
     return perKeyCaps.filter((row) => selectedProviders.includes(row.provider));
   }, [capViewMode, perKeyCaps, selectedProviders]);
 
@@ -50,6 +50,15 @@ export default function DashboardHomePage() {
       previous.includes(provider) ? previous.filter((item) => item !== provider) : [...previous, provider],
     );
   }
+
+  useEffect(() => {
+    if (capViewMode !== "cumulative") return;
+    setSelectedProviders((previous) => {
+      if (perKeyCaps.length === 0) return previous;
+      if (previous.length > 0) return previous;
+      return perKeyCaps.map((row) => row.provider);
+    });
+  }, [capViewMode, perKeyCaps]);
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
@@ -124,13 +133,6 @@ export default function DashboardHomePage() {
               >
                 Cumulative
               </button>
-              <button
-                type="button"
-                className={`button ${capViewMode === "combination" ? "button-primary" : "button-ghost"}`}
-                onClick={() => setCapViewMode("combination")}
-              >
-                Combination
-              </button>
             </div>
 
             {capViewMode === "per_key" ? (
@@ -163,27 +165,24 @@ export default function DashboardHomePage() {
             ) : null}
 
             {capViewMode === "cumulative" && cumulativeCaps ? (
-              <article
-                style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-md)",
-                  padding: "0.7rem 0.8rem",
-                  display: "grid",
-                  gap: "0.25rem",
-                }}
-              >
-                <strong>Cumulative usage across all API keys</strong>
-                <span style={{ color: "var(--text-muted)" }}>
-                  Daily: {cumulativeCaps.daily_tokens} / {cumulativeCaps.daily_token_budget} tokens
-                </span>
-                <span style={{ color: "var(--text-muted)" }}>
-                  Weekly: {cumulativeCaps.weekly_tokens} tokens · state: {cumulativeCaps.state}
-                </span>
-              </article>
-            ) : null}
-
-            {capViewMode === "combination" ? (
               <div style={{ display: "grid", gap: "0.55rem" }}>
+                <article
+                  style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-md)",
+                    padding: "0.7rem 0.8rem",
+                    display: "grid",
+                    gap: "0.25rem",
+                  }}
+                >
+                  <strong>Cumulative usage across all API keys</strong>
+                  <span style={{ color: "var(--text-muted)" }}>
+                    Daily: {cumulativeCaps.daily_tokens} / {cumulativeCaps.daily_token_budget} tokens
+                  </span>
+                  <span style={{ color: "var(--text-muted)" }}>
+                    Weekly: {cumulativeCaps.weekly_tokens} tokens · state: {cumulativeCaps.state}
+                  </span>
+                </article>
                 <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
                   {perKeyCaps.map((row) => (
                     <label

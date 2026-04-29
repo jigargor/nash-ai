@@ -867,3 +867,82 @@ select {
   min-width: 7rem;
   font-weight: 600;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Terms acceptance modal                                                     */
+/* -------------------------------------------------------------------------- */
+
+.terms-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.terms-modal {
+  width: min(760px, 96vw);
+  max-height: min(84vh, 860px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: linear-gradient(165deg, var(--card) 0%, var(--background-elevated) 100%);
+  box-shadow: var(--shadow-md), 0 0 0 1px rgba(245, 158, 11, 0.08);
+  overflow: hidden;
+}
+
+.terms-modal-header {
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.terms-modal-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-family: var(--font-instrument-serif), serif;
+  font-weight: 400;
+}
+
+.terms-modal-subtitle {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.terms-modal-scroll {
+  overflow: auto;
+  padding: var(--space-4) var(--space-5);
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.terms-modal-scroll h3 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 1rem;
+}
+
+.terms-modal-scroll h3:first-child {
+  margin-top: 0;
+}
+
+.terms-modal-scroll p {
+  margin: 0 0 var(--space-3);
+  color: var(--text-muted);
+}
+
+.terms-modal-scroll a {
+  color: var(--accent);
+}
+
+.terms-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.16);
+}

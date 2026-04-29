@@ -277,6 +277,60 @@ async def test_upsert_current_user_uses_token_login_when_body_omits_login(
     )
     assert response.status_code == 200
     assert response.json()["login"] == "token-login"
+    assert response.json()["requires_terms_acceptance"] is True
+
+
+@pytest.mark.anyio
+async def test_upsert_current_user_terms_flag_false_when_already_accepted(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    github_id = _rand_github_id()
+    monkeypatch.setattr(settings, "terms_version", "v1")
+    user_id = await _seed_user(github_id, login="tos-user")
+    async with AsyncSessionLocal() as session:
+        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one()
+        user.accepted_terms_version = "v1"
+        user.accepted_terms_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    response = await client.post(
+        "/api/v1/users/me",
+        json={"login": "tos-user"},
+        headers=_auth_headers_for_user(github_id, login="tos-user"),
+    )
+    assert response.status_code == 200
+    assert response.json()["requires_terms_acceptance"] is False
+
+
+@pytest.mark.anyio
+async def test_terms_status_and_acceptance_round_trip(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    github_id = _rand_github_id()
+    monkeypatch.setattr(settings, "terms_version", "v2026-04")
+    await _seed_user(github_id, login="terms-status-user")
+
+    status_before = await client.get(
+        "/api/v1/users/me/terms-status",
+        headers=_auth_headers_for_user(github_id, login="terms-status-user"),
+    )
+    assert status_before.status_code == 200
+    assert status_before.json()["requires_terms_acceptance"] is True
+
+    accept_response = await client.post(
+        "/api/v1/users/me/terms-acceptance",
+        headers=_auth_headers_for_user(github_id, login="terms-status-user"),
+    )
+    assert accept_response.status_code == 200
+    assert accept_response.json()["requires_terms_acceptance"] is False
+    assert accept_response.json()["accepted_terms_version"] == "v2026-04"
+
+    status_after = await client.get(
+        "/api/v1/users/me/terms-status",
+        headers=_auth_headers_for_user(github_id, login="terms-status-user"),
+    )
+    assert status_after.status_code == 200
+    assert status_after.json()["requires_terms_acceptance"] is False
 
 
 @pytest.mark.anyio

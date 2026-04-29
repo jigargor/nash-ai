@@ -9,9 +9,6 @@ interface LoginPageProps {
 
 function errorMessage(code: string | undefined): string | null {
   if (!code) return null;
-  if (code === "terms" || code === "terms_required") {
-    return "Please accept the Terms & Conditions to continue.";
-  }
   if (code === "state_mismatch") return "Sign-in session expired. Please try again.";
   if (code === "pkce_mismatch") return "Sign-in verification failed. Please try again.";
   if (code === "oauth_failed") return "GitHub sign-in failed. Please try again.";
@@ -45,16 +42,13 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         ) : null}
 
         <form action="/api/v1/auth/login" method="post" className="login-form">
-          <label className="login-terms-label">
-            <input type="checkbox" name="accept_terms" value="on" required className="login-terms-checkbox" />
-            <span>
-              I have read and agree to the{" "}
-              <Link href="/terms" className="login-inline-link">
-                Terms & Conditions
-              </Link>
-              .
-            </span>
-          </label>
+          <p className="login-lead" style={{ margin: 0, fontSize: "0.86rem" }}>
+            By continuing, you may be prompted to accept our{" "}
+            <Link href="/terms" className="login-inline-link">
+              Terms & Conditions
+            </Link>{" "}
+            if this is your first sign-in or the terms changed.
+          </p>
           <button type="submit" className="button button-primary login-submit">
             Continue with GitHub
           </button>

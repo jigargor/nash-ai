@@ -27,6 +27,10 @@ function redirectToLoginWithError(error: string, requestUrl: string): NextRespon
   return response;
 }
 
+interface UpsertUserResponse {
+  requires_terms_acceptance?: boolean;
+}
+
 export async function GET(request: Request): Promise<NextResponse> {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
@@ -48,17 +52,28 @@ export async function GET(request: Request): Promise<NextResponse> {
     const sessionToken = await createSessionToken({ id: user.id, login: user.login });
     const dashboardUserToken = createDashboardUserToken({ id: user.id, login: user.login });
 
-    // Upsert user record in the database — fire-and-forget, must not block login
+    // Upsert user record in the database. Terms gating depends on this response.
     const apiBase = process.env.API_URL ?? "http://localhost:8000";
-    fetch(`${apiBase}/api/v1/users/me`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Api-Key": process.env.API_ACCESS_KEY ?? "",
-        "X-Dashboard-User-Token": dashboardUserToken,
-      },
-      body: JSON.stringify({ login: user.login, oauth_token: token.access_token }),
-    }).catch((err: unknown) => console.error("[auth/callback] user upsert failed (non-fatal)", err));
+    let requiresTermsAcceptance = false;
+    try {
+      const upsertResponse = await fetch(`${apiBase}/api/v1/users/me`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Api-Key": process.env.API_ACCESS_KEY ?? "",
+          "X-Dashboard-User-Token": dashboardUserToken,
+        },
+        body: JSON.stringify({ login: user.login, oauth_token: token.access_token }),
+      });
+      if (upsertResponse.ok) {
+        const payload = (await upsertResponse.json()) as UpsertUserResponse;
+        requiresTermsAcceptance = payload.requires_terms_acceptance === true;
+      } else {
+        console.error("[auth/callback] user upsert failed (non-fatal)", upsertResponse.status);
+      }
+    } catch (err: unknown) {
+      console.error("[auth/callback] user upsert failed (non-fatal)", err);
+    }
     fetch(`${apiBase}/api/v1/users/me/installations-sync`, {
       method: "POST",
       headers: {
@@ -77,7 +92,9 @@ export async function GET(request: Request): Promise<NextResponse> {
       console.error("[auth/callback] installation sync failed (non-fatal)", err),
     );
 
-    const response = NextResponse.redirect(new URL("/dashboard", request.url));
+    const response = NextResponse.redirect(
+      new URL(requiresTermsAcceptance ? "/dashboard?terms=required" : "/dashboard", request.url),
+    );
     response.cookies.set(AUTH_COOKIE_NAME, sessionToken, {
       httpOnly: true,
       sameSite: "lax",
