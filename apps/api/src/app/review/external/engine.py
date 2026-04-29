@@ -40,7 +40,7 @@ from app.review.external.models import (
     ShardResult,
     StageTelemetry,
 )
-from app.review.external.prepass import run_prepass
+from app.review.external.prepass import looks_like_prompt_injection, run_prepass
 from app.review.external.sharding import build_shards
 from app.review.external.sources.base import RepoSource
 from app.review.external.synthesis import synthesize
@@ -159,6 +159,69 @@ class ReviewEngine:
             cost_usd=cost_usd,
         )
         return result, sample_by_path
+
+    async def _prompt_injection_followup(
+        self, repo_ref: RepoRef, paths: list[str]
+    ) -> tuple[list[Finding], dict[str, str]]:
+        """Materialize findings for prepass-flagged injection paths.
+
+        Those paths are excluded from shard analysis so they never reach
+        rule-based analyzers; we still surface a deterministic security
+        finding with evidence from the fetched file body.
+        """
+
+        if not paths:
+            return [], {}
+        semaphore = asyncio.Semaphore(max(1, self._config.request_concurrency))
+
+        async def _inspect(path: str) -> tuple[list[Finding], dict[str, str]]:
+            async with semaphore:
+                content = await self._source.fetch_file(
+                    repo_ref, path, max_bytes=self._config.analyze_sample_bytes
+                )
+            if not content:
+                return [], {}
+            samples: dict[str, str] = {path: content}
+            line_start = 1
+            excerpt_source = ""
+            for idx, line in enumerate(content.splitlines(), start=1):
+                if looks_like_prompt_injection(line):
+                    line_start = idx
+                    excerpt_source = line
+                    break
+            if not excerpt_source:
+                excerpt_source = content.splitlines()[0] if content else path
+            excerpt = (excerpt_source.strip() or path)[:512]
+            if len(excerpt) < 20:
+                excerpt = content.strip()[:512]
+            if len(excerpt) < 20:
+                excerpt = f"{path}: {content[:400]}".strip()[:512]
+            finding = Finding(
+                category="security",
+                severity="critical",
+                title="Prompt injection patterns in repository file",
+                message=(
+                    "Cheap prepass detected probable prompt-injection sequences in this file; "
+                    "it was excluded from detailed review to avoid steering the model."
+                ),
+                file_path=path,
+                line_start=line_start,
+                line_end=line_start,
+                evidence={
+                    "excerpt": excerpt,
+                    "confidence": 0.95,
+                    "source": "prepass_prompt_injection",
+                },
+            )
+            return [finding], samples
+
+        batches = await asyncio.gather(*[_inspect(path) for path in paths])
+        merged_findings: list[Finding] = []
+        merged_samples: dict[str, str] = {}
+        for batch_findings, batch_samples in batches:
+            merged_findings.extend(batch_findings)
+            merged_samples.update(batch_samples)
+        return merged_findings, merged_samples
 
     def synthesize(self, findings: Iterable[Finding]) -> list[Finding]:
         return synthesize(findings)
@@ -296,6 +359,11 @@ class ReviewEngine:
             for result in shard_results:
                 raw_findings.extend(result.findings)
             synthesized = synthesize(raw_findings)
+            injection_findings, injection_samples = await self._prompt_injection_followup(
+                repo_ref, signals.prompt_injection_paths
+            )
+            sample_by_path.update(injection_samples)
+            synthesized = [*synthesized, *injection_findings]
             telemetry.append(
                 StageTelemetry(
                     stage="synthesize",
