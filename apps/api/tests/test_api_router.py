@@ -266,6 +266,15 @@ async def test_telemetry_outcomes_summary_uses_public_summarizer(
 
     monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
 
+    async def _fake_aux_telemetry(**_: object) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(api_router, "summarize_target_line_mismatch_telemetry", _fake_aux_telemetry)
+    monkeypatch.setattr(
+        api_router, "summarize_verified_fact_retrieval_telemetry", _fake_aux_telemetry
+    )
+    monkeypatch.setattr(api_router, "summarize_verified_fact_cap_telemetry", _fake_aux_telemetry)
+
     async def _fake_summary(
         *, installation_id: int | None = None, repo_full_name: str | None = None
     ) -> dict[str, object]:
@@ -1311,6 +1320,15 @@ async def test_telemetry_outcomes_summary_without_installation_forwarded_to_summ
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
 
+    async def _fake_aux_telemetry(**_: object) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(api_router, "summarize_target_line_mismatch_telemetry", _fake_aux_telemetry)
+    monkeypatch.setattr(
+        api_router, "summarize_verified_fact_retrieval_telemetry", _fake_aux_telemetry
+    )
+    monkeypatch.setattr(api_router, "summarize_verified_fact_cap_telemetry", _fake_aux_telemetry)
+
     async def _fake_summary(
         *, installation_id: int | None = None, repo_full_name: str | None = None
     ) -> dict[str, object]:
@@ -1511,6 +1529,15 @@ async def test_telemetry_outcomes_summary_optional_installation_delegates_to_sum
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "api_access_key", None)
+
+    async def _fake_aux_telemetry(**_: object) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(api_router, "summarize_target_line_mismatch_telemetry", _fake_aux_telemetry)
+    monkeypatch.setattr(
+        api_router, "summarize_verified_fact_retrieval_telemetry", _fake_aux_telemetry
+    )
+    monkeypatch.setattr(api_router, "summarize_verified_fact_cap_telemetry", _fake_aux_telemetry)
 
     async def fake_summarize(
         *, installation_id: int | None = None, repo_full_name: str | None = None

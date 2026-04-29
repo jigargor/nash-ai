@@ -36,9 +36,7 @@ def test_suppression_audit_marks_missing_high_risk_as_unresolved() -> None:
 
 
 def test_suppression_audit_detects_severity_downgrade() -> None:
-    draft = ReviewResult.model_validate(
-        {"findings": [_finding(severity="critical")], "summary": "draft"}
-    )
+    draft = ReviewResult.model_validate({"findings": [_finding(severity="high")], "summary": "draft"})
     edited = EditedReview.model_validate(
         {
             "findings": [_finding(severity="medium")],
