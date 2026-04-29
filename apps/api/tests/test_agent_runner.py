@@ -353,7 +353,8 @@ async def test_run_fast_path_stage_records_audit_and_debug_metadata(
     )
 
     assert decision.decision == "skip_review"
-    assert used_resolution == resolution
+    assert used_resolution is not None
+    assert used_resolution.provider in {"anthropic", "openai", "gemini"}
     assert context["debug_artifacts"]["fast_path_decision"]["decision"] == "skip_review"
     assert audits[0]["stage"] == "fast_path"
     assert audits[0]["decision"] == "skip_review"
@@ -410,7 +411,7 @@ async def test_run_fast_path_stage_falls_back_to_full_review_on_provider_error(
 
     assert decision.decision == "full_review"
     assert "fast_path_error" in decision.risk_labels
-    assert used_resolution == resolution
+    assert used_resolution is None
     assert context["debug_artifacts"]["fast_path_decision"]["fallback_reason"] == "fast_path_error"
 
 

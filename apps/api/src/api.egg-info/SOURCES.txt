@@ -31,6 +31,7 @@ src/app/agent/normalization.py
 src/app/agent/offline_eval.py
 src/app/agent/profiler.py
 src/app/agent/profiler_cache.py
+src/app/agent/prompt_compaction.py
 src/app/agent/provider_clients.py
 src/app/agent/review_config.py
 src/app/agent/runner.py
@@ -63,6 +64,11 @@ src/app/agent/prompts/stacks/nextjs.md
 src/app/agent/prompts/stacks/prisma.md
 src/app/agent/prompts/stacks/react.md
 src/app/agent/prompts/stacks/supabase.md
+src/app/agent/review_chain_graph/__init__.py
+src/app/agent/review_chain_graph/graph.py
+src/app/agent/review_chain_graph/serve.py
+src/app/agent/review_chain_graph/state.py
+src/app/agent/review_chain_graph/tracing.py
 src/app/api/auth.py
 src/app/api/benchmarks.py
 src/app/api/external_evals.py
@@ -82,6 +88,7 @@ src/app/github/smoke_check.py
 src/app/github/utils.py
 src/app/llm/__init__.py
 src/app/llm/circuit_breaker.py
+src/app/llm/fallback_chain.py
 src/app/llm/maintenance.py
 src/app/llm/router.py
 src/app/llm/types.py
@@ -162,6 +169,7 @@ tests/test_database_url_tls.py
 tests/test_db_url.py
 tests/test_diff_parser.py
 tests/test_external_eval_modules.py
+tests/test_fallback_chain.py
 tests/test_finding_outcomes.py
 tests/test_github_auth.py
 tests/test_github_client.py

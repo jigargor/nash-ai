@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: nash-ai-langgraph-db-postgres
+    environment:
+      POSTGRES_DB: codereview
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata_langgraph:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: nash-ai-langgraph-db-redis
+    ports:
+      - "6380:6379"
+
+volumes:
+  pgdata_langgraph:

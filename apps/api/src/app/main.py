@@ -88,6 +88,14 @@ app.include_router(telemetry_router)
 app.include_router(usage_router)
 app.include_router(external_evals_router)
 app.include_router(models_catalog_router)
+if settings.langserve_review_chain_enabled:
+    from app.agent.review_chain_graph.serve import (
+        build_review_chain_langserve_router,
+        register_optional_langserve_routes,
+    )
+
+    app.include_router(build_review_chain_langserve_router())
+    register_optional_langserve_routes(app)
 
 
 async def _record_usage_event(

@@ -54,6 +54,7 @@ function DecisionBadge({ decision }: { decision: string | null }) {
     challenged: "#fb923c",
     tie_break: "#f43f5e",
     skip_review: "#6b7280",
+    skipped: "#9ca3af",
     light_review: "#f59e0b",
     full_review: "#60a5fa",
   };
@@ -298,15 +299,27 @@ function EditorBody({ audit, debugArtifacts }: { audit: ReviewModelAudit; debugA
   const drop = dropCount ?? editorActions?.drop ?? 0;
   const modify = modifyCount ?? editorActions?.modify ?? 0;
   const total = keep + drop + modify;
+  const skipReason = (getRaw(meta, "reason") as string | undefined) ?? "";
+  const isSkipped = audit.decision === "skipped";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+      {isSkipped && (
+        <p style={{ margin: 0, fontSize: "0.78rem", color: "var(--text-muted)" }}>
+          Editor pass skipped - {skipReason === "no_findings_to_edit" ? "no findings from primary" : "not required for this run"}.
+        </p>
+      )}
       {total > 0 && (
         <div style={{ display: "flex", gap: "1.5rem" }}>
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>keep: <strong style={{ color: "#34d399" }}>{keep}</strong></span>
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>modify: <strong style={{ color: "#a78bfa" }}>{modify}</strong></span>
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>drop: <strong style={{ color: "#f43f5e" }}>{drop}</strong></span>
         </div>
+      )}
+      {!isSkipped && total === 0 && (
+        <p style={{ margin: 0, fontSize: "0.78rem", color: "var(--text-muted)" }}>
+          Editor had no keep/modify/drop actions.
+        </p>
       )}
       {dropReasons && Object.keys(dropReasons).length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>

@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    langsmith_api_key: str | None = None
+    langsmith_project: str | None = None
+    langsmith_tracing_enabled: bool = False
+    review_chain_graph_enabled: bool = False
+    langserve_review_chain_enabled: bool = False
     web_app_url: str | None = None
     snapshot_retention_days: int = 30
     snapshot_archive_batch_size: int = 100
