@@ -95,6 +95,12 @@ def test_status_clause_running_matches_queued_or_running() -> None:
     assert "reviews.status = 'running'" in compiled
 
 
+def test_status_clause_non_running_matches_exact_value() -> None:
+    clause = api_router._status_clause("skipped")  # type: ignore[attr-defined]
+    compiled = str(clause.compile(compile_kwargs={"literal_binds": True}))
+    assert compiled.strip() == "reviews.status = 'skipped'"
+
+
 # ---------------------------------------------------------------------------
 # _diff_stats_from_debug_artifacts
 # ---------------------------------------------------------------------------
@@ -441,6 +447,32 @@ async def test_list_reviews_direct_installation_branch(monkeypatch: pytest.Monke
     result = await api_router.list_reviews(
         installation_id=321,
         limit=50,
+        current_user=CurrentDashboardUser(github_id=1, login="tester"),
+    )
+    assert len(result) == 1
+    assert result[0]["id"] == 99
+
+
+@pytest.mark.anyio
+async def test_list_reviews_direct_installation_branch_with_status_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeReviewSession()
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
+
+    async def _fake_allowed(_session: object, _user: CurrentDashboardUser) -> set[int]:
+        return {321}
+
+    async def _fake_set_ctx(_session: object, _installation_id: int) -> None:
+        return None
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed)
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
+
+    result = await api_router.list_reviews(
+        installation_id=321,
+        limit=50,
+        status="running",
         current_user=CurrentDashboardUser(github_id=1, login="tester"),
     )
     assert len(result) == 1

@@ -94,7 +94,7 @@ export interface FastPathAuditMetadata {
   produces_findings: boolean;
 }
 
-export type ReviewAuditMetadata = Record<string, unknown> | FastPathAuditMetadata;
+export type ReviewAuditMetadata = Record<string, unknown>;
 
 export function fetchReviews(installationId?: number, filters?: ReviewListFilters) {
   const params = new URLSearchParams();
