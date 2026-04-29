@@ -419,6 +419,25 @@ async def test_list_installation_rows_includes_rows_when_allowed() -> None:
 
 
 @pytest.mark.anyio
+async def test_list_installation_rows_active_only_adds_suspended_filter() -> None:
+    class _CapturingSession:
+        def __init__(self) -> None:
+            self.compiled_sql = ""
+
+        async def scalars(self, stmt: object) -> _FakeScalarResult:
+            self.compiled_sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            return _FakeScalarResult([])
+
+    session = _CapturingSession()
+    await api_router._list_installation_rows(  # type: ignore[attr-defined]
+        session,  # type: ignore[arg-type]
+        installation_ids={123},
+        active_only=True,
+    )
+    assert "installations.suspended_at IS NULL" in session.compiled_sql
+
+
+@pytest.mark.anyio
 async def test_allowed_installation_ids_casts_results_to_ints() -> None:
     session = _FakeSessionForAllowedInstallations([123, 456])
     allowed = await api_router._allowed_installation_ids(  # type: ignore[attr-defined]
@@ -605,6 +624,39 @@ async def test_list_repos_direct_installation_branch_empty(monkeypatch: pytest.M
 
     result = await api_router.list_repos(
         installation_id=321,
+        limit=10,
+        current_user=CurrentDashboardUser(github_id=1, login="tester"),
+    )
+    assert result == []
+
+
+@pytest.mark.anyio
+async def test_list_repos_all_installations_branch_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _FakeEmptyRepoSession()
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
+
+    async def _fake_allowed(_session: object, _user: CurrentDashboardUser) -> set[int]:
+        return {321}
+
+    async def _fake_set_ctx(_session: object, _installation_id: int) -> None:
+        return None
+
+    async def _fake_list_rows(_session: object, **_kwargs: object) -> list[Installation]:
+        return [
+            Installation(
+                installation_id=321,
+                account_login="acme",
+                account_type="Organization",
+                suspended_at=None,
+            )
+        ]
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed)
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
+    monkeypatch.setattr(api_router, "_list_installation_rows", _fake_list_rows)
+
+    result = await api_router.list_repos(
+        installation_id=None,
         limit=10,
         current_user=CurrentDashboardUser(github_id=1, login="tester"),
     )
