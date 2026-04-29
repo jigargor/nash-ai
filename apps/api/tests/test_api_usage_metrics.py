@@ -154,3 +154,55 @@ async def test_usage_scorecard_reports_disagreement_and_rates(
     assert payload["total_fast_path_calls"] >= 1
     assert payload["disagreement_rate"] > 0
     assert payload["dismiss_rate"] == pytest.approx(0.1)
+
+
+@pytest.mark.anyio
+async def test_usage_metrics_returns_403_when_provider_disabled(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return {installation_id}
+
+    async def _fake_provider_metric_config(
+        _installation_id: int, _provider: str
+    ) -> tuple[bool, list[str], list[str]]:
+        return False, ["user_id"], ["provider"]
+
+    monkeypatch.setattr(usage_metrics, "_allowed_installation_ids", _fake_allowed_installation_ids)
+    monkeypatch.setattr(usage_metrics, "_provider_metric_config", _fake_provider_metric_config)
+
+    response = await client.get(
+        f"/api/v1/usage/metrics?installation_id={installation_id}&provider=openai&group_by=provider",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_usage_metrics_returns_400_when_dimension_not_allowed(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return {installation_id}
+
+    async def _fake_provider_metric_config(
+        _installation_id: int, _provider: str
+    ) -> tuple[bool, list[str], list[str]]:
+        return True, ["user_id"], ["provider"]
+
+    monkeypatch.setattr(usage_metrics, "_allowed_installation_ids", _fake_allowed_installation_ids)
+    monkeypatch.setattr(usage_metrics, "_provider_metric_config", _fake_provider_metric_config)
+
+    response = await client.get(
+        f"/api/v1/usage/metrics?installation_id={installation_id}&provider=openai&group_by=stage",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 400
