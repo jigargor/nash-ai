@@ -8,6 +8,7 @@ from app.agent.provider_clients import (
     create_openai_compatible_client,
     parse_openai_tool_arguments,
 )
+from app.llm.errors import coerce_quota_error
 from app.llm.providers.base import (
     BaseProviderAdapter,
     CacheRequestOptions,
@@ -58,25 +59,31 @@ class OpenAIAdapter(BaseProviderAdapter):
             ]
         )
         openai_tool_choice_any: Any = {"type": "function", "function": {"name": request.tool_name}}
-        response = await client.chat.completions.create(
-            model=request.model_name,
-            temperature=request.temperature if request.temperature is not None else 0,
-            messages=openai_messages_any,
-            tools=openai_tools_any,
-            tool_choice=openai_tool_choice_any,
-            **self.chat_completion_extra_kwargs(
-                system_prompt=request.system_prompt,
-                model_name=request.model_name,
-                options=CacheRequestOptions(
-                    cache_key=_optional_str(request.context.get("llm_prompt_cache_key")),
-                    ttl=_optional_str(request.context.get("anthropic_cache_ttl")),
-                    retention=_optional_str(request.context.get("openai_prompt_cache_retention")),
-                    cached_content_name=_optional_str(
-                        request.context.get("gemini_cached_content_name")
+        try:
+            response = await client.chat.completions.create(
+                model=request.model_name,
+                temperature=request.temperature if request.temperature is not None else 0,
+                messages=openai_messages_any,
+                tools=openai_tools_any,
+                tool_choice=openai_tool_choice_any,
+                **self.chat_completion_extra_kwargs(
+                    system_prompt=request.system_prompt,
+                    model_name=request.model_name,
+                    options=CacheRequestOptions(
+                        cache_key=_optional_str(request.context.get("llm_prompt_cache_key")),
+                        ttl=_optional_str(request.context.get("anthropic_cache_ttl")),
+                        retention=_optional_str(request.context.get("openai_prompt_cache_retention")),
+                        cached_content_name=_optional_str(
+                            request.context.get("gemini_cached_content_name")
+                        ),
                     ),
                 ),
-            ),
-        )
+            )
+        except Exception as exc:
+            quota_error = coerce_quota_error(exc, provider=self.provider, model=request.model_name)
+            if quota_error is not None:
+                raise quota_error from exc
+            raise
         usage = self.parse_usage(response.usage)
         record_usage(request.context, self.provider, request.model_name, usage)
         if not response.choices:

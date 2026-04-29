@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agent.provider_clients import get_provider_api_key
+from app.llm.errors import coerce_quota_error
 from app.llm.providers.base import (
     BaseProviderAdapter,
     CacheRequestOptions,
@@ -52,31 +53,37 @@ class AnthropicAdapter(BaseProviderAdapter):
         api_key = user_key_override or get_provider_api_key(self.provider)
         client = create_async_anthropic_client(api_key)
         temp = 0.0 if request.temperature is None else float(request.temperature)
-        response = await client.messages.create(  # type: ignore[call-overload]
-            model=request.model_name,
-            max_tokens=request.max_tokens,
-            temperature=temp,
-            system=self.render_anthropic_system(
-                request.system_prompt,
-                CacheRequestOptions(
-                    cache_key=_optional_str(request.context.get("llm_prompt_cache_key")),
-                    ttl=_optional_str(request.context.get("anthropic_cache_ttl")),
-                    retention=_optional_str(request.context.get("openai_prompt_cache_retention")),
-                    cached_content_name=_optional_str(
-                        request.context.get("gemini_cached_content_name")
+        try:
+            response = await client.messages.create(  # type: ignore[call-overload]
+                model=request.model_name,
+                max_tokens=request.max_tokens,
+                temperature=temp,
+                system=self.render_anthropic_system(
+                    request.system_prompt,
+                    CacheRequestOptions(
+                        cache_key=_optional_str(request.context.get("llm_prompt_cache_key")),
+                        ttl=_optional_str(request.context.get("anthropic_cache_ttl")),
+                        retention=_optional_str(request.context.get("openai_prompt_cache_retention")),
+                        cached_content_name=_optional_str(
+                            request.context.get("gemini_cached_content_name")
+                        ),
                     ),
                 ),
-            ),
-            tools=[
-                {
-                    "name": request.tool_name,
-                    "description": request.tool_description,
-                    "input_schema": request.input_schema,
-                }
-            ],
-            tool_choice={"type": "tool", "name": request.tool_name},
-            messages=request.messages,
-        )
+                tools=[
+                    {
+                        "name": request.tool_name,
+                        "description": request.tool_description,
+                        "input_schema": request.input_schema,
+                    }
+                ],
+                tool_choice={"type": "tool", "name": request.tool_name},
+                messages=request.messages,
+            )
+        except Exception as exc:
+            quota_error = coerce_quota_error(exc, provider=self.provider, model=request.model_name)
+            if quota_error is not None:
+                raise quota_error from exc
+            raise
         usage = self.parse_usage(response.usage)
         record_usage(request.context, self.provider, request.model_name, usage)
         for block in response.content:

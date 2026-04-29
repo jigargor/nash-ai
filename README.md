@@ -39,6 +39,16 @@ python evals/compare.py evals/results/baseline.json evals/results/<label>.json
 
 CI runs the harness on pull requests labeled **`prompt-change`** (see `.github/workflows/quality-gates.yml`).
 
+DeepEval-based agent replay evals are optional and separate from the dashboard `ExternalEvaluation` feature:
+
+```bash
+cd apps/api
+uv sync --extra dev --extra deepeval
+uv run pytest tests/deep_eval -m "not live_llm"
+```
+
+The optional DeepEval CI workflow lives in `.github/workflows/deepeval.yml` and runs on `workflow_dispatch` or PRs with the `deepeval` label.
+
 ### Test coverage note
 
 - The backend CI coverage floor is set to **60%** for `src/app/agent`, `src/app/telemetry`, and `src/app/api`.
@@ -343,6 +353,43 @@ python scripts/generate_postgres_local_tls.py
   - `TEST_DATABASE_URL=postgresql+asyncpg://dev:dev@localhost:5433/codereview_test?ssl=require`
 - If you intentionally run without SSL, switch both URLs to the plaintext fallback form (without `ssl=require`).
 
+## External repository review (MCP server + reusable engine)
+
+The external-repository review pipeline lives in two layers:
+
+- **`app.review.external`** — pure, database-free Python library. A single
+  `ReviewEngine` class orchestrates `resolve_repo -> list_files -> prepass ->
+  plan_shards -> analyze_shard -> synthesize` over any `RepoSource` adapter
+  (`GitHubRepoSource` in production, `InMemoryRepoSource` for tests). Every
+  boundary value is a Pydantic model so JSON schemas, caching, and persistence
+  share one contract.
+- **`app.mcp`** — a Model Context Protocol server that exposes the engine as
+  eight structured tools (`resolve_repo`, `list_repo_files`, `run_prepass`,
+  `plan_shards`, `fetch_file_sample`, `analyze_file`, `synthesize_findings`,
+  `review_repository`). Any MCP-capable agent (Claude Desktop, Cursor, custom
+  clients) can drive a review while doing the reasoning itself.
+
+Run the MCP server:
+
+```bash
+cd apps/api
+# Default: stdio transport (suitable for Claude Desktop / Cursor client configs)
+uv run python -m app.mcp
+
+# Streamable HTTP transport for multi-tenant deployments
+uv run python -m app.mcp --transport http --host 127.0.0.1 --port 8787
+```
+
+Optional environment variables:
+
+- `GITHUB_TOKEN` — lifts the unauthenticated GitHub rate limit (64 -> 5,000 req/h).
+- `MCP_TRANSPORT`, `MCP_HOST`, `MCP_PORT` — pre-select transport and bind address.
+
+The existing ARQ worker (`external_eval_prepass`, `external_eval_shard`,
+`external_eval_synthesize`) and the dashboard-facing `/api/v1/external-evals`
+endpoints now sit on top of the same engine, so the MCP server, the web
+dashboard, and the queue share a single source of truth for analysis.
+
 ## Project Structure
 
 ```
@@ -353,6 +400,10 @@ apps/
     github/         App JWT auth + API client
     webhooks/       HMAC verification + event routing
     agent/          ReAct loop, context packing, prompts, review config
+      external/     Backward-compatible shims over app.review.external
+    review/
+      external/     Pure ReviewEngine, prepass, sharding, analyzer, synthesis
+    mcp/            MCP server and tool wiring
     db/             Models, session, migrations
     observability.py Optional Sentry + Langfuse bootstrap
     ratelimit.py    Redis sliding-window and token budget helpers

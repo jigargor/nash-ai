@@ -1,0 +1,10 @@
+{
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "file_path": "src/settings.py",
+      "line_start": 3
+    }
+  ]
+}

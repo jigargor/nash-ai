@@ -32,6 +32,7 @@ from app.agent.runner import (
     extract_tool_call_history,
 )
 from app.agent.fast_path import FastPathDecision
+from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.router import ModelResolution, ModelRoleRoutingConfig, ModelsRoutingConfig
 from app.agent.diff_parser import FileInDiff, NumberedLine
 from app.agent.schema import Finding, ReviewResult
@@ -305,8 +306,8 @@ async def test_run_fast_path_stage_records_audit_and_debug_metadata(
     )
     audits: list[dict[str, object]] = []
 
-    def fake_resolve(*_args: object, **_kwargs: object) -> ModelResolution:
-        return resolution
+    def fake_resolve_attempts(*_args: object, **_kwargs: object) -> list[ModelResolution]:
+        return [resolution]
 
     async def fake_prepass(**kwargs: object) -> tuple[FastPathDecision, list[object], str, str]:
         return (
@@ -326,7 +327,7 @@ async def test_run_fast_path_stage_records_audit_and_debug_metadata(
     async def fake_audit(**kwargs: object) -> None:
         audits.append(kwargs)
 
-    monkeypatch.setattr("app.agent.runner._resolve_runtime_model", fake_resolve)
+    monkeypatch.setattr("app.agent.runner._resolve_runtime_attempt_chain", fake_resolve_attempts)
     monkeypatch.setattr("app.agent.runner.run_fast_path_prepass", fake_prepass)
     monkeypatch.setattr("app.agent.runner._record_model_audit", fake_audit)
 
@@ -373,8 +374,8 @@ async def test_run_fast_path_stage_falls_back_to_full_review_on_provider_error(
         catalog_version_hash="abc123",
     )
 
-    def fake_resolve(*_args: object, **_kwargs: object) -> ModelResolution:
-        return resolution
+    def fake_resolve_attempts(*_args: object, **_kwargs: object) -> list[ModelResolution]:
+        return [resolution]
 
     async def fake_prepass(**_kwargs: object) -> tuple[FastPathDecision, list[object], str, str]:
         raise RuntimeError("provider unavailable")
@@ -382,7 +383,7 @@ async def test_run_fast_path_stage_falls_back_to_full_review_on_provider_error(
     async def fake_audit(**_kwargs: object) -> None:
         return None
 
-    monkeypatch.setattr("app.agent.runner._resolve_runtime_model", fake_resolve)
+    monkeypatch.setattr("app.agent.runner._resolve_runtime_attempt_chain", fake_resolve_attempts)
     monkeypatch.setattr("app.agent.runner.run_fast_path_prepass", fake_prepass)
     monkeypatch.setattr("app.agent.runner._record_model_audit", fake_audit)
 
@@ -412,6 +413,89 @@ async def test_run_fast_path_stage_falls_back_to_full_review_on_provider_error(
     assert "fast_path_error" in decision.risk_labels
     assert used_resolution == resolution
     assert context["debug_artifacts"]["fast_path_decision"]["fallback_reason"] == "fast_path_error"
+
+
+@pytest.mark.anyio
+async def test_run_fast_path_stage_rotates_to_next_provider_after_quota_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = ModelResolution(
+        role="fast_path",
+        provider="openai",
+        model="gpt-5-mini",
+        tier="economy",
+        status="active",
+        catalog_version_hash="abc123",
+    )
+    second = ModelResolution(
+        role="fast_path",
+        provider="anthropic",
+        model="claude-sonnet-4-6",
+        tier="economy",
+        status="active",
+        catalog_version_hash="abc123",
+    )
+    call_count = 0
+
+    def fake_resolve_attempts(*_args: object, **_kwargs: object) -> list[ModelResolution]:
+        return [first, second]
+
+    async def fake_prepass(**kwargs: object) -> tuple[FastPathDecision, list[object], str, str]:
+        nonlocal call_count
+        call_count += 1
+        provider = kwargs.get("provider")
+        if provider == "openai":
+            raise LLMQuotaOrRateLimitError(
+                provider="openai",
+                model="gpt-5-mini",
+                detail="insufficient_quota",
+            )
+        return (
+            FastPathDecision(
+                decision="light_review",
+                risk_labels=["low_risk"],
+                reason="fallback provider succeeded",
+                confidence=86,
+                review_surface=["src/app.py"],
+                requires_full_context=False,
+            ),
+            [],
+            "system",
+            "user",
+        )
+
+    async def fake_audit(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("app.agent.runner._resolve_runtime_attempt_chain", fake_resolve_attempts)
+    monkeypatch.setattr("app.agent.runner.run_fast_path_prepass", fake_prepass)
+    monkeypatch.setattr("app.agent.runner._record_model_audit", fake_audit)
+
+    context = {
+        "review_id": 123,
+        "installation_id": 1,
+        "run_id": "run",
+        "owner": "acme",
+        "repo": "repo",
+        "pr_number": 7,
+        "head_sha": "sha",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "tokens_used": 0,
+    }
+
+    decision, used_resolution = await _run_fast_path_stage(
+        context=context,
+        diff_text="diff --git a/src/app.py b/src/app.py\n+print('hi')",
+        pr={"title": "Code", "body": ""},
+        commits=[],
+        review_config=ReviewConfig(),
+        diff_tokens=20,
+    )
+
+    assert call_count == 2
+    assert decision.decision == "light_review"
+    assert used_resolution == second
 
 
 def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> None:

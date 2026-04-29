@@ -51,6 +51,7 @@ function DecisionBadge({ decision }: { decision: string | null }) {
     generated: "#34d399",
     posted: "#4ade80",
     edited: "#a78bfa",
+    skipped: "#94a3b8",
     challenged: "#fb923c",
     tie_break: "#f43f5e",
     skip_review: "#6b7280",
@@ -288,6 +289,7 @@ function ChallengerBody({ audit }: { audit: ReviewModelAudit }) {
 
 function EditorBody({ audit, debugArtifacts }: { audit: ReviewModelAudit; debugArtifacts: Record<string, unknown> | null }) {
   const meta = audit.metadata_json;
+  const stageReason = getRaw(meta, "reason") as string | undefined;
   const keepCount = getRaw(meta, "keep_count") as number | undefined;
   const dropCount = getRaw(meta, "drop_count") as number | undefined;
   const modifyCount = getRaw(meta, "modify_count") as number | undefined;
@@ -316,6 +318,13 @@ function EditorBody({ audit, debugArtifacts }: { audit: ReviewModelAudit; debugA
             </span>
           ))}
         </div>
+      )}
+      {total === 0 && (!dropReasons || Object.keys(dropReasons).length === 0) && (
+        <p style={{ margin: 0, fontSize: "0.75rem", color: "var(--text-muted)" }}>
+          {audit.decision === "skipped" || stageReason === "no_findings_to_edit"
+            ? "Editor pass skipped — no findings from primary."
+            : "No edit decisions (nothing to refine)."}
+        </p>
       )}
     </div>
   );

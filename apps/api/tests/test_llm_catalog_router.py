@@ -2,7 +2,12 @@ from decimal import Decimal
 
 from app.agent.review_config import ReviewConfig, ReviewModelConfig
 from app.llm.catalog.loader import baseline_catalog_hash, load_baseline_catalog
-from app.llm.router import ModelRoleRoutingConfig, ModelsRoutingConfig, resolve_model_for_role
+from app.llm.router import (
+    ModelRoleRoutingConfig,
+    ModelsRoutingConfig,
+    resolve_model_attempt_chain,
+    resolve_model_for_role,
+)
 
 
 def test_baseline_catalog_validates_and_hashes() -> None:
@@ -93,3 +98,22 @@ def test_router_supports_role_tier_config_without_model_pin() -> None:
     assert resolution.provider == "openai"
     assert resolution.model == "gpt-5-mini"
     assert resolution.tier == "economy"
+
+
+def test_resolve_model_attempt_chain_rotates_providers_then_lower_tiers() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            provider_order=["openai", "anthropic", "gemini"],
+            roles={"primary_review": ModelRoleRoutingConfig(tier="frontier")},
+        )
+    )
+    attempts = resolve_model_attempt_chain(
+        config,
+        "primary_review",
+        available_providers={"openai", "anthropic", "gemini"},
+    )
+
+    assert len(attempts) >= 3
+    assert attempts[0].provider in {"openai", "anthropic", "gemini"}
+    assert len({(item.provider, item.model) for item in attempts}) == len(attempts)
+    assert any(item.tier == "economy" for item in attempts)

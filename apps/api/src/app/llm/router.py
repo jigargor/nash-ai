@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal
@@ -168,6 +168,80 @@ def resolve_model_for_role(
     )
 
 
+def resolve_model_attempt_chain(
+    review_config: object | None,
+    role: ReviewModelRole,
+    *,
+    context_tokens: int = 0,
+    previous_provider: str | None = None,
+    catalog: ModelCatalog | None = None,
+    available_providers: set[str] | None = None,
+) -> list[ModelResolution]:
+    active_catalog = catalog or load_baseline_catalog()
+    routing = _routing_config_from_review_config(review_config)
+    role_config = routing.roles.get(role, ModelRoleRoutingConfig(tier=ROLE_DEFAULT_TIERS[role]))
+    available = available_providers if available_providers is not None else _configured_provider_ids()
+    first = resolve_model_for_role(
+        review_config,
+        role,
+        context_tokens=context_tokens,
+        previous_provider=previous_provider,
+        catalog=active_catalog,
+        available_providers=available,
+    )
+    attempts: list[ModelResolution] = [first]
+    seen = {(first.provider, first.model)}
+
+    explicit = _explicit_model_for_role(review_config, role, role_config)
+    if explicit is not None and not routing.allow_auto_fallback:
+        return attempts
+
+    preferred_providers = [
+        provider
+        for provider in (routing.provider_order or ["anthropic", "openai", "gemini"])
+        if provider in available and provider in active_catalog.active_provider_ids()
+    ]
+    if not preferred_providers:
+        return attempts
+
+    desired_tier = role_config.tier or ROLE_DEFAULT_TIERS[role]
+    tier_order = _fallback_tier_order(desired_tier)
+    for tier in tier_order:
+        for provider in preferred_providers:
+            provider_role_config = replace(
+                role_config,
+                provider=provider,
+                model=None,
+                tier=tier,
+                require_provider_diversity=False,
+            )
+            candidate = _select_best_candidate(
+                active_catalog,
+                role=role,
+                routing=routing,
+                role_config=provider_role_config,
+                context_tokens=context_tokens,
+                available_providers=available,
+                previous_provider=None,
+            )
+            if candidate is None:
+                continue
+            key = (candidate.provider, candidate.model)
+            if key in seen:
+                continue
+            seen.add(key)
+            attempts.append(
+                _resolution_from_record(
+                    role,
+                    candidate,
+                    explicit_pin=False,
+                    catalog=active_catalog,
+                    fallback_reason=f"quota_fallback_{provider}_{tier}",
+                )
+            )
+    return attempts
+
+
 def _routing_config_from_review_config(review_config: object | None) -> ModelsRoutingConfig:
     raw = getattr(review_config, "models", None)
     if isinstance(raw, ModelsRoutingConfig):
@@ -287,6 +361,14 @@ def _model_usable(
 def _score_model(record: ModelRecord, desired_tier: ModelTier) -> int:
     tier_distance = abs(TIER_SCORE[record.tier] - TIER_SCORE[desired_tier])
     return record.score + STATUS_SCORE.get(record.status, -50) - (tier_distance * 12)
+
+
+def _fallback_tier_order(desired_tier: ModelTier) -> list[ModelTier]:
+    priority: list[ModelTier] = ["frontier", "balanced", "economy", "fallback"]
+    if desired_tier not in priority:
+        return priority
+    start = priority.index(desired_tier)
+    return priority[start:]
 
 
 def _configured_provider_ids() -> set[str]:

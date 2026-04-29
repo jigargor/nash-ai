@@ -1,64 +1,50 @@
+"""Compatibility shim exposing legacy sharding helpers.
+
+The legacy API works on a list of ``ExternalFileDescriptor`` objects
+(now Pydantic models) and returns a ``dict[str, list[...]]``. The new
+``build_shards`` helper uses immutable ``Shard`` models; this shim keeps
+both forms available.
+"""
+
 from __future__ import annotations
 
-from collections import defaultdict
-
-from app.agent.external.types import ExternalFileDescriptor
-
-
-def _dirname(path: str) -> str:
-    if "/" not in path:
-        return "."
-    return path.rsplit("/", 1)[0]
+from app.review.external.models import FileDescriptor
+from app.review.external.sharding import build_shards as _build_shards
 
 
-def assign_shards(files: list[ExternalFileDescriptor], shard_count: int) -> dict[str, list[ExternalFileDescriptor]]:
-    if shard_count <= 0:
-        shard_count = 1
-    grouped: dict[str, list[ExternalFileDescriptor]] = defaultdict(list)
-    for descriptor in files:
-        grouped[_dirname(descriptor.path)].append(descriptor)
+def assign_shards(
+    files: list[FileDescriptor], shard_count: int
+) -> dict[str, list[FileDescriptor]]:
+    """Assign files to shards keyed by ``shard-XX`` string."""
 
-    sorted_groups = sorted(grouped.items(), key=lambda item: len(item[1]), reverse=True)
-    shard_keys = [f"shard-{index + 1:02d}" for index in range(shard_count)]
-    shard_sizes = {key: 0 for key in shard_keys}
-    shards: dict[str, list[ExternalFileDescriptor]] = {key: [] for key in shard_keys}
-    for _group_key, group_files in sorted_groups:
-        target_key = min(shard_sizes, key=lambda key: shard_sizes[key])
-        shards[target_key].extend(group_files)
-        shard_sizes[target_key] += len(group_files)
-    return {key: value for key, value in shards.items() if value}
+    shards = _build_shards(files, shard_count=shard_count)
+    lookup: dict[str, FileDescriptor] = {item.path: item for item in files}
+    return {
+        shard.shard_key: [lookup[path] for path in shard.paths if path in lookup]
+        for shard in shards
+    }
 
 
 def build_shards(
-    files: list[ExternalFileDescriptor],
+    files: list[FileDescriptor],
     *,
     shard_count: int,
     target_size: int,
     excluded_paths: set[str],
-) -> list[list[ExternalFileDescriptor]]:
-    eligible = [item for item in files if item.path not in excluded_paths]
-    if not eligible:
-        return []
-    grouped: dict[str, list[ExternalFileDescriptor]] = defaultdict(list)
-    for item in eligible:
-        top_level = item.path.split("/", 1)[0] if "/" in item.path else "."
-        grouped[top_level].append(item)
+) -> list[list[FileDescriptor]]:
+    """Legacy helper returning buckets of descriptors."""
 
-    buckets: list[list[ExternalFileDescriptor]] = [[] for _ in range(max(1, shard_count))]
-    sizes = [0 for _ in buckets]
-    group_entries = sorted(grouped.items(), key=lambda pair: len(pair[1]), reverse=True)
-    for _, group_files in group_entries:
-        index = min(range(len(buckets)), key=lambda idx: sizes[idx])
-        buckets[index].extend(group_files)
-        sizes[index] += len(group_files)
+    shards = _build_shards(
+        files,
+        shard_count=shard_count,
+        shard_size_target=target_size,
+        excluded_paths=excluded_paths,
+    )
+    lookup: dict[str, FileDescriptor] = {item.path: item for item in files}
+    return [
+        [lookup[path] for path in shard.paths if path in lookup]
+        for shard in shards
+    ]
 
-    normalized: list[list[ExternalFileDescriptor]] = []
-    for bucket in buckets:
-        if not bucket:
-            continue
-        for start in range(0, len(bucket), max(1, target_size)):
-            chunk = bucket[start : start + max(1, target_size)]
-            if chunk:
-                normalized.append(chunk)
-    return normalized
 
+__all__ = ["assign_shards", "build_shards"]

@@ -41,6 +41,7 @@ def test_build_fast_path_prompt_includes_manifest_classes_and_diff_excerpt() -> 
     assert '"class": "docs_only"' in prompt
     assert "src/generated/client.ts" in prompt
     assert '"class": "generated"' in prompt
+    assert "extension_histogram" in prompt
     assert "+hello" in prompt
 
 

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.agent.chunking import ClassifiedDiffFile, classify_diff_files
 from app.agent.context_builder import count_tokens
 from app.agent.diff_parser import FileInDiff
+from app.agent.prompt_compaction import compact_diff_excerpt, extension_histogram
 from app.agent.review_config import FastPathConfig
 from app.llm.providers import StructuredOutputRequest, get_provider_adapter
 from app.llm.types import ModelProvider
@@ -194,7 +195,11 @@ def build_fast_path_prompt(
         },
         "commits": commit_messages,
         "changed_files": manifest,
-        "diff_excerpt": _diff_excerpt(diff_text, max_diff_excerpt_tokens),
+        "compact_manifest": {
+            "extension_histogram": extension_histogram([item.path for item in classified]),
+            "total_changed_lines": sum(int(item.changed_lines) for item in classified),
+        },
+        "diff_excerpt": compact_diff_excerpt(diff_text, max_diff_excerpt_tokens),
     }
     return (
         "Classify this PR for review routing. Return only the classify_fast_path tool call.\n"

@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -64,6 +65,8 @@ OSV_ECOSYSTEM_MAP = {
     "crates.io": "crates.io",
 }
 
+OfflineToolExecutor = Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[str]]
+
 
 def _normalize_repo_path(raw_path: object) -> str:
     path = str(raw_path).strip().replace("\\", "/")
@@ -74,6 +77,11 @@ def _normalize_repo_path(raw_path: object) -> str:
 
 async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str, Any]) -> str:
     try:
+        maybe_offline_executor = context.get("offline_tool_executor")
+        if callable(maybe_offline_executor):
+            offline_executor = maybe_offline_executor
+            return await offline_executor(name, tool_input, context)
+
         gh: GitHubClient = context["github_client"]
         owner: str = context["owner"]
         repo: str = context["repo"]

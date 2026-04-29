@@ -4,25 +4,37 @@ updates:
     directory: "/apps/api"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 1
+    groups:
+      dependencies:
+        dependency-type: "all"
     labels:
       - "dependencies"
       - "python"
+    target-branch: "develop"
+
 
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 1
+    groups:
+      dependencies:
+        dependency-type: "all"
     labels:
       - "dependencies"
       - "javascript"
-
+    target-branch: "develop"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 1
+    groups:
+      dependencies:
+        dependency-type: "all"
     labels:
       - "dependencies"
       - "github-actions"
+    target-branch: "develop"

@@ -69,7 +69,8 @@ from app.db.session import AsyncSessionLocal, set_installation_context, set_user
 from app.github.client import GitHubClient
 from app.github.comments import post_review
 from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
-from app.llm.router import ModelRoleRoutingConfig
+from app.llm.router import ModelRoleRoutingConfig, resolve_model_attempt_chain
+from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.types import ModelProvider
 from app.observability import record_review_trace
 from app.agent.snapshot import SnapshotPayload, store_snapshot
@@ -224,6 +225,47 @@ def _resolve_runtime_model(
     return resolution
 
 
+def _resolve_runtime_attempt_chain(
+    context: dict[str, Any],
+    review_config: ReviewConfig,
+    role: ReviewModelRole,
+    *,
+    context_tokens: int = 0,
+    previous_provider: str | None = None,
+) -> list[ModelResolution]:
+    attempts = resolve_model_attempt_chain(
+        review_config,
+        role,
+        context_tokens=context_tokens,
+        previous_provider=previous_provider,
+        available_providers=_available_provider_ids(context),
+    )
+    context.setdefault("llm_model_resolutions", {})
+    resolutions = context.get("llm_model_resolutions")
+    if isinstance(resolutions, dict):
+        resolutions[role] = attempts[0].as_metadata() if attempts else None
+        resolutions[f"{role}_attempts"] = [attempt.as_metadata() for attempt in attempts]
+    context.setdefault("anthropic_cache_ttl", "5m")
+    context.setdefault("openai_prompt_cache_retention", "in_memory")
+    return attempts
+
+
+def _available_provider_ids(context: dict[str, Any]) -> set[str]:
+    available: set[str] = set()
+    if settings.anthropic_api_key:
+        available.add("anthropic")
+    if settings.openai_api_key:
+        available.add("openai")
+    if settings.gemini_api_key:
+        available.add("gemini")
+    user_provider_keys = context.get("user_provider_keys")
+    if isinstance(user_provider_keys, dict):
+        for provider, key in user_provider_keys.items():
+            if isinstance(provider, str) and isinstance(key, str) and key.strip():
+                available.add(provider)
+    return available
+
+
 def _set_runtime_model_context(context: dict[str, Any], resolution: ModelResolution) -> None:
     context["runtime_model_provider"] = resolution.provider
     context["runtime_model"] = resolution.model
@@ -255,39 +297,72 @@ async def _run_fast_path_stage(
         ), None
 
     files_in_diff = _filter_diff_files(parse_diff(diff_text), review_config.ignore_paths)
-    fast_resolution = _resolve_runtime_model(
+    fast_attempts = _resolve_runtime_attempt_chain(
         context,
         review_config,
         "fast_path",
         context_tokens=min(diff_tokens, review_config.fast_path.max_diff_excerpt_tokens),
     )
+    fast_resolution = fast_attempts[0] if fast_attempts else None
+    if fast_resolution is None:
+        return fallback_full_review(
+            "Fast-path pre-pass has no available provider.", risk_labels=["no_provider_available"]
+        ), None
     stage_started_at = monotonic()
     token_snapshot = _token_snapshot(context)
     classified: list[ClassifiedDiffFile] = []
     fallback_reason: str | None = fast_resolution.fallback_reason
-    try:
-        decision, classified, _, _ = await run_fast_path_prepass(
-            files_in_diff=files_in_diff,
-            diff_text=diff_text,
-            pr=pr,
-            commits=commits,
-            generated_paths=review_config.packaging.generated_paths,
-            vendor_paths=review_config.packaging.vendor_paths,
-            config=review_config.fast_path,
-            context=context,
-            model_name=fast_resolution.model,
-            provider=fast_resolution.provider,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Fast-path pre-pass failed; falling back to full review review_id=%s err=%s",
-            context.get("review_id"),
-            exc,
-        )
+    last_error: Exception | None = None
+    decision: FastPathDecision | None = None
+    for attempt in fast_attempts:
+        fallback_reason = attempt.fallback_reason
+        try:
+            decision, classified, _, _ = await run_fast_path_prepass(
+                files_in_diff=files_in_diff,
+                diff_text=diff_text,
+                pr=pr,
+                commits=commits,
+                generated_paths=review_config.packaging.generated_paths,
+                vendor_paths=review_config.packaging.vendor_paths,
+                config=review_config.fast_path,
+                context=context,
+                model_name=attempt.model,
+                provider=attempt.provider,
+            )
+            fast_resolution = attempt
+            _set_runtime_model_context(context, attempt)
+            break
+        except LLMQuotaOrRateLimitError as exc:
+            last_error = exc
+            logger.warning(
+                "Fast-path quota/rate-limit fallback review_id=%s provider=%s model=%s err=%s",
+                context.get("review_id"),
+                attempt.provider,
+                attempt.model,
+                exc,
+            )
+            continue
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Fast-path pre-pass failed review_id=%s provider=%s model=%s err=%s",
+                context.get("review_id"),
+                attempt.provider,
+                attempt.model,
+                exc,
+            )
+            break
+    if decision is None:
+        reason = str(last_error) if last_error is not None else "No provider attempt succeeded."
         decision = fallback_full_review(
-            f"Fast-path pre-pass failed: {exc}", risk_labels=["fast_path_error"]
+            f"Fast-path pre-pass failed: {reason}", risk_labels=["fast_path_error"]
         )
         fallback_reason = "fast_path_error"
+        context.setdefault("debug_artifacts", {})
+        debug_artifacts = context.get("debug_artifacts")
+        if isinstance(debug_artifacts, dict):
+            debug_artifacts["fast_path_all_providers_failed"] = True
+            debug_artifacts["fast_path_compaction"] = True
 
     metadata = fast_path_metadata(
         decision,
@@ -492,6 +567,19 @@ async def run_review(
         effective_review_config = _review_config_for_fast_path_decision(
             review_config, fast_path_decision
         )
+        debug_artifacts = context.get("debug_artifacts")
+        fast_path_failed_all = bool(
+            isinstance(debug_artifacts, dict)
+            and debug_artifacts.get("fast_path_all_providers_failed")
+        )
+        if fast_path_failed_all:
+            compact_budgets = effective_review_config.budgets.model_copy(deep=True)
+            compact_budgets.diff_hunks = max(8_000, int(compact_budgets.diff_hunks * 0.65))
+            compact_budgets.surrounding_context = max(
+                3_000, int(compact_budgets.surrounding_context * 0.6)
+            )
+            effective_review_config = replace(effective_review_config, budgets=compact_budgets)
+            context["fast_path_compaction_applied"] = True
         if chunking_enabled:
             final_result = await _run_chunked_review(
                 gh=gh,
@@ -502,28 +590,70 @@ async def run_review(
                 review_config=effective_review_config,
                 started_at=started_at,
             )
-            prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
-            editor_resolution = _resolve_runtime_model(
-                context,
-                effective_review_config,
-                "editor",
-                previous_provider=str(context.get("runtime_model_provider", "")) or None,
-            )
-            edited_result = await run_editor(
-                draft=final_result,
-                pr_context={
-                    "title": pr.get("title", ""),
-                    "description": pr.get("body", "") or "",
-                    "commits": [
-                        str((commit.get("commit") or {}).get("message", "")) for commit in commits
-                    ],
-                },
-                prior_reviews=prior_reviews,
-                code_acknowledgments=[],
-                model_name=editor_resolution.model,
-                provider=editor_resolution.provider,
-                context=context,
-            )
+            editor_resolution: ModelResolution | None = None
+            if final_result.findings:
+                prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+                editor_attempts = _resolve_runtime_attempt_chain(
+                    context,
+                    effective_review_config,
+                    "editor",
+                    previous_provider=str(context.get("runtime_model_provider", "")) or None,
+                )
+                if not editor_attempts:
+                    raise RuntimeError("No provider candidates available for editor stage")
+                last_chunk_editor_error: Exception | None = None
+                for attempt in editor_attempts:
+                    try:
+                        edited_result = await run_editor(
+                            draft=final_result,
+                            pr_context={
+                                "title": pr.get("title", ""),
+                                "description": pr.get("body", "") or "",
+                                "commits": [
+                                    str((commit.get("commit") or {}).get("message", ""))
+                                    for commit in commits
+                                ],
+                            },
+                            prior_reviews=prior_reviews,
+                            code_acknowledgments=[],
+                            model_name=attempt.model,
+                            provider=attempt.provider,
+                            context=context,
+                        )
+                        editor_resolution = attempt
+                        break
+                    except LLMQuotaOrRateLimitError as exc:
+                        last_chunk_editor_error = exc
+                        logger.warning(
+                            "Chunk editor quota/rate-limit fallback review_id=%s provider=%s model=%s err=%s",
+                            review_id,
+                            attempt.provider,
+                            attempt.model,
+                            exc,
+                        )
+                        continue
+                if editor_resolution is None:
+                    raise RuntimeError(
+                        f"All chunk-editor provider attempts failed due to quota/rate-limit: {last_chunk_editor_error}"
+                    )
+            else:
+                edited_result = EditedReview(
+                    findings=[],
+                    summary=final_result.summary,
+                    decisions=[],
+                )
+                await _record_model_audit(
+                    context=context,
+                    stage="editor",
+                    provider=str(context.get("runtime_model_provider") or "anthropic"),
+                    model=str(context.get("runtime_model") or "none"),
+                    token_before=_token_snapshot(context),
+                    findings_count=0,
+                    accepted_findings_count=0,
+                    decision="skipped",
+                    model_resolution=None,
+                    extra_metadata={"reason": "no_findings_to_edit"},
+                )
             final_result = ReviewResult(
                 findings=edited_result.findings, summary=edited_result.summary
             )
@@ -571,28 +701,51 @@ async def run_review(
                 review_config=review_config,
             )
         )
-        primary_resolution = _resolve_runtime_model(
+        primary_attempts = _resolve_runtime_attempt_chain(
             context,
             review_config,
             "primary_review",
             context_tokens=count_tokens(system_prompt) + count_tokens(user_prompt),
         )
+        if not primary_attempts:
+            raise RuntimeError("No provider candidates available for primary_review")
+        primary_resolution = primary_attempts[0]
         primary_stage_started_at = monotonic()
         token_snapshot = _token_snapshot(context)
-        messages = await run_agent(
-            system_prompt,
-            user_prompt,
-            context,
-            model_name=primary_resolution.model,
-            provider=primary_resolution.provider,
-        )
-        result = await finalize_review(
-            system_prompt,
-            messages,
-            context,
-            model_name=primary_resolution.model,
-            provider=primary_resolution.provider,
-        )
+        last_primary_error: Exception | None = None
+        for attempt in primary_attempts:
+            try:
+                messages = await run_agent(
+                    system_prompt,
+                    user_prompt,
+                    context,
+                    model_name=attempt.model,
+                    provider=attempt.provider,
+                )
+                result = await finalize_review(
+                    system_prompt,
+                    messages,
+                    context,
+                    model_name=attempt.model,
+                    provider=attempt.provider,
+                )
+                primary_resolution = attempt
+                _set_runtime_model_context(context, attempt)
+                break
+            except LLMQuotaOrRateLimitError as exc:
+                last_primary_error = exc
+                logger.warning(
+                    "Primary quota/rate-limit fallback review_id=%s provider=%s model=%s err=%s",
+                    review_id,
+                    attempt.provider,
+                    attempt.model,
+                    exc,
+                )
+                continue
+        else:
+            raise RuntimeError(
+                f"All primary provider attempts failed due to quota/rate-limit: {last_primary_error}"
+            )
         await _record_model_audit(
             context=context,
             stage="primary",
@@ -728,7 +881,11 @@ async def run_review(
         )
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
         debate_conflict_score: int | None = None
-        if review_config.max_mode.enabled and fast_path_decision.decision != "light_review":
+        if (
+            review_config.max_mode.enabled
+            and fast_path_decision.decision != "light_review"
+            and draft_result.findings
+        ):
             challenger_resolution = _resolve_runtime_model(
                 context,
                 review_config,
@@ -820,49 +977,100 @@ async def run_review(
                 challenger=challenger_result,
                 tie_break=tie_break_result,
             )
-        code_acknowledgments = extract_todo_fixme_markers(fetched_map)
-        prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
-        editor_resolution = _resolve_runtime_model(
-            context,
-            review_config,
-            "editor",
-            previous_provider=primary_resolution.provider,
-        )
-        editor_stage_started_at = monotonic()
-        editor_snapshot = _token_snapshot(context)
-        edited_result = await run_editor(
-            draft=draft_result,
-            pr_context={
-                "title": pr.get("title", ""),
-                "description": pr.get("body", "") or "",
-                "commits": [
-                    str((commit.get("commit") or {}).get("message", "")) for commit in commits
-                ],
-            },
-            prior_reviews=prior_reviews,
-            code_acknowledgments=code_acknowledgments,
-            model_name=editor_resolution.model,
-            provider=editor_resolution.provider,
-            context=context,
-        )
-        _editor_actions = Counter(d.action for d in edited_result.decisions)
-        await _record_model_audit(
-            context=context,
-            stage="editor",
-            provider=editor_resolution.provider,
-            model=editor_resolution.model,
-            token_before=editor_snapshot,
-            findings_count=len(draft_result.findings),
-            accepted_findings_count=len(edited_result.findings),
-            decision="edited",
-            model_resolution=editor_resolution,
-            stage_started_at=editor_stage_started_at,
-            extra_metadata={
-                "keep_count": _editor_actions.get("keep", 0),
-                "drop_count": _editor_actions.get("drop", 0),
-                "modify_count": _editor_actions.get("modify", 0),
-            },
-        )
+        if draft_result.findings:
+            code_acknowledgments = extract_todo_fixme_markers(fetched_map)
+            prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+            editor_attempts = _resolve_runtime_attempt_chain(
+                context,
+                review_config,
+                "editor",
+                previous_provider=primary_resolution.provider,
+            )
+            if not editor_attempts:
+                raise RuntimeError("No provider candidates available for editor stage")
+            editor_resolution = editor_attempts[0]
+            editor_stage_started_at = monotonic()
+            editor_snapshot = _token_snapshot(context)
+            last_editor_error: Exception | None = None
+            for attempt in editor_attempts:
+                try:
+                    edited_result = await run_editor(
+                        draft=draft_result,
+                        pr_context={
+                            "title": pr.get("title", ""),
+                            "description": pr.get("body", "") or "",
+                            "commits": [
+                                str((commit.get("commit") or {}).get("message", ""))
+                                for commit in commits
+                            ],
+                        },
+                        prior_reviews=prior_reviews,
+                        code_acknowledgments=code_acknowledgments,
+                        model_name=attempt.model,
+                        provider=attempt.provider,
+                        context=context,
+                    )
+                    editor_resolution = attempt
+                    break
+                except LLMQuotaOrRateLimitError as exc:
+                    last_editor_error = exc
+                    logger.warning(
+                        "Editor quota/rate-limit fallback review_id=%s provider=%s model=%s err=%s",
+                        review_id,
+                        attempt.provider,
+                        attempt.model,
+                        exc,
+                    )
+                    continue
+            else:
+                raise RuntimeError(
+                    f"All editor provider attempts failed due to quota/rate-limit: {last_editor_error}"
+                )
+            _editor_actions = Counter(d.action for d in edited_result.decisions)
+            await _record_model_audit(
+                context=context,
+                stage="editor",
+                provider=editor_resolution.provider,
+                model=editor_resolution.model,
+                token_before=editor_snapshot,
+                findings_count=len(draft_result.findings),
+                accepted_findings_count=len(edited_result.findings),
+                decision="edited",
+                model_resolution=editor_resolution,
+                stage_started_at=editor_stage_started_at,
+                extra_metadata={
+                    "keep_count": _editor_actions.get("keep", 0),
+                    "drop_count": _editor_actions.get("drop", 0),
+                    "modify_count": _editor_actions.get("modify", 0),
+                    "incoming_findings_count": len(draft_result.findings),
+                    "outgoing_findings_count": len(edited_result.findings),
+                },
+            )
+        else:
+            edited_result = EditedReview(
+                findings=[],
+                summary=draft_result.summary,
+                decisions=[],
+            )
+            await _record_model_audit(
+                context=context,
+                stage="editor",
+                provider=primary_resolution.provider,
+                model=primary_resolution.model,
+                token_before=_token_snapshot(context),
+                findings_count=0,
+                accepted_findings_count=0,
+                decision="skipped",
+                model_resolution=primary_resolution,
+                extra_metadata={
+                    "reason": "no_findings_to_edit",
+                    "incoming_findings_count": 0,
+                    "outgoing_findings_count": 0,
+                    "keep_count": 0,
+                    "drop_count": 0,
+                    "modify_count": 0,
+                },
+            )
         final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
         final_result = _apply_review_config_filters(final_result, review_config)
         await _record_model_audit(
@@ -876,6 +1084,12 @@ async def run_review(
             conflict_score=debate_conflict_score,
             decision="posted",
             model_resolution=primary_resolution,
+            extra_metadata={
+                "chain_short_circuit": not bool(draft_result.findings),
+                "incoming_findings_count": len(draft_result.findings),
+                "outgoing_findings_count": len(final_result.findings),
+                "fast_path_compaction_applied": bool(context.get("fast_path_compaction_applied")),
+            },
         )
         _attach_debug_artifacts(
             context=context,

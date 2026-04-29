@@ -3,12 +3,12 @@ Name: api
 Version: 0.1.0
 Requires-Python: >=3.12
 Requires-Dist: fastapi>=0.111.0
-Requires-Dist: uvicorn[standard]>=0.29.0
+Requires-Dist: uvicorn[standard]>=0.46.0
 Requires-Dist: httpx>=0.27.0
-Requires-Dist: pyjwt[crypto]>=2.8.0
+Requires-Dist: pyjwt[crypto]>=2.12.1
 Requires-Dist: sqlalchemy[asyncio]>=2.0.0
-Requires-Dist: asyncpg>=0.29.0
-Requires-Dist: alembic>=1.13.0
+Requires-Dist: asyncpg>=0.31.0
+Requires-Dist: alembic>=1.18.4
 Requires-Dist: arq>=0.25.0
 Requires-Dist: redis>=5.0.0
 Requires-Dist: pydantic>=2.7.0
@@ -20,14 +20,17 @@ Requires-Dist: unidiff>=0.7.5
 Requires-Dist: pyyaml>=6.0.3
 Requires-Dist: tree-sitter-language-pack>=1.6.2
 Requires-Dist: langfuse>=2.60.0
-Requires-Dist: sentry-sdk[fastapi]>=2.20.0
-Requires-Dist: openai>=2.32.0
+Requires-Dist: sentry-sdk[fastapi]>=2.58.0
+Requires-Dist: openai>=2.33.0
 Requires-Dist: boto3>=1.40.0
+Requires-Dist: mcp>=1.27.0
 Provides-Extra: dev
 Requires-Dist: pytest>=9.0.0; extra == "dev"
-Requires-Dist: pytest-cov>=6.0.0; extra == "dev"
-Requires-Dist: mypy>=1.10.0; extra == "dev"
-Requires-Dist: bandit>=1.7.10; extra == "dev"
+Requires-Dist: pytest-cov>=7.1.0; extra == "dev"
+Requires-Dist: mypy>=1.20.2; extra == "dev"
+Requires-Dist: bandit>=1.9.4; extra == "dev"
 Requires-Dist: types-PyYAML>=6.0.12.20240808; extra == "dev"
 Requires-Dist: types-unidiff>=0.1.0; extra == "dev"
 Requires-Dist: pip-audit>=2.10.0; extra == "dev"
+Provides-Extra: deepeval
+Requires-Dist: deepeval>=3.6.0; extra == "deepeval"
