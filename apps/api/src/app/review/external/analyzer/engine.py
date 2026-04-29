@@ -35,7 +35,7 @@ _EXAMPLE_PATH_MARKERS: tuple[str, ...] = (
 )
 
 _PLACEHOLDER_SECRET_PATTERN = re.compile(
-    r"(changeme|example|sample|dummy|placeholder|your_|xxx|todo)",
+    r"(changeme|example|sample|dummy|your_|xxx|todo)",
     re.IGNORECASE,
 )
 

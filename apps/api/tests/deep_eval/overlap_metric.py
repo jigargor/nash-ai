@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
+from pathlib import Path
 
 from deepeval.metrics import BaseMetric
 from deepeval.test_case import LLMTestCase
 
 
 def _import_eval_metrics() -> tuple[Any, Any, Any]:
+    repo_root = Path(__file__).resolve().parents[4]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
     from evals.metrics import EvalTotals, evaluate_case, safe_divide
 
     return EvalTotals, evaluate_case, safe_divide

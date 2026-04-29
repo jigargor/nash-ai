@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { ActionChain } from "@/components/review/action-chain";
@@ -27,12 +28,13 @@ function buildAudit(overrides: Partial<ReviewModelAudit>): ReviewModelAudit {
 }
 
 describe("ActionChain editor states", () => {
-  it("shows explicit skipped editor message", () => {
+  it("shows explicit skipped editor message", async () => {
     render(<ActionChain audits={[buildAudit({})]} debugArtifacts={{}} postedFindingsCount={0} />);
+    await userEvent.click(screen.getByRole("button", { name: /Editor pass/i }));
     expect(screen.getByText(/Editor pass skipped/i)).toBeInTheDocument();
   });
 
-  it("shows explicit no-action editor message", () => {
+  it("shows explicit no-action editor message", async () => {
     render(
       <ActionChain
         audits={[
@@ -45,6 +47,10 @@ describe("ActionChain editor states", () => {
         postedFindingsCount={0}
       />
     );
+    const editedBadge = screen.getByText("edited");
+    const button = editedBadge.closest("button");
+    if (!button) throw new Error("expected editor stage button");
+    await userEvent.click(button);
     expect(screen.getByText(/no keep\/modify\/drop actions/i)).toBeInTheDocument();
   });
 });

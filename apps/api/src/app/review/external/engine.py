@@ -232,7 +232,9 @@ class ReviewEngine:
                 },
             )
         )
-        excluded = set(signals.prompt_injection_paths) | set(signals.filler_paths)
+        # Keep prompt-injection-labelled files in scope for static rules so we can still
+        # catch real vulnerabilities that co-exist with adversarial instructions.
+        excluded = set(signals.filler_paths)
         shards = self.plan_shards(files, plan, excluded_paths=excluded)
 
         estimated_tokens, estimated_cost = self._estimate_total_usage(
