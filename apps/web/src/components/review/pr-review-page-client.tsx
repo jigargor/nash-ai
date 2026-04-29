@@ -87,6 +87,13 @@ interface ReviewRunHistoryEntry {
   stageCount: number;
 }
 
+interface RunOutputSnapshot {
+  run_id: string;
+  summary?: string;
+  findings?: Finding[];
+  cost_usd?: string;
+}
+
 function stageLooksFailed(audit: ReviewModelAudit): boolean {
   if (audit.decision.toLowerCase().includes("error")) return true;
   const metadata = audit.metadata_json;
@@ -311,19 +318,6 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const findingOutcomes = reviewQuery.data?.finding_outcomes ?? [];
   const isFailedReview = reviewQuery.data?.status === "failed";
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!["j", "k"].includes(event.key)) return;
-      if (!findings.length) return;
-      event.preventDefault();
-      const current = selectedFindingIndex ?? 0;
-      if (event.key === "j") setSelectedFindingIndex(Math.min(current + 1, findings.length - 1));
-      if (event.key === "k") setSelectedFindingIndex(Math.max(current - 1, 0));
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [findings.length, selectedFindingIndex, setSelectedFindingIndex]);
-
   const audits = useMemo(() => modelAudits.data?.model_audits ?? [], [modelAudits.data]);
   const runHistory = useMemo(() => runHistoryFromAudits(audits), [audits]);
   const latestRunId = runHistory[0]?.runId ?? null;
@@ -342,6 +336,31 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     if (selectedRunId) return audits.filter((audit) => audit.run_id === selectedRunId);
     return latestRunId ? audits.filter((audit) => audit.run_id === latestRunId) : audits;
   }, [isInFlight, reviewQuery.data?.started_at, audits, selectedRunId, latestRunId]);
+  const runOutputByRunId = useMemo(() => {
+    const output = new Map<string, RunOutputSnapshot>();
+    const raw = reviewQuery.data?.debug_artifacts?.run_outputs;
+    if (!Array.isArray(raw)) return output;
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue;
+      const candidate = item as Record<string, unknown>;
+      const runId = candidate.run_id;
+      if (typeof runId !== "string" || runId.length === 0) continue;
+      output.set(runId, {
+        run_id: runId,
+        summary: typeof candidate.summary === "string" ? candidate.summary : undefined,
+        findings: Array.isArray(candidate.findings) ? (candidate.findings as Finding[]) : undefined,
+        cost_usd: typeof candidate.cost_usd === "string" ? candidate.cost_usd : undefined,
+      });
+    }
+    return output;
+  }, [reviewQuery.data?.debug_artifacts]);
+  const selectedRunOutput = selectedRunId ? runOutputByRunId.get(selectedRunId) ?? null : null;
+  const displayedFindings = useMemo(() => {
+    if (!isInFlight && selectedRunOutput?.findings) {
+      return selectedRunOutput.findings.filter(isFindingVisible);
+    }
+    return findings;
+  }, [findings, isInFlight, selectedRunOutput]);
   const modelUsageEntries = useMemo(() => modelUsageFromAudits(currentRunAudits), [currentRunAudits]);
   const pipelineStagedFindingsPeak = useMemo(
     () =>
@@ -351,13 +370,14 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
       ),
     [currentRunAudits],
   );
-  const postedFindingsCount = findings.length;
+  const postedFindingsCount = displayedFindings.length;
   const findingsStatusLabel =
     pipelineStagedFindingsPeak > postedFindingsCount
       ? `${postedFindingsCount} posted · ${pipelineStagedFindingsPeak} pipeline`
       : `${postedFindingsCount} findings`;
 
   const summaryParagraph = useMemo(() => {
+    if (!isInFlight && selectedRunOutput?.summary?.trim()) return selectedRunOutput.summary.trim();
     const row = reviewQuery.data;
     if (!row) return "";
     const visible = row.findings?.findings?.filter(isFindingVisible) ?? [];
@@ -369,14 +389,44 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
       row.status === "failed",
       isReviewInFlightStatus(row.status) || rerunMutation.isPending,
     );
-  }, [reviewQuery.data, rerunMutation.isPending]);
+  }, [isInFlight, reviewQuery.data, rerunMutation.isPending, selectedRunOutput]);
+  const displayedFindingOutcomes =
+    !isInFlight && selectedRunId && selectedRunId !== latestRunId ? [] : findingOutcomes;
+  const displayedCostUsd =
+    !isInFlight && selectedRunOutput?.cost_usd
+      ? selectedRunOutput.cost_usd
+      : reviewQuery.data?.cost_usd;
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!["j", "k"].includes(event.key)) return;
+      if (!displayedFindings.length) return;
+      event.preventDefault();
+      const current = selectedFindingIndex ?? 0;
+      if (event.key === "j")
+        setSelectedFindingIndex(Math.min(current + 1, displayedFindings.length - 1));
+      if (event.key === "k") setSelectedFindingIndex(Math.max(current - 1, 0));
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [displayedFindings.length, selectedFindingIndex, setSelectedFindingIndex]);
+
+  useEffect(() => {
+    if (displayedFindings.length === 0) {
+      if (selectedFindingIndex !== null) setSelectedFindingIndex(null);
+      return;
+    }
+    if (selectedFindingIndex == null || selectedFindingIndex >= displayedFindings.length) {
+      setSelectedFindingIndex(0);
+    }
+  }, [displayedFindings.length, selectedFindingIndex, setSelectedFindingIndex]);
 
   const getDebugExportPayload = useCallback(() => {
     const row = reviewQuery.data;
     if (!row) {
       return { exported_at: new Date().toISOString(), error: "review_not_loaded" } as Record<string, unknown>;
     }
-    const postedFindings = row.findings?.findings?.filter(isFindingVisible) ?? [];
+    const postedFindings = displayedFindings;
     const modelAuditsList = currentRunAudits;
     const peak = modelAuditsList.reduce(
       (max, a) => (typeof a.findings_count === "number" ? Math.max(max, a.findings_count) : max),
@@ -393,7 +443,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
       model: row.model,
       modelProvider: row.model_provider ?? undefined,
       tokensUsed: row.tokens_used,
-      costUsd: row.cost_usd,
+      costUsd: displayedCostUsd ?? row.cost_usd,
       postedFindingsCount: postedFindings.length,
       pipelineStagedFindingsPeak: peak,
       postedFindings,
@@ -408,6 +458,8 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     prNumber,
     reviewQuery.data,
     currentRunAudits,
+    displayedCostUsd,
+    displayedFindings,
     summaryParagraph,
   ]);
 
@@ -435,12 +487,13 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
       : null;
 
   function handleCopySuggestion(index: number): void {
-    const suggestion = findings[index]?.suggestion;
+    const suggestion = displayedFindings[index]?.suggestion;
     if (!suggestion) return;
     void navigator.clipboard.writeText(suggestion);
   }
 
   function handleDismiss(index: number): void {
+    if (!isInFlight && selectedRunId && selectedRunId !== latestRunId) return;
     void dismissMutation.mutateAsync({ reviewId, findingIndex: index, installationId });
   }
 
@@ -471,7 +524,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
           <StreamingStatus state={connectionState} />
           <div style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
-            {data.tokens_used ?? 0} tokens · ${data.cost_usd ?? "0.000000"} · {findingsStatusLabel}
+            {data.tokens_used ?? 0} tokens · ${displayedCostUsd ?? "0.000000"} · {findingsStatusLabel}
           </div>
         </div>
         <p style={{ color: "var(--text-muted)", marginBottom: 0, marginTop: "0.45rem", fontSize: "0.85rem" }}>
@@ -570,7 +623,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         audits={currentRunAudits}
         debugArtifacts={data.debug_artifacts ?? null}
         isInFlight={isInFlight}
-        costUsd={data.cost_usd}
+        costUsd={displayedCostUsd}
         postedFindingsCount={postedFindingsCount}
         pipelineStagedFindingsPeak={pipelineStagedFindingsPeak}
         pipelineEmptyHint={pipelineEmptyHint}
@@ -579,11 +632,11 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
 
       {postedFindingsCount > 0 ? (
         <div className="review-workspace-grid panel panel-elevated">
-          <FileTree findings={findings} onSelectFinding={setSelectedFindingIndex} />
-          <DiffViewer findings={findings} selectedFindingIndex={selectedFindingIndex} onSelectFinding={setSelectedFindingIndex} />
+          <FileTree findings={displayedFindings} onSelectFinding={setSelectedFindingIndex} />
+          <DiffViewer findings={displayedFindings} selectedFindingIndex={selectedFindingIndex} onSelectFinding={setSelectedFindingIndex} />
           <FindingsPanel
-            findings={findings}
-            findingOutcomes={findingOutcomes}
+            findings={displayedFindings}
+            findingOutcomes={displayedFindingOutcomes}
             selectedFindingIndex={selectedFindingIndex}
             onSelectFinding={setSelectedFindingIndex}
             onDismiss={handleDismiss}

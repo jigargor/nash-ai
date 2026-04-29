@@ -56,6 +56,41 @@ function fmtUsd(value: number | null | undefined): string {
   return `$${value.toFixed(6)}`;
 }
 
+function parseNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function estimateStageCostUsd(audit: ReviewModelAudit): number | null {
+  const metadata = audit.metadata_json ?? {};
+  const modelResolution =
+    (metadata.model_resolution as Record<string, unknown> | undefined) ?? {};
+  const pricing = (modelResolution.pricing as Record<string, unknown> | undefined) ?? {};
+  const llmUsage = (metadata.llm_usage as Record<string, unknown> | undefined) ?? {};
+
+  const inputPer1M = parseNumber(pricing.input_per_1m_usd);
+  const outputPer1M = parseNumber(pricing.output_per_1m_usd);
+  if (inputPer1M == null || outputPer1M == null) return null;
+
+  const cachedPer1M = parseNumber(pricing.cached_input_per_1m_usd) ?? inputPer1M;
+  const cachedInputTokens = Math.max(
+    0,
+    parseNumber(llmUsage.cached_input_tokens_seen) ?? 0,
+  );
+  const effectiveInputTokens = Math.max(0, audit.input_tokens - cachedInputTokens);
+
+  return (
+    (effectiveInputTokens * inputPer1M +
+      cachedInputTokens * cachedPer1M +
+      audit.output_tokens * outputPer1M) /
+    1_000_000
+  );
+}
+
 function formatElapsedMs(ms: number | null): string {
   if (ms == null || ms < 0) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -880,14 +915,14 @@ function ChunkingCallout({ plan }: { plan: Record<string, unknown> }) {
 
 function BottomPanelSummary({
   audits,
-  costUsd,
+  stageEstimatedCostUsd,
   postedFindingsCount,
   pipelineStagedFindingsPeak,
   isInFlight,
   nowMs,
 }: {
   audits: ReviewModelAudit[];
-  costUsd: string | null;
+  stageEstimatedCostUsd: number | null;
   postedFindingsCount: number;
   pipelineStagedFindingsPeak: number;
   isInFlight: boolean;
@@ -903,8 +938,7 @@ function BottomPanelSummary({
   }
 
   const showTokens = totalAll > 0;
-  const totalCostNumber = parseUsd(costUsd);
-  const showCost = totalCostNumber != null;
+  const showCost = stageEstimatedCostUsd != null;
   const startedAtMs =
     audits.length > 0 && audits[0].created_at ? new Date(audits[0].created_at).getTime() : null;
   const endedAtMs =
@@ -956,7 +990,7 @@ function BottomPanelSummary({
         ) : null}
         {showCost ? (
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-            Est. cost: <strong style={{ color: "var(--accent)" }}>{fmtUsd(totalCostNumber)}</strong>
+            Est. cost: <strong style={{ color: "var(--accent)" }}>{fmtUsd(stageEstimatedCostUsd)}</strong>
           </span>
         ) : null}
         <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
@@ -1021,10 +1055,23 @@ export function ReviewPipeline({
   const chunkingPlan = debugArtifacts?.chunking_plan as Record<string, unknown> | undefined;
   const hasChunking = chunkingPlan && Array.isArray(chunkingPlan.chunks) && (chunkingPlan.chunks as unknown[]).length > 1;
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const totalTokens = useMemo(() => audits.reduce((sum, audit) => sum + audit.total_tokens, 0), [audits]);
-  const totalCostNumber = parseUsd(costUsd ?? null);
   const latestAudit = audits[audits.length - 1] ?? null;
   const pendingMeta = nextStageLabel(latestAudit?.stage ?? null, Boolean(hasChunking));
+  const stageCostByAuditId = useMemo(() => {
+    const entries = new Map<number, number | null>();
+    for (const audit of audits) entries.set(audit.id, estimateStageCostUsd(audit));
+    return entries;
+  }, [audits]);
+  const stageEstimatedCostUsd = useMemo(() => {
+    let total = 0;
+    let hasCost = false;
+    for (const value of stageCostByAuditId.values()) {
+      if (value == null) continue;
+      hasCost = true;
+      total += value;
+    }
+    return hasCost ? total : parseUsd(costUsd ?? null);
+  }, [costUsd, stageCostByAuditId]);
 
   useEffect(() => {
     if (!isInFlight) return;
@@ -1069,10 +1116,7 @@ export function ReviewPipeline({
       {audits.length > 0 ? (
         <div style={{ marginBottom: "0.75rem", display: "flex", flexDirection: "column" }}>
           {audits.map((audit, index) => {
-            const estimatedCostUsd =
-              totalCostNumber != null && totalTokens > 0
-                ? (audit.total_tokens / totalTokens) * totalCostNumber
-                : null;
+            const estimatedCostUsd = stageCostByAuditId.get(audit.id) ?? null;
             return (
               <StageCard
                 key={audit.id}
@@ -1105,7 +1149,7 @@ export function ReviewPipeline({
       )}
       <BottomPanelSummary
         audits={audits}
-        costUsd={costUsd ?? null}
+        stageEstimatedCostUsd={stageEstimatedCostUsd}
         postedFindingsCount={postedFindingsCount}
         pipelineStagedFindingsPeak={pipelineStagedFindingsPeak}
         isInFlight={Boolean(isInFlight)}
