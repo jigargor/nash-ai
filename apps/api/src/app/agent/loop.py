@@ -10,6 +10,7 @@ from app.agent.provider_clients import (
 )
 from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.tools import TOOLS, execute_tool
+from app.llm.errors import coerce_quota_error
 from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
 from app.observability import create_async_anthropic_client
 
@@ -52,13 +53,19 @@ async def _run_agent_anthropic(
     for _ in range(MAX_ITERATIONS):
         if _contains_empty_user_message(messages):
             break
-        response = await client.messages.create(
-            model=model_name,
-            max_tokens=4096,
-            system=anthropic_system,
-            tools=TOOLS,  # type: ignore[arg-type]
-            messages=messages,  # type: ignore[arg-type]
-        )
+        try:
+            response = await client.messages.create(
+                model=model_name,
+                max_tokens=4096,
+                system=anthropic_system,
+                tools=TOOLS,  # type: ignore[arg-type]
+                messages=messages,  # type: ignore[arg-type]
+            )
+        except Exception as exc:
+            quota_error = coerce_quota_error(exc, provider="anthropic", model=model_name)
+            if quota_error is not None:
+                raise quota_error from exc
+            raise
         turns += 1
         if turns == 1:
             context["first_model_call_latency_ms"] = int((monotonic() - started_at) * 1000)
@@ -130,17 +137,23 @@ async def _run_agent_openai_compatible(
     for _ in range(MAX_ITERATIONS):
         openai_messages: Any = messages
         openai_tools_any: Any = openai_tools
-        completion = await client.chat.completions.create(
-            model=model_name,
-            temperature=0,
-            messages=openai_messages,
-            tools=openai_tools_any,
-            **adapter.chat_completion_extra_kwargs(
-                system_prompt=system_prompt,
-                model_name=model_name,
-                options=_cache_options(context),
-            ),
-        )
+        try:
+            completion = await client.chat.completions.create(
+                model=model_name,
+                temperature=0,
+                messages=openai_messages,
+                tools=openai_tools_any,
+                **adapter.chat_completion_extra_kwargs(
+                    system_prompt=system_prompt,
+                    model_name=model_name,
+                    options=_cache_options(context),
+                ),
+            )
+        except Exception as exc:
+            quota_error = coerce_quota_error(exc, provider=provider, model=model_name)
+            if quota_error is not None:
+                raise quota_error from exc
+            raise
         turns += 1
         if turns == 1:
             context["first_model_call_latency_ms"] = int((monotonic() - started_at) * 1000)

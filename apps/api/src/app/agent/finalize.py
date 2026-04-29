@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.schema import Finding, ReviewResult
 from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
+from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.providers import StructuredOutputRequest, get_provider_adapter
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,8 @@ async def finalize_review(
                 temperature=0,
             )
         )
+    except LLMQuotaOrRateLimitError:
+        raise
     except RuntimeError as exc:
         logger.warning(
             "submit_review tool missing or malformed; returning safe empty result: %s", exc
