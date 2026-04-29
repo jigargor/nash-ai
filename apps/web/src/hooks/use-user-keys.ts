@@ -2,12 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { deleteUserKey, fetchUserKeys, upsertUserKey } from "@/lib/api/user-keys";
+import { actionDeleteUserKey, actionFetchUserKeys, actionUpsertUserKey } from "@/app/actions/dashboard-api";
 
 export function useUserKeys() {
   return useQuery({
     queryKey: ["user-keys"],
-    queryFn: fetchUserKeys,
+    queryFn: actionFetchUserKeys,
   });
 }
 
@@ -15,7 +15,7 @@ export function useUpsertUserKey() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ provider, api_key }: { provider: string; api_key: string }) =>
-      upsertUserKey(provider, api_key),
+      actionUpsertUserKey(provider, api_key),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["user-keys"] }),
   });
 }
@@ -23,7 +23,7 @@ export function useUpsertUserKey() {
 export function useDeleteUserKey() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (provider: string) => deleteUserKey(provider),
+    mutationFn: (provider: string) => actionDeleteUserKey(provider),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["user-keys"] }),
   });
 }
