@@ -78,6 +78,7 @@ class FastPathConfig:
     enabled: bool = True
     skip_min_confidence: int = 90
     light_review_min_confidence: int = 80
+    force_economy_on_light_review: bool = False
     max_diff_excerpt_tokens: int = 3000
     allow_skip: bool = True
     confidence_bug_check: bool = True
@@ -464,6 +465,9 @@ def _parse_fast_path(raw_value: object) -> FastPathConfig:
             80,
             minimum=0,
             maximum=100,
+        ),
+        force_economy_on_light_review=bool(
+            raw_value.get("force_economy_on_light_review", False)
         ),
         max_diff_excerpt_tokens=_normalize_positive_int(
             raw_value.get("max_diff_excerpt_tokens"), 3000

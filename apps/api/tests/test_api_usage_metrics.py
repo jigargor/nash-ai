@@ -86,6 +86,8 @@ async def test_usage_metrics_returns_provider_rows_and_redacts_metadata(
     assert payload["provider"] == "openai"
     assert payload["group_by"] == "model"
     assert payload["metrics"][0]["dimension"] == "gpt-5.5"
+    assert float(payload["estimated_provider_cost_usd"]) > 0.0
+    assert float(payload["estimated_primary_model_cost_usd"]) >= 0.0
     assert payload["metadata_sample"]["user_id"] == "[REDACTED]"
     assert payload["metadata_sample"]["email"] == "[REDACTED]"
 

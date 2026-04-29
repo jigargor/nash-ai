@@ -138,6 +138,7 @@ async def _insert_review(
     installation_id: int,
     *,
     repo_full_name: str = "acme/repo",
+    pr_number: int = 7,
     status: str = "done",
     findings: dict[str, object] | None = None,
 ) -> int:
@@ -147,7 +148,7 @@ async def _insert_review(
         review = Review(
             installation_id=installation_id,
             repo_full_name=repo_full_name,
-            pr_number=7,
+            pr_number=pr_number,
             pr_head_sha="a" * 40,
             status=status,
             model_provider="anthropic",

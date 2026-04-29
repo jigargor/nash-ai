@@ -235,13 +235,13 @@ export default function DashboardHomePage() {
       </Panel>
 
       <Panel>
-        <h2 style={{ marginTop: 0, marginBottom: "0.45rem" }}>Evaluate External</h2>
+        <h2 style={{ marginTop: 0, marginBottom: "0.45rem" }}>Code Tour</h2>
         <p style={{ margin: 0, color: "var(--text-muted)" }}>
           Run critical-only analysis on a public GitHub repository with cost controls and staged execution.
         </p>
         <div style={{ marginTop: "0.75rem" }}>
-          <Link href="/evaluate-external" className="button button-primary">
-            Open Evaluate External
+          <Link href="/code-tour" className="button button-primary">
+            Open Code Tour
           </Link>
         </div>
       </Panel>

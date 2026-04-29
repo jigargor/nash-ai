@@ -74,7 +74,7 @@ function validateForm(
 
 export default function CodeTourPage() {
   const installations = useInstallations();
-  const [installationId, setInstallationId] = useState<number | undefined>(undefined);
+  const [selectedInstallationId, setSelectedInstallationId] = useState<number | undefined>(undefined);
   const [repoUrl, setRepoUrl] = useState("");
   const [targetRef, setTargetRef] = useState("");
   const [ackConfirmed, setAckConfirmed] = useState(false);
@@ -85,31 +85,36 @@ export default function CodeTourPage() {
   const estimateMutation = useExternalEvalEstimate();
   const createMutation = useCreateExternalEval();
   const cancelMutation = useCancelExternalEval();
-  const evalList = useExternalEvals(installationId);
-  const evalDetail = useExternalEvalDetail(selectedEvalId, installationId);
 
   const activeInstallations = useMemo(
     () => installations.data?.filter((item) => item.active) ?? [],
     [installations.data],
   );
+  const installationId = useMemo(() => {
+    if (activeInstallations.length === 0) return undefined;
+    const selectedInstallation = activeInstallations.find(
+      (item) => item.installation_id === selectedInstallationId,
+    );
+    return selectedInstallation?.installation_id ?? activeInstallations[0]?.installation_id;
+  }, [activeInstallations, selectedInstallationId]);
+  const evalList = useExternalEvals(installationId);
+  const evalDetail = useExternalEvalDetail(selectedEvalId, installationId);
+
+  useEffect(() => {
+    const rows = evalList.data ?? [];
+    if (rows.length === 0) {
+      setSelectedEvalId(undefined);
+      return;
+    }
+    if (selectedEvalId == null || !rows.some((row) => row.id === selectedEvalId)) {
+      setSelectedEvalId(rows[0].id);
+    }
+  }, [evalList.data, selectedEvalId]);
   const formErrors = useMemo(
     () => validateForm(repoUrl, targetRef, tokenBudgetCap, costBudgetCapUsd),
     [repoUrl, targetRef, tokenBudgetCap, costBudgetCapUsd],
   );
   const hasFormErrors = Object.keys(formErrors).length > 0;
-
-  useEffect(() => {
-    if (activeInstallations.length === 0) {
-      if (installationId !== undefined) setInstallationId(undefined);
-      return;
-    }
-    if (installationId === undefined) {
-      setInstallationId(activeInstallations[0]?.installation_id);
-      return;
-    }
-    const stillPresent = activeInstallations.some((item) => item.installation_id === installationId);
-    if (!stillPresent) setInstallationId(activeInstallations[0]?.installation_id);
-  }, [activeInstallations, installationId]);
 
   const handleEstimate = () => {
     if (!installationId) return;
@@ -154,7 +159,7 @@ export default function CodeTourPage() {
             <select
               className="app-search"
               value={installationId ?? ""}
-              onChange={(event) => setInstallationId(event.target.value ? Number(event.target.value) : undefined)}
+              onChange={(event) => setSelectedInstallationId(event.target.value ? Number(event.target.value) : undefined)}
             >
               {activeInstallations.map((item) => (
                 <option key={item.installation_id} value={item.installation_id}>

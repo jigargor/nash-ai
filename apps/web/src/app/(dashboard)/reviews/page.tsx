@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
@@ -72,12 +72,20 @@ function parseRepoFullName(repoFullName: string): { owner: string; repo: string 
 export default function ReviewsPage() {
   const searchParams = useSearchParams();
   const installations = useInstallations();
-  const [installationId, setInstallationId] = useState<number | undefined>(undefined);
+  const [selectedInstallationId, setSelectedInstallationId] = useState<number | "all">("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [findingsFilter, setFindingsFilter] = useState<"all" | "zero" | "nonzero">("all");
   const [createdOnOrAfter, setCreatedOnOrAfter] = useState("");
   const [createdOnOrBefore, setCreatedOnOrBefore] = useState("");
   const topbarQuery = searchParams?.get("q")?.trim().toLowerCase() ?? "";
+  const installationOptions = useMemo(() => installations.data ?? [], [installations.data]);
+  const installationId = useMemo(() => {
+    if (selectedInstallationId === "all") return undefined;
+    const selectedInstallation = installationOptions.find(
+      (installation) => installation.installation_id === selectedInstallationId,
+    );
+    return selectedInstallation?.installation_id;
+  }, [installationOptions, selectedInstallationId]);
 
   const reviewDateFilters = useMemo((): ReviewListFilters | undefined => {
     const filters: ReviewListFilters = {};
@@ -120,23 +128,6 @@ export default function ReviewsPage() {
     return list;
   }, [reviewsQuery.data, statusFilter, findingsFilter, topbarQuery]);
 
-  const installationOptions = installations.data ?? [];
-
-  useEffect(() => {
-    if (installationOptions.length === 0) {
-      if (installationId !== undefined) setInstallationId(undefined);
-      return;
-    }
-    if (installationId === undefined) {
-      setInstallationId(installationOptions[0]?.installation_id);
-      return;
-    }
-    const stillPresent = installationOptions.some(
-      (installation) => installation.installation_id === installationId,
-    );
-    if (!stillPresent) setInstallationId(installationOptions[0]?.installation_id);
-  }, [installationOptions, installationId]);
-
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
       <Panel>
@@ -148,9 +139,9 @@ export default function ReviewsPage() {
             id="installation-select"
             className="app-search"
             style={{ width: "260px" }}
-            value={installationId ?? ""}
+            value={selectedInstallationId === "all" ? "" : selectedInstallationId}
             onChange={(event) =>
-              setInstallationId(event.target.value ? Number(event.target.value) : undefined)
+              setSelectedInstallationId(event.target.value ? Number(event.target.value) : "all")
             }
           >
             <option value="">All installations</option>

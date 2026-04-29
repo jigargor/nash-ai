@@ -3,27 +3,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
-  actionCancelExternalEval,
-  actionCreateExternalEval,
-  actionEstimateExternalEval,
-  actionFetchExternalEvalDetail,
-  actionFetchExternalEvals,
-} from "@/app/actions/dashboard-api";
-import {
+  cancelExternalEval,
+  createExternalEval,
   type ExternalEvalCreateRequest,
   type ExternalEvalEstimateRequest,
+  estimateExternalEval,
+  fetchExternalEvalDetail,
+  fetchExternalEvals,
 } from "@/lib/api/external-evals";
 
 export function useExternalEvalEstimate() {
   return useMutation({
-    mutationFn: (payload: ExternalEvalEstimateRequest) => actionEstimateExternalEval(payload),
+    mutationFn: (payload: ExternalEvalEstimateRequest) => estimateExternalEval(payload),
   });
 }
 
 export function useCreateExternalEval() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: ExternalEvalCreateRequest) => actionCreateExternalEval(payload),
+    mutationFn: (payload: ExternalEvalCreateRequest) => createExternalEval(payload),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["external-evals", variables.installation_id] });
     },
@@ -33,7 +31,7 @@ export function useCreateExternalEval() {
 export function useExternalEvals(installationId?: number) {
   return useQuery({
     queryKey: ["external-evals", installationId ?? null],
-    queryFn: () => actionFetchExternalEvals(installationId as number),
+    queryFn: () => fetchExternalEvals(installationId as number),
     enabled: typeof installationId === "number" && installationId > 0,
     refetchInterval: 4000,
   });
@@ -42,7 +40,7 @@ export function useExternalEvals(installationId?: number) {
 export function useExternalEvalDetail(externalEvalId?: number, installationId?: number) {
   return useQuery({
     queryKey: ["external-eval", externalEvalId ?? null, installationId ?? null],
-    queryFn: () => actionFetchExternalEvalDetail(externalEvalId as number, installationId as number),
+    queryFn: () => fetchExternalEvalDetail(externalEvalId as number, installationId as number),
     enabled:
       typeof externalEvalId === "number" &&
       externalEvalId > 0 &&
@@ -56,7 +54,7 @@ export function useCancelExternalEval() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ externalEvalId, installationId }: { externalEvalId: number; installationId: number }) =>
-      actionCancelExternalEval(externalEvalId, installationId),
+      cancelExternalEval(externalEvalId, installationId),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["external-evals", variables.installationId] });
       void queryClient.invalidateQueries({

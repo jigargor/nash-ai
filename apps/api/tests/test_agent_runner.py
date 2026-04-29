@@ -630,6 +630,7 @@ async def test_run_fast_path_stage_rotates_to_next_provider_after_non_quota_erro
 
 def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> None:
     config = ReviewConfig(
+        fast_path=FastPathConfig(force_economy_on_light_review=True),
         models=ModelsRoutingConfig(
             roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
         )
@@ -650,10 +651,32 @@ def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> N
 
 def test_light_review_keeps_explicit_primary_model_pin() -> None:
     config = ReviewConfig(
+        fast_path=FastPathConfig(force_economy_on_light_review=True),
         model=ReviewModelConfig(provider="openai", name="gpt-5.5", explicit=True),
         models=ModelsRoutingConfig(
             roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
         ),
+    )
+    decision = FastPathDecision(
+        decision="light_review",
+        risk_labels=["low_risk"],
+        reason="Small low-risk change.",
+        confidence=90,
+        review_surface=["tests/test_app.py"],
+        requires_full_context=False,
+    )
+
+    effective = _review_config_for_fast_path_decision(config, decision)
+
+    assert effective is config
+    assert effective.models.roles["primary_review"].tier == "balanced"
+
+
+def test_light_review_preserves_primary_tier_by_default() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
+        )
     )
     decision = FastPathDecision(
         decision="light_review",

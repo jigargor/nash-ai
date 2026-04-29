@@ -517,7 +517,11 @@ async def _track_fast_path_confidence_anomaly(
 def _review_config_for_fast_path_decision(
     review_config: ReviewConfig, decision: FastPathDecision
 ) -> ReviewConfig:
-    if decision.decision == "light_review" and not review_config.model.explicit:
+    if (
+        decision.decision == "light_review"
+        and review_config.fast_path.force_economy_on_light_review
+        and not review_config.model.explicit
+    ):
         existing = review_config.models.roles.get("primary_review")
         if existing is not None and existing.provider and existing.model:
             return review_config
@@ -1795,6 +1799,8 @@ async def _run_chunked_review(
                 stage_started_at=chunk_stage_started_at,
                 extra_metadata={
                     "chunk_id": chunk.chunk_id,
+                    "node_type": "chunk_review",
+                    "parent_stage": "fast_path",
                     "chunk_file_count": len(chunk.files),
                     "chunk_file_paths": [entry.path for entry in chunk.files[:10]],
                     "chunk_estimated_tokens": chunk.estimated_prompt_tokens,
@@ -1848,6 +1854,101 @@ async def _run_chunked_review(
         review_config=review_config,
         frameworks=repo_profile.frameworks,
     )
+    if review_config.max_mode.enabled and synthesis_result.findings:
+        synthesis_system_prompt = build_system_prompt(
+            repo_profile.frameworks, "", review_config.prompt_additions
+        )
+        challenger_prompt = _build_challenger_prompt(
+            synthesis_result, final_summary_hint=synthesis_result.summary
+        )
+        challenger_resolution = _resolve_runtime_model(
+            context,
+            review_config,
+            "challenger",
+            context_tokens=count_tokens(synthesis_system_prompt)
+            + count_tokens(challenger_prompt),
+        )
+        challenger_stage_started_at = monotonic()
+        challenger_snapshot = _token_snapshot(context)
+        challenger_result = await finalize_review(
+            synthesis_system_prompt,
+            [{"role": "user", "content": challenger_prompt}],
+            context,
+            model_name=challenger_resolution.model,
+            provider=challenger_resolution.provider,
+            allow_retry=False,
+        )
+        debate_conflict_score = _calculate_conflict_score(
+            synthesis_result.findings, challenger_result.findings
+        )
+        await _record_model_audit(
+            context=context,
+            stage="challenger",
+            provider=challenger_resolution.provider,
+            model=challenger_resolution.model,
+            token_before=challenger_snapshot,
+            findings_count=len(challenger_result.findings),
+            conflict_score=debate_conflict_score,
+            decision="chunked_synthesis_challenged",
+            model_resolution=challenger_resolution,
+            stage_started_at=challenger_stage_started_at,
+            extra_metadata={
+                "chunk_mode": True,
+                "source_stage": "synthesis",
+                "chunk_count": len(chunk_plan.chunks),
+                "primary_findings_count": len(synthesis_result.findings),
+                "challenger_findings_count": len(challenger_result.findings),
+            },
+        )
+        tie_break_result: ReviewResult | None = None
+        should_tie_break = (
+            debate_conflict_score >= review_config.max_mode.conflict_threshold
+            or _has_high_risk_findings(
+                synthesis_result.findings, review_config.max_mode.high_risk_severity
+            )
+        )
+        if should_tie_break:
+            tie_break_prompt = _build_tie_break_prompt(synthesis_result, challenger_result)
+            tie_break_resolution = _resolve_runtime_model(
+                context,
+                review_config,
+                "tie_break",
+                context_tokens=count_tokens(synthesis_system_prompt)
+                + count_tokens(tie_break_prompt),
+                previous_provider=challenger_resolution.provider,
+            )
+            tie_break_stage_started_at = monotonic()
+            tie_break_snapshot = _token_snapshot(context)
+            tie_break_result = await finalize_review(
+                synthesis_system_prompt,
+                [{"role": "user", "content": tie_break_prompt}],
+                context,
+                model_name=tie_break_resolution.model,
+                provider=tie_break_resolution.provider,
+                allow_retry=False,
+            )
+            await _record_model_audit(
+                context=context,
+                stage="tie_break",
+                provider=tie_break_resolution.provider,
+                model=tie_break_resolution.model,
+                token_before=tie_break_snapshot,
+                findings_count=len(tie_break_result.findings),
+                conflict_score=debate_conflict_score,
+                decision="chunked_synthesis_tie_break",
+                model_resolution=tie_break_resolution,
+                stage_started_at=tie_break_stage_started_at,
+                extra_metadata={
+                    "chunk_mode": True,
+                    "source_stage": "synthesis",
+                    "chunk_count": len(chunk_plan.chunks),
+                },
+            )
+        synthesis_result = _merge_debate_results(
+            primary=synthesis_result,
+            challenger=challenger_result,
+            tie_break=tie_break_result,
+        )
     synthesis_findings = filter_findings_with_valid_anchors(
         attach_anchor_metadata(synthesis_result.findings, files_in_diff),
         files_in_diff,
@@ -1924,7 +2025,9 @@ async def _run_cross_chunk_synthesis(
         "synthesis",
         context_tokens=count_tokens(system_prompt) + count_tokens(synthesis_prompt),
     )
-    return await finalize_review(
+    synthesis_stage_started_at = monotonic()
+    synthesis_snapshot = _token_snapshot(context)
+    result = await finalize_review(
         system_prompt,
         [{"role": "user", "content": synthesis_prompt}],
         context,
@@ -1932,6 +2035,25 @@ async def _run_cross_chunk_synthesis(
         provider=synthesis_resolution.provider,
         allow_retry=False,
     )
+    await _record_model_audit(
+        context=context,
+        stage="synthesis",
+        provider=synthesis_resolution.provider,
+        model=synthesis_resolution.model,
+        token_before=synthesis_snapshot,
+        findings_count=len(result.findings),
+        decision="generated",
+        model_resolution=synthesis_resolution,
+        stage_started_at=synthesis_stage_started_at,
+        extra_metadata={
+            "chunk_mode": True,
+            "source_stage": "synthesis",
+            "chunk_count": len(chunk_plan.chunks),
+            "chunk_summaries_count": len(chunk_summaries),
+            "structured_findings_count": len(structured_findings),
+        },
+    )
+    return result
 
 
 def _filter_diff_files(

@@ -82,3 +82,10 @@ chunking:
   max_total_prompt_tokens: 120000
   max_latency_seconds: 240
   output_headroom_tokens: 4096
+
+fast_path:
+  enabled: true
+  allow_skip: true
+  skip_min_confidence: 90
+  light_review_min_confidence: 80
+  force_economy_on_light_review: false

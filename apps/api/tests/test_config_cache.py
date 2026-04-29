@@ -67,6 +67,7 @@ def test_deserialize_config_restores_fast_path_types() -> None:
             enabled=False,
             skip_min_confidence=96,
             light_review_min_confidence=84,
+            force_economy_on_light_review=True,
             max_diff_excerpt_tokens=1500,
             allow_skip=False,
             confidence_bug_check=False,
@@ -81,6 +82,7 @@ def test_deserialize_config_restores_fast_path_types() -> None:
     assert rehydrated.fast_path.enabled is False
     assert rehydrated.fast_path.skip_min_confidence == 96
     assert rehydrated.fast_path.light_review_min_confidence == 84
+    assert rehydrated.fast_path.force_economy_on_light_review is True
     assert rehydrated.fast_path.max_diff_excerpt_tokens == 1500
     assert rehydrated.fast_path.allow_skip is False
     assert rehydrated.fast_path.confidence_bug_check is False

@@ -98,6 +98,9 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         enabled=bool(fast_path_data.get("enabled", True)),
         skip_min_confidence=int(fast_path_data.get("skip_min_confidence", 90)),
         light_review_min_confidence=int(fast_path_data.get("light_review_min_confidence", 80)),
+        force_economy_on_light_review=bool(
+            fast_path_data.get("force_economy_on_light_review", False)
+        ),
         max_diff_excerpt_tokens=int(fast_path_data.get("max_diff_excerpt_tokens", 3000)),
         allow_skip=bool(fast_path_data.get("allow_skip", True)),
         confidence_bug_check=bool(fast_path_data.get("confidence_bug_check", True)),
