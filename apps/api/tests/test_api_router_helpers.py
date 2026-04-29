@@ -177,6 +177,33 @@ def test_review_list_item_serializes_expected_fields() -> None:
     assert item["completed_at"] is None
 
 
+def test_review_list_item_serializes_completed_at_and_null_usage() -> None:
+    completed = datetime(2026, 4, 1, 13, 0, 0, tzinfo=timezone.utc)
+    review = SimpleNamespace(
+        id=78,
+        installation_id=321,
+        repo_full_name="acme/repo",
+        pr_number=15,
+        status="done",
+        model_provider=None,
+        model="claude-sonnet-4-6",
+        tokens_used=None,
+        cost_usd=None,
+        findings=None,
+        debug_artifacts=None,
+        created_at=datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc),
+        completed_at=completed,
+    )
+
+    item = api_router._review_list_item(review)  # type: ignore[attr-defined]
+
+    assert item["tokens_used"] is None
+    assert item["cost_usd"] is None
+    assert item["files_changed"] is None
+    assert item["lines_changed"] is None
+    assert item["completed_at"] == completed.isoformat()
+
+
 # ---------------------------------------------------------------------------
 # _validate_repo_segment
 # ---------------------------------------------------------------------------
