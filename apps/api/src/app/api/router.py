@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from dataclasses import asdict
 from decimal import Decimal
-from typing import TypedDict, cast
+from typing import Annotated, TypedDict, cast
 
 import yaml
 from app.agent.profiler import profile_repo
@@ -567,14 +567,18 @@ async def generate_repo_codereview_template(
 async def list_reviews(
     installation_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
-    created_after: datetime | None = Query(
-        default=None,
-        description="ISO-8601: include reviews with created_at on or after this instant (UTC if naive).",
-    ),
-    created_before: datetime | None = Query(
-        default=None,
-        description="ISO-8601: include reviews with created_at on or before this instant (UTC if naive).",
-    ),
+    created_after: Annotated[
+        datetime | None,
+        Query(
+            description="ISO-8601: include reviews with created_at on or after this instant (UTC if naive).",
+        ),
+    ] = None,
+    created_before: Annotated[
+        datetime | None,
+        Query(
+            description="ISO-8601: include reviews with created_at on or before this instant (UTC if naive).",
+        ),
+    ] = None,
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[dict[str, object]]:
     time_clauses: list = []
