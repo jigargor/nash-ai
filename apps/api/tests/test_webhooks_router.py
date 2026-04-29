@@ -164,6 +164,35 @@ async def test_github_webhook_with_valid_signature_and_synchronize_action_enqueu
 
 
 @pytest.mark.anyio
+async def test_github_webhook_with_valid_signature_and_reopened_action_enqueues(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_queue(_redis: object, _payload: object) -> None:
+        calls.append("queued")
+
+    test_app.state.redis = object()
+    monkeypatch.setattr(webhook_router, "queue_pull_request_review", fake_queue)
+
+    payload = _payload_bytes(action="reopened")
+    response = await client.post(
+        "/webhooks/github",
+        content=payload,
+        headers={
+            "X-Hub-Signature-256": _signature(payload),
+            "X-GitHub-Event": "pull_request",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls == ["queued"]
+
+
+@pytest.mark.anyio
 async def test_github_webhook_with_installation_event_syncs(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

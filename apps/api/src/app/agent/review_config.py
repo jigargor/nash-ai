@@ -82,6 +82,7 @@ class FastPathConfig:
     allow_skip: bool = True
     confidence_bug_check: bool = True
     zero_confidence_limit: int = 5
+    post_classification_context_comment: bool = False
 
 
 @dataclass
@@ -470,6 +471,9 @@ def _parse_fast_path(raw_value: object) -> FastPathConfig:
         allow_skip=bool(raw_value.get("allow_skip", True)),
         confidence_bug_check=bool(raw_value.get("confidence_bug_check", True)),
         zero_confidence_limit=_normalize_positive_int(raw_value.get("zero_confidence_limit"), 5),
+        post_classification_context_comment=bool(
+            raw_value.get("post_classification_context_comment", False)
+        ),
     )
 
 

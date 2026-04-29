@@ -35,6 +35,17 @@ must keep file-surface fields separate from risk labels and file-class counters.
 - `file_classes`: class histogram from diff classification (for example `config_only: 1`)
 - `produces_findings`: always `false` for `fast_path`
 
+## FastPath-First Routing
+
+FastPath runs on every queued PR review and acts only as a router/classifier:
+
+- `skip_review`: stop before main review
+- `light_review`: run reduced-cost main review profile
+- `full_review`: run standard main review profile
+- `high_risk_review`: run escalated main review profile
+
+This stage does not generate findings. It provides pre-review routing context.
+
 Backward compatibility:
 
 - Legacy `review_surface` remains populated for older UI readers.
@@ -61,6 +72,18 @@ Fast-path confidence anomaly protection tracks repeated `0` confidence per:
 - model
 
 If repeated zero-confidence hits the configured limit (`zero_confidence_limit`, default `5`), routing escalates to full review to prevent rubber-stamping.
+
+## Optional Classification Context Comment
+
+Classification context is internal by default. Repositories can opt in to a
+pre-review PR comment by setting:
+
+```yaml
+fast_path:
+  post_classification_context_comment: true
+```
+
+When disabled (default), no public classification comment is posted.
 
 ## Rollback
 

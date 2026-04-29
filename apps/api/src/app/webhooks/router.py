@@ -126,7 +126,7 @@ async def github_webhook(request: Request) -> dict[str, bool]:
             pull_request_payload.model_dump(mode="json"),
         )
 
-    if pull_request_payload.action in {"opened", "synchronize"}:
+    if pull_request_payload.action in {"opened", "synchronize", "reopened"}:
         redis = require_app_redis(request)
         if await _is_duplicate_delivery(request, delivery_id):
             return {"ok": True}
@@ -136,7 +136,7 @@ async def github_webhook(request: Request) -> dict[str, bool]:
         await queue_pull_request_outcome_classification(redis, pull_request_payload)
     else:
         logger.warning(
-            "GitHub pull_request webhook ignored action=%s delivery_id=%s (only opened/synchronize/closed are handled)",
+            "GitHub pull_request webhook ignored action=%s delivery_id=%s (only opened/synchronize/reopened/closed are handled)",
             pull_request_payload.action,
             delivery_id,
         )

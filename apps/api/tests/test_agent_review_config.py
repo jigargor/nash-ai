@@ -42,6 +42,7 @@ def test_parse_fast_path_reads_thresholds_and_flags() -> None:
             "allow_skip": False,
             "confidence_bug_check": False,
             "zero_confidence_limit": 7,
+            "post_classification_context_comment": True,
         }
     )
 
@@ -52,6 +53,7 @@ def test_parse_fast_path_reads_thresholds_and_flags() -> None:
     assert fast_path.allow_skip is False
     assert fast_path.confidence_bug_check is False
     assert fast_path.zero_confidence_limit == 7
+    assert fast_path.post_classification_context_comment is True
 
 
 def test_parse_adaptive_threshold_reads_guardrails() -> None:

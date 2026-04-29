@@ -63,9 +63,10 @@ export function generateRepoTemplate(owner: string, repo: string, installationId
 export const CODEREVIEW_TEMPLATE_EXAMPLE = `# .codereview.yml
 # Balanced defaults: good precision, reasonable cost, max_mode on.
 #
-# PR controls (title or description, case-insensitive):
-#   [skip-nash-review]  — do not enqueue an automated review for this PR
-#   [force-nash-review] — if both tags appear, review still runs
+# FastPath always runs first and classifies each PR into:
+#   skip_review | light_review | full_review | high_risk_review
+# Manual tags like [skip-nash-review] / [force-nash-review] are optional,
+# and no longer required for normal routing.
 
 confidence_threshold: 0.88
 severity_threshold: medium
@@ -107,4 +108,7 @@ chunking:
   enabled: true
   proactive_threshold_tokens: 35000
   target_chunk_tokens: 18000
-  max_chunks: 8`;
+  max_chunks: 8
+
+fast_path:
+  post_classification_context_comment: false`;

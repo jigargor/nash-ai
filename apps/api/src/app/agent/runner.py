@@ -517,18 +517,37 @@ async def _track_fast_path_confidence_anomaly(
 def _review_config_for_fast_path_decision(
     review_config: ReviewConfig, decision: FastPathDecision
 ) -> ReviewConfig:
-    if decision.decision != "light_review" or review_config.model.explicit:
+    if decision.decision == "light_review" and not review_config.model.explicit:
+        existing = review_config.models.roles.get("primary_review")
+        if existing is not None and existing.provider and existing.model:
+            return review_config
+        roles = dict(review_config.models.roles)
+        roles["primary_review"] = (
+            replace(existing, tier="economy")
+            if existing is not None
+            else ModelRoleRoutingConfig(tier="economy")
+        )
+        return replace(review_config, models=replace(review_config.models, roles=roles))
+    if decision.decision != "high_risk_review":
         return review_config
-    existing = review_config.models.roles.get("primary_review")
-    if existing is not None and existing.provider and existing.model:
-        return review_config
+
     roles = dict(review_config.models.roles)
-    roles["primary_review"] = (
-        replace(existing, tier="economy")
-        if existing is not None
-        else ModelRoleRoutingConfig(tier="economy")
+    existing = roles.get("primary_review")
+    if not review_config.model.explicit and not (
+        existing is not None and existing.provider and existing.model
+    ):
+        roles["primary_review"] = (
+            replace(existing, tier="frontier")
+            if existing is not None
+            else ModelRoleRoutingConfig(tier="frontier")
+        )
+    return replace(
+        review_config,
+        severity_threshold="low",
+        packaging=replace(review_config.packaging, partial_review_mode_enabled=False),
+        max_mode=replace(review_config.max_mode, enabled=True),
+        models=replace(review_config.models, roles=roles),
     )
-    return replace(review_config, models=replace(review_config.models, roles=roles))
 
 
 def _apply_missing_confidence_guardrail(
@@ -558,6 +577,42 @@ def _apply_missing_confidence_guardrail(
         ),
         True,
     )
+
+
+def _format_fast_path_classification_context(decision: FastPathDecision) -> str:
+    risk_labels = ", ".join(decision.risk_labels[:4]) if decision.risk_labels else "none"
+    confidence = decision.confidence if decision.confidence is not None else "unknown"
+    return (
+        "FastPath classification context (routing only):\n\n"
+        f"- decision: `{decision.decision}`\n"
+        f"- confidence: `{confidence}`\n"
+        f"- risk_labels: `{risk_labels}`\n"
+        f"- reason: {decision.reason}"
+    )
+
+
+async def _maybe_post_fast_path_classification_context(
+    *,
+    gh: GitHubClient,
+    context: dict[str, Any],
+    review_config: ReviewConfig,
+    decision: FastPathDecision,
+) -> None:
+    if not review_config.fast_path.post_classification_context_comment:
+        return
+    try:
+        await gh.post_issue_comment(
+            context["owner"],
+            context["repo"],
+            int(context["pr_number"]),
+            _format_fast_path_classification_context(decision),
+        )
+    except Exception:
+        logger.warning(
+            "Failed to post fast-path classification context review_id=%s decision=%s",
+            context.get("review_id"),
+            decision.decision,
+        )
 
 
 async def _load_user_provider_keys(github_id: int) -> dict[str, str]:
@@ -707,6 +762,12 @@ async def run_review(
             commits=commits,
             review_config=review_config,
             diff_tokens=diff_tokens,
+        )
+        await _maybe_post_fast_path_classification_context(
+            gh=gh,
+            context=context,
+            review_config=review_config,
+            decision=fast_path_decision,
         )
         if fast_path_decision.decision == "skip_review":
             if fast_path_resolution is not None:

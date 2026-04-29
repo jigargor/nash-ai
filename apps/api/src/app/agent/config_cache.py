@@ -102,6 +102,9 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         allow_skip=bool(fast_path_data.get("allow_skip", True)),
         confidence_bug_check=bool(fast_path_data.get("confidence_bug_check", True)),
         zero_confidence_limit=int(fast_path_data.get("zero_confidence_limit", 5)),
+        post_classification_context_comment=bool(
+            fast_path_data.get("post_classification_context_comment", False)
+        ),
     )
     adaptive_threshold_data = dict(data.get("adaptive_threshold") or {})
     adaptive_threshold = AdaptiveThresholdConfig(

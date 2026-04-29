@@ -71,6 +71,7 @@ def test_deserialize_config_restores_fast_path_types() -> None:
             allow_skip=False,
             confidence_bug_check=False,
             zero_confidence_limit=9,
+            post_classification_context_comment=True,
         )
     )
 
@@ -84,3 +85,4 @@ def test_deserialize_config_restores_fast_path_types() -> None:
     assert rehydrated.fast_path.allow_skip is False
     assert rehydrated.fast_path.confidence_bug_check is False
     assert rehydrated.fast_path.zero_confidence_limit == 9
+    assert rehydrated.fast_path.post_classification_context_comment is True
