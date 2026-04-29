@@ -91,6 +91,12 @@ async def _dispose_global_engine_after_test() -> None:
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _enable_review_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.webhooks.handlers.settings.enable_reviews", True)
+    monkeypatch.setattr("app.webhooks.handlers.settings.openai_api_key", "test-key")
+
+
 @pytest.mark.anyio
 async def test_sync_installation_from_webhook_tracks_uninstall_and_reinstall() -> None:
     installation_id = randint(100_000_000, 999_999_999)
@@ -257,7 +263,7 @@ async def test_queue_pull_request_review_skips_when_rate_limited(
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_skips_when_skip_tag_in_title(
+async def test_queue_pull_request_review_enqueues_when_skip_tag_in_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = _FakeRedis()
@@ -274,7 +280,8 @@ async def test_queue_pull_request_review_skips_when_skip_tag_in_title(
 
     await queue_pull_request_review(redis, payload)
 
-    assert not redis.calls
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0] == "review_pr"
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, payload.installation.id)
         count = await session.scalar(
@@ -283,11 +290,11 @@ async def test_queue_pull_request_review_skips_when_skip_tag_in_title(
             .where(Review.pr_number == payload.pull_request.number)
             .where(Review.pr_head_sha == payload.pull_request.head.sha)
         )
-    assert count == 0
+    assert count == 1
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_skips_when_skip_tag_in_body(
+async def test_queue_pull_request_review_enqueues_when_skip_tag_in_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = _FakeRedis()
@@ -303,7 +310,8 @@ async def test_queue_pull_request_review_skips_when_skip_tag_in_body(
     monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
 
     await queue_pull_request_review(redis, payload)
-    assert not redis.calls
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0] == "review_pr"
 
 
 @pytest.mark.anyio
@@ -344,7 +352,8 @@ async def test_queue_pull_request_review_skip_tag_case_insensitive(
     monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
 
     await queue_pull_request_review(redis, payload)
-    assert not redis.calls
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0] == "review_pr"
 
 
 @pytest.mark.anyio

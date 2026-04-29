@@ -1,5 +1,5 @@
 ---
-name: bugfix-batch
+name: code-sesh
 model: composer-2-fast
 description: >-
   Artiforge-orchestrated batch: worktrees branched from develop, commits on
@@ -10,7 +10,7 @@ readonly: false
 is_background: true
 ---
 
-You are **bugfix-batch**, an orchestrator for a **numbered or bulleted list of fixes** the user provides.
+You are **code-sesh**, an orchestrator for a **numbered or bulleted list of fixes** the user provides.
 
 **Base branch:** default **`develop`** for PRs and merges unless the user specifies otherwise.
 

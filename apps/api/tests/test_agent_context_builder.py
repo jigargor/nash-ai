@@ -51,6 +51,9 @@ index 1111111..2222222 100644
     assert bundle.package.anchor_coverage == 1.0
     assert bundle.telemetry.anchor_coverage == 1.0
     assert bundle.fetched_files["app.py"].startswith("line_1")
+    assert bundle.telemetry.observe_mode is True
+    assert bundle.telemetry.pressure_state in {"green", "yellow", "orange", "red"}
+    assert "L3_vs_L0" in bundle.telemetry.layer_duplication_tokens
 
 
 def test_build_context_bundle_keeps_anchor_coverage_when_file_fetch_fails() -> None:
@@ -81,6 +84,7 @@ index 1111111..2222222 100644
     assert bundle.fetched_files == {}
     assert "## Anchor map (content-validated)" in bundle.rendered
     assert "app.py:145 => value = new_call()" in bundle.rendered
+    assert bundle.telemetry.poisoning_score >= 0.0
 
 
 def test_context_bundle_quality_at_cost_curve_keeps_anchor_coverage() -> None:
@@ -122,3 +126,4 @@ index 1111111..2222222 100644
     assert large_tokens >= small_tokens
     assert small_bundle.package.anchor_coverage == 1.0
     assert large_bundle.package.anchor_coverage == 1.0
+    assert large_bundle.telemetry.bloat_score >= 0.0

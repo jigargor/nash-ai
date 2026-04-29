@@ -46,7 +46,7 @@ If they list numbers, restrict to that set only.
 
 ### D) Explicit head-branch allowlist
 
-When another workflow (for example **bugfix-batch**) passes an **exact list** of `headRefName` values (such as `bugfix/foo`, `bugfix/bar`), process **only** those heads into the named base—do not expand to pattern sweeps or unrelated PRs.
+When another workflow (for example **code-sesh**) passes an **exact list** of `headRefName` values (such as `bugfix/foo`, `bugfix/bar`), process **only** those heads into the named base—do not expand to pattern sweeps or unrelated PRs.
 
 ## Clarifying questions (use when anything is ambiguous)
 

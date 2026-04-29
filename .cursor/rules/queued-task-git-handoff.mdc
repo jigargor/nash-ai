@@ -1,0 +1,15 @@
+---
+description: Pause for a commit checkpoint when queued tasks partially shift context
+alwaysApply: true
+---
+
+# Queued Task Git Handoff
+
+When a new queued user message arrives in the same chat and is only partially related to the work that came before:
+
+- Pause before starting the new task and assess whether the current changes form a coherent checkpoint.
+- If they do, ask the user whether to stage and commit the completed or checkpoint-ready changes first.
+- Do not stage or commit automatically. Commit only after the user explicitly confirms.
+- If the user confirms, stage only files relevant to that checkpoint and leave unrelated or in-progress changes untouched.
+- Draft a concise commit message that explains why the checkpoint exists, then run the normal git status/diff review before committing.
+- If the previous work is not checkpoint-ready, state what remains unfinished and continue only after the user chooses whether to finish, park, or switch tasks.

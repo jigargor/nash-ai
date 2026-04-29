@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     r2_secret_access_key: str | None = None
     r2_region: str = "auto"
     r2_snapshot_prefix: str = "review-snapshots"
+    turnstile_secret_key: str | None = None
+    turnstile_siteverify_url: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
     # When R2 archive is enabled: UTC instant you last rotated R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY.
     r2_credentials_rotated_at: datetime | None = None
     # Max age for those keys before startup fails (production vs non-production).

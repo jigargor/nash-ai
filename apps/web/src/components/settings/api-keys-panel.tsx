@@ -12,6 +12,67 @@ const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
 };
 
+const CODEREVIEW_GENERATOR_PROMPT = `You are generating .codereview.yml for Nash AI.
+
+Output contract:
+- Return only valid YAML (no markdown, no explanation).
+- Include keys: confidence_threshold, severity_threshold, categories, review_drafts,
+  max_findings_per_pr, prompt_additions, ignore_paths, model, max_mode, budgets,
+  layered_context_enabled, partial_review_mode_enabled, partial_review_changed_lines_threshold,
+  summarization_enabled, max_summary_calls_per_review, generated_paths, vendor_paths, chunking.
+
+Policy:
+- Prioritize security + correctness findings.
+- Keep defaults practical for ongoing PR traffic (balanced precision/cost).
+- If recent PRs are large, increase chunking/budget caps moderately.
+- If dismissal rate is high, raise confidence threshold and reduce max findings.
+- Keep generated/vendor exclusions in place.
+
+Context:
+- Repo: {{owner}}/{{repo}}
+- Frameworks: {{frameworks}}
+- Last 30d PR stats (Railway): {{telemetry_summary}}
+- User preference: {{risk_profile}}`;
+
+const CODEREVIEW_GENERATOR_SKILLFILE = `# Skill: codereview-yaml-generator
+
+## Purpose
+Generate high-signal .codereview.yml configs for Nash AI repositories.
+
+## Inputs
+- owner, repo, installation_id
+- detected frameworks
+- recent repo telemetry (tokens, latency, finding outcomes)
+- user risk/cost preference
+
+## Rules
+- Return YAML only.
+- Never include secrets or tokens.
+- Use bounded thresholds and token budgets.
+- Prefer correctness/security over style noise.
+- Validate parseability before returning.
+
+## Output fields
+- confidence_threshold
+- severity_threshold
+- categories
+- max_findings_per_pr
+- model and max_mode
+- budgets + chunking
+- prompt_additions
+
+## Adaptation logic
+- large PRs => increase proactive_threshold_tokens and total_cap safely
+- high dismiss rate => raise confidence_threshold
+- low signal/noise and low cost pressure => widen categories slightly
+`;
+
+const RELEASE_GUARDRAILS_PROMPT = `Write prompt_additions for .codereview.yml that enforce:
+- evidence-backed findings only
+- no style-only comments before material risk
+- include minimal remediation suggestions
+- avoid duplicate findings across related hunks`;
+
 function KeyRow({ keyStatus }: { keyStatus: KeyStatus }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
@@ -107,6 +168,13 @@ function KeyRow({ keyStatus }: { keyStatus: KeyStatus }) {
 
 export function ApiKeysPanel() {
   const { data, isLoading, error } = useUserKeys();
+  const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
+
+  async function handleCopy(label: string, text: string): Promise<void> {
+    await navigator.clipboard.writeText(text);
+    setCopiedLabel(label);
+    window.setTimeout(() => setCopiedLabel((current) => (current === label ? null : current)), 1200);
+  }
 
   return (
     <Panel>
@@ -126,6 +194,50 @@ export function ApiKeysPanel() {
           ))}
         </div>
       )}
+
+      <div style={{ marginTop: "1rem", borderTop: "1px solid var(--border)", paddingTop: "0.9rem", display: "grid", gap: "0.8rem" }}>
+        <h3 style={{ margin: 0 }}>Personalize</h3>
+        <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.875rem" }}>
+          Use these one-click prompt + skillfile templates to regenerate repository-specific{" "}
+          <code>.codereview.yml</code> policies from production behavior.
+        </p>
+
+        <div style={{ display: "grid", gap: "0.45rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+            <strong style={{ fontSize: "0.9rem" }}>Generator prompt</strong>
+            <button className="button button-ghost" style={{ fontSize: "0.8rem" }} onClick={() => void handleCopy("prompt", CODEREVIEW_GENERATOR_PROMPT)}>
+              {copiedLabel === "prompt" ? "Copied" : "Copy prompt"}
+            </button>
+          </div>
+          <pre style={{ margin: 0, maxHeight: "14rem", overflow: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", padding: "0.65rem", background: "var(--card-muted)", fontSize: "0.75rem", lineHeight: 1.4 }}>
+            {CODEREVIEW_GENERATOR_PROMPT}
+          </pre>
+        </div>
+
+        <div style={{ display: "grid", gap: "0.45rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+            <strong style={{ fontSize: "0.9rem" }}>Skillfile template</strong>
+            <button className="button button-ghost" style={{ fontSize: "0.8rem" }} onClick={() => void handleCopy("skill", CODEREVIEW_GENERATOR_SKILLFILE)}>
+              {copiedLabel === "skill" ? "Copied" : "Copy skillfile"}
+            </button>
+          </div>
+          <pre style={{ margin: 0, maxHeight: "14rem", overflow: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", padding: "0.65rem", background: "var(--card-muted)", fontSize: "0.75rem", lineHeight: 1.4 }}>
+            {CODEREVIEW_GENERATOR_SKILLFILE}
+          </pre>
+        </div>
+
+        <div style={{ display: "grid", gap: "0.45rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+            <strong style={{ fontSize: "0.9rem" }}>Bonus prompt additions block</strong>
+            <button className="button button-ghost" style={{ fontSize: "0.8rem" }} onClick={() => void handleCopy("guardrails", RELEASE_GUARDRAILS_PROMPT)}>
+              {copiedLabel === "guardrails" ? "Copied" : "Copy block"}
+            </button>
+          </div>
+          <pre style={{ margin: 0, maxHeight: "10rem", overflow: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", padding: "0.65rem", background: "var(--card-muted)", fontSize: "0.75rem", lineHeight: 1.4 }}>
+            {RELEASE_GUARDRAILS_PROMPT}
+          </pre>
+        </div>
+      </div>
     </Panel>
   );
 }

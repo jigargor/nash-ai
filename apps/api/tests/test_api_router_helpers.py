@@ -6,9 +6,11 @@ instrumentation differences.
 
 Endpoint integration tests live in test_api_router.py.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -76,21 +78,57 @@ def test_as_int_or_none_none() -> None:
 
 
 # ---------------------------------------------------------------------------
+# status filter helpers
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_review_status_filter_maps_all_to_none() -> None:
+    assert api_router._normalize_review_status_filter("all") is None  # type: ignore[attr-defined]
+
+
+def test_normalize_review_status_filter_none_stays_none() -> None:
+    assert api_router._normalize_review_status_filter(None) is None  # type: ignore[attr-defined]
+
+
+def test_normalize_review_status_filter_blank_to_none() -> None:
+    assert api_router._normalize_review_status_filter("   ") is None  # type: ignore[attr-defined]
+
+
+def test_normalize_review_status_filter_lowercases() -> None:
+    assert api_router._normalize_review_status_filter(" RUNNING ") == "running"  # type: ignore[attr-defined]
+
+
+def test_status_clause_running_matches_queued_or_running() -> None:
+    clause = api_router._status_clause("running")  # type: ignore[attr-defined]
+    compiled = str(clause.compile(compile_kwargs={"literal_binds": True}))
+    assert "reviews.status = 'queued'" in compiled
+    assert "reviews.status = 'running'" in compiled
+
+
+def test_status_clause_non_running_matches_exact_value() -> None:
+    clause = api_router._status_clause("skipped")  # type: ignore[attr-defined]
+    compiled = str(clause.compile(compile_kwargs={"literal_binds": True}))
+    assert compiled.strip() == "reviews.status = 'skipped'"
+
+
+# ---------------------------------------------------------------------------
 # _diff_stats_from_debug_artifacts
 # ---------------------------------------------------------------------------
 
 
 def test_diff_stats_returns_values() -> None:
-    review = SimpleNamespace(debug_artifacts={
-        "fast_path_decision": {"changed_file_count": 5, "changed_line_count": 120}
-    })
+    review = SimpleNamespace(
+        debug_artifacts={"fast_path_decision": {"changed_file_count": 5, "changed_line_count": 120}}
+    )
     files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
     assert files == 5
     assert lines == 120
 
 
 def test_diff_stats_none_artifacts() -> None:
-    files, lines = api_router._diff_stats_from_debug_artifacts(SimpleNamespace(debug_artifacts=None))  # type: ignore[attr-defined]
+    files, lines = api_router._diff_stats_from_debug_artifacts(
+        SimpleNamespace(debug_artifacts=None)
+    )  # type: ignore[attr-defined]
     assert files is None and lines is None
 
 
@@ -106,6 +144,78 @@ def test_diff_stats_non_dict_fast_path() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _ensure_utc / _review_list_item
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_utc_sets_timezone_for_naive_datetime() -> None:
+    naive = datetime(2026, 4, 1, 12, 0, 0)
+    normalized = api_router._ensure_utc(naive)  # type: ignore[attr-defined]
+    assert normalized.tzinfo == timezone.utc
+
+
+def test_ensure_utc_keeps_aware_datetime() -> None:
+    aware = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
+    normalized = api_router._ensure_utc(aware)  # type: ignore[attr-defined]
+    assert normalized is aware
+
+
+def test_review_list_item_serializes_expected_fields() -> None:
+    review = SimpleNamespace(
+        id=77,
+        installation_id=321,
+        repo_full_name="acme/repo",
+        pr_number=14,
+        status="skipped",
+        model_provider="openai",
+        model="gpt-5.5",
+        tokens_used=1234,
+        cost_usd=Decimal("0.123456"),
+        findings={"findings": [{"severity": "low"}]},
+        debug_artifacts={"fast_path_decision": {"changed_file_count": 2, "changed_line_count": 40}},
+        created_at=datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc),
+        completed_at=None,
+    )
+
+    item = api_router._review_list_item(review)  # type: ignore[attr-defined]
+
+    assert item["id"] == 77
+    assert item["status"] == "skipped"
+    assert item["findings_count"] == 1
+    assert item["files_changed"] == 2
+    assert item["lines_changed"] == 40
+    assert item["cost_usd"] == "0.123456"
+    assert item["completed_at"] is None
+
+
+def test_review_list_item_serializes_completed_at_and_null_usage() -> None:
+    completed = datetime(2026, 4, 1, 13, 0, 0, tzinfo=timezone.utc)
+    review = SimpleNamespace(
+        id=78,
+        installation_id=321,
+        repo_full_name="acme/repo",
+        pr_number=15,
+        status="done",
+        model_provider=None,
+        model="claude-sonnet-4-6",
+        tokens_used=None,
+        cost_usd=None,
+        findings=None,
+        debug_artifacts=None,
+        created_at=datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc),
+        completed_at=completed,
+    )
+
+    item = api_router._review_list_item(review)  # type: ignore[attr-defined]
+
+    assert item["tokens_used"] is None
+    assert item["cost_usd"] is None
+    assert item["files_changed"] is None
+    assert item["lines_changed"] is None
+    assert item["completed_at"] == completed.isoformat()
+
+
+# ---------------------------------------------------------------------------
 # _validate_repo_segment
 # ---------------------------------------------------------------------------
 
@@ -118,6 +228,7 @@ def test_validate_repo_segment_valid() -> None:
 def test_validate_repo_segment_invalid_slash() -> None:
     from fastapi import HTTPException
     import pytest
+
     with pytest.raises(HTTPException) as exc_info:
         api_router._validate_repo_segment("bad/segment", "owner")  # type: ignore[attr-defined]
     assert exc_info.value.status_code == 400
@@ -126,6 +237,7 @@ def test_validate_repo_segment_invalid_slash() -> None:
 def test_validate_repo_segment_empty() -> None:
     from fastapi import HTTPException
     import pytest
+
     with pytest.raises(HTTPException):
         api_router._validate_repo_segment("  ", "owner")  # type: ignore[attr-defined]
 
@@ -162,11 +274,13 @@ def test_normalize_generated_config_defaults() -> None:
 
 
 def test_normalize_generated_config_with_fields() -> None:
-    config = api_router._normalize_generated_config({  # type: ignore[attr-defined]
-        "confidence_threshold": 90,
-        "severity_threshold": "high",
-        "categories": ["security", "correctness"],
-    })
+    config = api_router._normalize_generated_config(
+        {  # type: ignore[attr-defined]
+            "confidence_threshold": 90,
+            "severity_threshold": "high",
+            "categories": ["security", "correctness"],
+        }
+    )
     assert config.confidence_threshold == 90
     assert config.severity_threshold == "high"
     assert "security" in config.categories
@@ -320,6 +434,25 @@ async def test_list_installation_rows_includes_rows_when_allowed() -> None:
 
 
 @pytest.mark.anyio
+async def test_list_installation_rows_active_only_adds_suspended_filter() -> None:
+    class _CapturingSession:
+        def __init__(self) -> None:
+            self.compiled_sql = ""
+
+        async def scalars(self, stmt: object) -> _FakeScalarResult:
+            self.compiled_sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+            return _FakeScalarResult([])
+
+    session = _CapturingSession()
+    await api_router._list_installation_rows(  # type: ignore[attr-defined]
+        session,  # type: ignore[arg-type]
+        installation_ids={123},
+        active_only=True,
+    )
+    assert "installations.suspended_at IS NULL" in session.compiled_sql
+
+
+@pytest.mark.anyio
 async def test_allowed_installation_ids_casts_results_to_ints() -> None:
     session = _FakeSessionForAllowedInstallations([123, 456])
     allowed = await api_router._allowed_installation_ids(  # type: ignore[attr-defined]
@@ -370,9 +503,7 @@ async def test_list_installations_direct_formats_output(monkeypatch: pytest.Monk
     monkeypatch.setattr(api_router, "_list_installation_rows", _fake_list_rows)
 
     result = await api_router.list_installations(
-        active_only=True,
-        limit=50,
-        current_user=CurrentDashboardUser(github_id=1, login="tester")
+        active_only=True, limit=50, current_user=CurrentDashboardUser(github_id=1, login="tester")
     )
     assert result[0]["installation_id"] == 123
     assert "active" in result[0]
@@ -389,7 +520,9 @@ class _FakeReviewSession:
             model_provider="anthropic",
             model="claude-sonnet-4-5",
             findings={"findings": []},
-            debug_artifacts={"fast_path_decision": {"changed_file_count": 3, "changed_line_count": 42}},
+            debug_artifacts={
+                "fast_path_decision": {"changed_file_count": 3, "changed_line_count": 42}
+            },
             tokens_used=10,
             cost_usd=0.01,
         )
@@ -428,6 +561,109 @@ async def test_list_reviews_direct_installation_branch(monkeypatch: pytest.Monke
 
 
 @pytest.mark.anyio
+async def test_list_reviews_direct_installation_branch_with_status_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeReviewSession()
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
+
+    async def _fake_allowed(_session: object, _user: CurrentDashboardUser) -> set[int]:
+        return {321}
+
+    async def _fake_set_ctx(_session: object, _installation_id: int) -> None:
+        return None
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed)
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
+
+    result = await api_router.list_reviews(
+        installation_id=321,
+        limit=50,
+        status="running",
+        current_user=CurrentDashboardUser(github_id=1, login="tester"),
+    )
+    assert len(result) == 1
+    assert result[0]["id"] == 99
+
+
+@pytest.mark.anyio
+async def test_list_reviews_direct_installation_created_window_invokes_ensure_utc_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cover time_filter + combined where() on list_reviews scoped to one installation."""
+    session = _FakeReviewSession()
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
+
+    async def _fake_allowed(_session: object, _user: CurrentDashboardUser) -> set[int]:
+        return {321}
+
+    async def _fake_set_ctx(_session: object, _installation_id: int) -> None:
+        return None
+
+    saw: list[datetime] = []
+
+    original_ensure = api_router._ensure_utc
+
+    def _tracking_ensure(dt: datetime) -> datetime:
+        saw.append(dt)
+        return original_ensure(dt)
+
+    created_after = datetime(2025, 6, 1, 0, 0, 0)
+    created_before = datetime(2030, 1, 15, 12, 30, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed)
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
+    monkeypatch.setattr(api_router, "_ensure_utc", _tracking_ensure)
+
+    result = await api_router.list_reviews(
+        installation_id=321,
+        limit=50,
+        created_after=created_after,
+        created_before=created_before,
+        current_user=CurrentDashboardUser(github_id=1, login="tester"),
+    )
+    assert len(result) == 1
+    assert len(saw) == 2
+
+
+@pytest.mark.anyio
+async def test_list_reviews_all_installations_branch_with_status_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _FakeReviewSession()
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
+
+    async def _fake_allowed(_session: object, _user: CurrentDashboardUser) -> set[int]:
+        return {321}
+
+    async def _fake_set_ctx(_session: object, _installation_id: int) -> None:
+        return None
+
+    async def _fake_list_rows(_session: object, **_kwargs: object) -> list[Installation]:
+        return [
+            Installation(
+                installation_id=321,
+                account_login="acme",
+                account_type="Organization",
+                suspended_at=None,
+            )
+        ]
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed)
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
+    monkeypatch.setattr(api_router, "_list_installation_rows", _fake_list_rows)
+
+    result = await api_router.list_reviews(
+        installation_id=None,
+        limit=50,
+        status="skipped",
+        current_user=CurrentDashboardUser(github_id=1, login="tester"),
+    )
+    assert len(result) == 1
+    assert result[0]["id"] == 99
+
+
+@pytest.mark.anyio
 async def test_list_repos_direct_installation_branch_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _FakeEmptyRepoSession()
     monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
@@ -443,6 +679,39 @@ async def test_list_repos_direct_installation_branch_empty(monkeypatch: pytest.M
 
     result = await api_router.list_repos(
         installation_id=321,
+        limit=10,
+        current_user=CurrentDashboardUser(github_id=1, login="tester"),
+    )
+    assert result == []
+
+
+@pytest.mark.anyio
+async def test_list_repos_all_installations_branch_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _FakeEmptyRepoSession()
+    monkeypatch.setattr(api_router, "AsyncSessionLocal", lambda: _FakeSessionContext(session))
+
+    async def _fake_allowed(_session: object, _user: CurrentDashboardUser) -> set[int]:
+        return {321}
+
+    async def _fake_set_ctx(_session: object, _installation_id: int) -> None:
+        return None
+
+    async def _fake_list_rows(_session: object, **_kwargs: object) -> list[Installation]:
+        return [
+            Installation(
+                installation_id=321,
+                account_login="acme",
+                account_type="Organization",
+                suspended_at=None,
+            )
+        ]
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed)
+    monkeypatch.setattr(api_router, "set_installation_context", _fake_set_ctx)
+    monkeypatch.setattr(api_router, "_list_installation_rows", _fake_list_rows)
+
+    result = await api_router.list_repos(
+        installation_id=None,
         limit=10,
         current_user=CurrentDashboardUser(github_id=1, login="tester"),
     )

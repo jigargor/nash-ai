@@ -60,6 +60,7 @@ export async function actionFetchReviews(
   if (installationId) params.set("installation_id", String(installationId));
   if (filters?.createdAfter) params.set("created_after", filters.createdAfter);
   if (filters?.createdBefore) params.set("created_before", filters.createdBefore);
+  if (filters?.status && filters.status !== "all") params.set("status", filters.status);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return serverBffFetch<ReviewListItem[]>(`/api/v1/reviews${suffix}`);
 }
@@ -99,10 +100,14 @@ export async function actionFetchOutcomeSummary(
 export async function actionRerunReview(
   reviewId: number,
   installationId: number,
+  turnstileToken: string | null,
 ): Promise<{ ok: boolean; review_id: number }> {
   return serverBffFetch<{ ok: boolean; review_id: number }>(
     `/api/v1/reviews/${reviewId}/rerun?installation_id=${installationId}`,
-    { method: "POST" },
+    {
+      method: "POST",
+      body: JSON.stringify({ turnstile_token: turnstileToken }),
+    },
   );
 }
 

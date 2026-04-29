@@ -8,7 +8,6 @@ import { StateBlock } from "@/components/ui/state-block";
 import { useInstallations } from "@/hooks/use-installations";
 import { useGenerateRepoTemplate } from "@/hooks/use-repo-template";
 import { useRepos } from "@/hooks/use-repos";
-import { CODEREVIEW_TEMPLATE_EXAMPLE } from "@/lib/api/repos";
 import { downloadTextFile } from "@/lib/download-text-file";
 
 export default function RepositoriesPage() {
@@ -54,15 +53,33 @@ export default function RepositoriesPage() {
         const installation = installations.data.find((item) => item.installation_id === repo.installation_id);
         const [owner, repoName] = repo.repo_full_name.split("/", 2);
         const repoKey = `${repo.installation_id}:${repo.repo_full_name}`;
+        const repoUrl = owner && repoName ? `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}` : null;
+        const latestPrUrl =
+          repoUrl && repo.latest_pr_number
+            ? `${repoUrl}/pull/${encodeURIComponent(String(repo.latest_pr_number))}`
+            : null;
         return (
           <Panel key={`${repo.installation_id}:${repo.repo_full_name}`}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center" }}>
               <div>
                 <h3 style={{ margin: 0 }}>
-                  {repo.repo_full_name}
+                  {repoUrl ? (
+                    <a href={repoUrl} target="_blank" rel="noopener noreferrer">
+                      {repo.repo_full_name}
+                    </a>
+                  ) : (
+                    repo.repo_full_name
+                  )}
                 </h3>
                 <p style={{ margin: "0.4rem 0 0", color: "var(--text-muted)" }}>
-                  {installation?.account_login ?? "Installation"} #{repo.installation_id} / latest PR #{repo.latest_pr_number}
+                  {installation?.account_login ?? "Installation"} #{repo.installation_id} / latest{" "}
+                  {latestPrUrl ? (
+                    <a href={latestPrUrl} target="_blank" rel="noopener noreferrer">
+                      PR #{repo.latest_pr_number}
+                    </a>
+                  ) : (
+                    <>PR #{repo.latest_pr_number}</>
+                  )}
                 </p>
               </div>
               <span className="status-pill">{repo.latest_status}</span>
@@ -106,16 +123,9 @@ export default function RepositoriesPage() {
                     setStatusByRepo((prev) => ({ ...prev, [repoKey]: message }));
                   }
                 }}
-                disabled={repo.ai_template_generated || generateTemplate.isPending}
+                disabled={generateTemplate.isPending}
               >
-                {repo.ai_template_generated ? "AI template already generated" : "Generate AI .codereview.yml"}
-              </button>
-              <button
-                type="button"
-                className="button button-ghost"
-                onClick={() => void downloadTextFile(".codereview.yml.example", CODEREVIEW_TEMPLATE_EXAMPLE)}
-              >
-                Download example template
+                {generateTemplate.isPending ? "Regenerating .codereview.yml…" : "Regenerate AI .codereview.yml"}
               </button>
               <Link href="/settings" className="button button-ghost">
                 Manage settings

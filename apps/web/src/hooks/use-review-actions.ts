@@ -14,8 +14,15 @@ interface RerunContext {
 export function useRerunReview() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ reviewId, installationId }: { reviewId: number; installationId: number }) =>
-      actionRerunReview(reviewId, installationId),
+    mutationFn: ({
+      reviewId,
+      installationId,
+      turnstileToken,
+    }: {
+      reviewId: number;
+      installationId: number;
+      turnstileToken: string | null;
+    }) => actionRerunReview(reviewId, installationId, turnstileToken),
     onMutate: async ({ reviewId, installationId }) => {
       const reviewQueryKey = ["review", reviewId, installationId] as const;
       await queryClient.cancelQueries({ queryKey: reviewQueryKey });

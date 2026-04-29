@@ -1,9 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import React from "react";
 
 import { PrReviewPageClient } from "@/components/review/pr-review-page-client";
 import { useReviewUiStore } from "@/stores/review-ui-store";
+
+const rerunState = {
+  isPending: false,
+};
 
 vi.mock("next/link", () => ({
   default: (props: React.ComponentProps<"a"> & { href: string }) => {
@@ -77,7 +81,7 @@ vi.mock("@/hooks/use-review-model-audits", () => ({
 vi.mock("@/hooks/use-review-actions", () => ({
   useRerunReview: () => ({
     mutate: vi.fn(),
-    isPending: false,
+    isPending: rerunState.isPending,
   }),
   useDismissFinding: () => ({
     mutateAsync: vi.fn(),
@@ -86,6 +90,7 @@ vi.mock("@/hooks/use-review-actions", () => ({
 
 describe("PrReviewPageClient", () => {
   beforeEach(() => {
+    rerunState.isPending = false;
     useReviewUiStore.setState({
       selectedFindingIndex: null,
       severityFilters: {},
@@ -108,5 +113,16 @@ describe("PrReviewPageClient", () => {
     fireEvent.click(screen.getAllByText("first")[0]);
 
     expect(useReviewUiStore.getState().selectedFindingIndex).toBe(0);
+  });
+
+  it("hides findings workspace while rerun is pending", () => {
+    rerunState.isPending = true;
+    const { container } = render(
+      <PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />,
+    );
+    const scoped = within(container);
+
+    expect(scoped.queryAllByText("first")).toHaveLength(0);
+    expect(scoped.queryAllByText("second")).toHaveLength(0);
   });
 });

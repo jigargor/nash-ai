@@ -9,7 +9,13 @@ import { isReviewInFlightStatus } from "@/lib/review-status";
 
 export function useReviews(installationId?: number, filters?: ReviewListFilters) {
   return useQuery({
-    queryKey: ["reviews", installationId ?? null, filters?.createdAfter ?? null, filters?.createdBefore ?? null],
+    queryKey: [
+      "reviews",
+      installationId ?? null,
+      filters?.createdAfter ?? null,
+      filters?.createdBefore ?? null,
+      filters?.status ?? "all",
+    ],
     queryFn: () => actionFetchReviews(installationId, filters),
     ...dashboardListMetricsQueryOptions,
     refetchInterval: (query) => {

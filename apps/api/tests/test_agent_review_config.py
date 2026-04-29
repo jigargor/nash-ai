@@ -38,20 +38,24 @@ def test_parse_fast_path_reads_thresholds_and_flags() -> None:
             "enabled": False,
             "skip_min_confidence": 95,
             "light_review_min_confidence": 82,
+            "force_economy_on_light_review": True,
             "max_diff_excerpt_tokens": 1200,
             "allow_skip": False,
             "confidence_bug_check": False,
             "zero_confidence_limit": 7,
+            "post_classification_context_comment": True,
         }
     )
 
     assert fast_path.enabled is False
     assert fast_path.skip_min_confidence == 95
     assert fast_path.light_review_min_confidence == 82
+    assert fast_path.force_economy_on_light_review is True
     assert fast_path.max_diff_excerpt_tokens == 1200
     assert fast_path.allow_skip is False
     assert fast_path.confidence_bug_check is False
     assert fast_path.zero_confidence_limit == 7
+    assert fast_path.post_classification_context_comment is True
 
 
 def test_parse_adaptive_threshold_reads_guardrails() -> None:
@@ -96,9 +100,22 @@ def test_parse_model_config_accepts_legacy_direct_pricing_keys() -> None:
 
 
 def test_parse_budgets_overrides_known_values() -> None:
-    budgets = _parse_budgets({"diff_hunks": 12345, "surrounding_context": 9000})
+    budgets = _parse_budgets(
+        {
+            "diff_hunks": 12345,
+            "surrounding_context": 9000,
+            "pressure_yellow": 0.55,
+            "pressure_orange": 0.75,
+            "pressure_red": 0.92,
+            "enforcement": "observe",
+        }
+    )
     assert budgets.diff_hunks == 12345
     assert budgets.surrounding_context == 9000
+    assert budgets.pressure_yellow == 0.55
+    assert budgets.pressure_orange == 0.75
+    assert budgets.pressure_red == 0.92
+    assert budgets.enforcement == "observe"
 
 
 def test_parse_packaging_applies_threshold_paths_and_summary_cap() -> None:

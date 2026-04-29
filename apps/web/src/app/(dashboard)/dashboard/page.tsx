@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
@@ -28,7 +28,10 @@ export default function DashboardHomePage() {
   const capState = usageSummary.data?.cumulative_caps.state ?? "safe";
   const capLabel =
     capState === "capped" ? "Cap reached" : capState === "near-cap" ? "Near cap" : "Within cap";
-  const perKeyCaps = usageSummary.data?.api_key_caps ?? [];
+  const perKeyCaps = useMemo(
+    () => usageSummary.data?.api_key_caps ?? [],
+    [usageSummary.data?.api_key_caps],
+  );
   const configuredProviderCount = usageSummary.data?.configured_provider_count ?? 0;
   const cumulativeCaps = usageSummary.data?.cumulative_caps;
 
@@ -51,14 +54,13 @@ export default function DashboardHomePage() {
     );
   }
 
-  useEffect(() => {
-    if (capViewMode !== "cumulative") return;
+  function openCumulativeView(): void {
+    setCapViewMode("cumulative");
     setSelectedProviders((previous) => {
-      if (perKeyCaps.length === 0) return previous;
-      if (previous.length > 0) return previous;
+      if (previous.length > 0 || perKeyCaps.length === 0) return previous;
       return perKeyCaps.map((row) => row.provider);
     });
-  }, [capViewMode, perKeyCaps]);
+  }
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
@@ -129,7 +131,7 @@ export default function DashboardHomePage() {
               <button
                 type="button"
                 className={`button ${capViewMode === "cumulative" ? "button-primary" : "button-ghost"}`}
-                onClick={() => setCapViewMode("cumulative")}
+                onClick={openCumulativeView}
               >
                 Cumulative
               </button>
@@ -233,13 +235,13 @@ export default function DashboardHomePage() {
       </Panel>
 
       <Panel>
-        <h2 style={{ marginTop: 0, marginBottom: "0.45rem" }}>Evaluate External</h2>
+        <h2 style={{ marginTop: 0, marginBottom: "0.45rem" }}>Code Tour</h2>
         <p style={{ margin: 0, color: "var(--text-muted)" }}>
           Run critical-only analysis on a public GitHub repository with cost controls and staged execution.
         </p>
         <div style={{ marginTop: "0.75rem" }}>
-          <Link href="/evaluate-external" className="button button-primary">
-            Open Evaluate External
+          <Link href="/code-tour" className="button button-primary">
+            Open Code Tour
           </Link>
         </div>
       </Panel>

@@ -60,7 +60,13 @@ from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
 from app.agent.prompts import build_initial_user_prompt, build_system_prompt, load_verified_fact_ids
 from app.agent.review_config import ReviewConfig, load_review_config
-from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
+from app.agent.schema import (
+    DropReason,
+    EditedReview,
+    FastPathAuditMetadata,
+    Finding,
+    ReviewResult,
+)
 from app.agent.validator import FindingValidator
 from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.config import settings
@@ -443,10 +449,12 @@ async def _run_fast_path_stage(
         diff_tokens=diff_tokens,
         fallback_reason=fallback_reason,
     )
+    metadata["produces_findings"] = False
     metadata["skip_min_confidence_applied"] = runtime_fast_path_config.skip_min_confidence
     metadata["light_review_min_confidence_applied"] = (
         runtime_fast_path_config.light_review_min_confidence
     )
+    metadata = FastPathAuditMetadata.model_validate(metadata).model_dump(mode="json")
     context.setdefault("debug_artifacts", {})
     debug_artifacts = context.get("debug_artifacts")
     if isinstance(debug_artifacts, dict):
@@ -509,18 +517,106 @@ async def _track_fast_path_confidence_anomaly(
 def _review_config_for_fast_path_decision(
     review_config: ReviewConfig, decision: FastPathDecision
 ) -> ReviewConfig:
-    if decision.decision != "light_review" or review_config.model.explicit:
+    if (
+        decision.decision == "light_review"
+        and review_config.fast_path.force_economy_on_light_review
+        and not review_config.model.explicit
+    ):
+        existing = review_config.models.roles.get("primary_review")
+        if existing is not None and existing.provider and existing.model:
+            return review_config
+        roles = dict(review_config.models.roles)
+        roles["primary_review"] = (
+            replace(existing, tier="economy")
+            if existing is not None
+            else ModelRoleRoutingConfig(tier="economy")
+        )
+        return replace(review_config, models=replace(review_config.models, roles=roles))
+    if decision.decision != "high_risk_review":
         return review_config
-    existing = review_config.models.roles.get("primary_review")
-    if existing is not None and existing.provider and existing.model:
-        return review_config
+
     roles = dict(review_config.models.roles)
-    roles["primary_review"] = (
-        replace(existing, tier="economy")
-        if existing is not None
-        else ModelRoleRoutingConfig(tier="economy")
+    existing = roles.get("primary_review")
+    if not review_config.model.explicit and not (
+        existing is not None and existing.provider and existing.model
+    ):
+        roles["primary_review"] = (
+            replace(existing, tier="frontier")
+            if existing is not None
+            else ModelRoleRoutingConfig(tier="frontier")
+        )
+    return replace(
+        review_config,
+        severity_threshold="low",
+        packaging=replace(review_config.packaging, partial_review_mode_enabled=False),
+        max_mode=replace(review_config.max_mode, enabled=True),
+        models=replace(review_config.models, roles=roles),
     )
-    return replace(review_config, models=replace(review_config.models, roles=roles))
+
+
+def _apply_missing_confidence_guardrail(
+    review_config: ReviewConfig, decision: FastPathDecision
+) -> tuple[ReviewConfig, bool]:
+    if decision.decision != "full_review" or "missing_confidence" not in set(decision.risk_labels):
+        return review_config, False
+    # Keep safety-first full-review routing, but force economy defaults + tighter budgets
+    # to avoid runaway cost/latency when providers intermittently omit confidence.
+    roles = dict(review_config.models.roles)
+    existing = roles.get("primary_review")
+    if not review_config.model.explicit:
+        roles["primary_review"] = (
+            replace(existing, tier="economy")
+            if existing is not None
+            else ModelRoleRoutingConfig(tier="economy")
+        )
+    budgets = review_config.budgets.model_copy(deep=True)
+    budgets.diff_hunks = max(8_000, int(budgets.diff_hunks * 0.8))
+    budgets.surrounding_context = max(3_000, int(budgets.surrounding_context * 0.8))
+    budgets.fetched_files_headroom = max(8_000, int(budgets.fetched_files_headroom * 0.85))
+    return (
+        replace(
+            review_config,
+            budgets=budgets,
+            models=replace(review_config.models, roles=roles),
+        ),
+        True,
+    )
+
+
+def _format_fast_path_classification_context(decision: FastPathDecision) -> str:
+    risk_labels = ", ".join(decision.risk_labels[:4]) if decision.risk_labels else "none"
+    confidence = decision.confidence if decision.confidence is not None else "unknown"
+    return (
+        "FastPath classification context (routing only):\n\n"
+        f"- decision: `{decision.decision}`\n"
+        f"- confidence: `{confidence}`\n"
+        f"- risk_labels: `{risk_labels}`\n"
+        f"- reason: {decision.reason}"
+    )
+
+
+async def _maybe_post_fast_path_classification_context(
+    *,
+    gh: GitHubClient,
+    context: dict[str, Any],
+    review_config: ReviewConfig,
+    decision: FastPathDecision,
+) -> None:
+    if not review_config.fast_path.post_classification_context_comment:
+        return
+    try:
+        await gh.post_issue_comment(
+            context["owner"],
+            context["repo"],
+            int(context["pr_number"]),
+            _format_fast_path_classification_context(decision),
+        )
+    except Exception:
+        logger.warning(
+            "Failed to post fast-path classification context review_id=%s decision=%s",
+            context.get("review_id"),
+            decision.decision,
+        )
 
 
 async def _load_user_provider_keys(github_id: int) -> dict[str, str]:
@@ -645,7 +741,7 @@ async def run_review(
                 summary="Skipped automated review because this pull request is a draft.",
             )
             await _mark_review_done(
-                session_data=result, context=context, status="done", review_config=review_config
+                session_data=result, context=context, status="skipped", review_config=review_config
             )
             return
         diff_tokens = count_tokens(diff_text)
@@ -671,6 +767,12 @@ async def run_review(
             review_config=review_config,
             diff_tokens=diff_tokens,
         )
+        await _maybe_post_fast_path_classification_context(
+            gh=gh,
+            context=context,
+            review_config=review_config,
+            decision=fast_path_decision,
+        )
         if fast_path_decision.decision == "skip_review":
             if fast_path_resolution is not None:
                 _set_runtime_model_context(context, fast_path_resolution)
@@ -679,12 +781,18 @@ async def run_review(
                 summary="Skipped full review after low-risk fast-path classification.",
             )
             await _mark_review_done(
-                session_data=result, context=context, status="done", review_config=review_config
+                session_data=result, context=context, status="skipped", review_config=review_config
             )
             return
         effective_review_config = _review_config_for_fast_path_decision(
             review_config, fast_path_decision
         )
+        (
+            effective_review_config,
+            fast_path_missing_confidence_guardrail_applied,
+        ) = _apply_missing_confidence_guardrail(effective_review_config, fast_path_decision)
+        if fast_path_missing_confidence_guardrail_applied:
+            context["fast_path_missing_confidence_guardrail_applied"] = True
         debug_artifacts = context.get("debug_artifacts")
         fast_path_failed_all = bool(
             isinstance(debug_artifacts, dict)
@@ -878,6 +986,7 @@ async def run_review(
             raise RuntimeError(
                 f"All primary provider attempts failed due to quota/rate-limit: {last_primary_error}"
             )
+        _hydrate_cache_read_ratio_by_layer(context_bundle.telemetry, context)
         await _record_model_audit(
             context=context,
             stage="primary",
@@ -1229,6 +1338,9 @@ async def run_review(
                 "incoming_findings_count": len(draft_result.findings),
                 "outgoing_findings_count": len(final_result.findings),
                 "fast_path_compaction_applied": bool(context.get("fast_path_compaction_applied")),
+                "fast_path_missing_confidence_guardrail_applied": bool(
+                    context.get("fast_path_missing_confidence_guardrail_applied")
+                ),
             },
         )
         _attach_debug_artifacts(
@@ -1688,6 +1800,8 @@ async def _run_chunked_review(
                 stage_started_at=chunk_stage_started_at,
                 extra_metadata={
                     "chunk_id": chunk.chunk_id,
+                    "node_type": "chunk_review",
+                    "parent_stage": "fast_path",
                     "chunk_file_count": len(chunk.files),
                     "chunk_file_paths": [entry.path for entry in chunk.files[:10]],
                     "chunk_estimated_tokens": chunk.estimated_prompt_tokens,
@@ -1741,6 +1855,101 @@ async def _run_chunked_review(
         review_config=review_config,
         frameworks=repo_profile.frameworks,
     )
+    if review_config.max_mode.enabled and synthesis_result.findings:
+        synthesis_system_prompt = build_system_prompt(
+            repo_profile.frameworks, "", review_config.prompt_additions
+        )
+        challenger_prompt = _build_challenger_prompt(
+            synthesis_result, final_summary_hint=synthesis_result.summary
+        )
+        challenger_resolution = _resolve_runtime_model(
+            context,
+            review_config,
+            "challenger",
+            context_tokens=count_tokens(synthesis_system_prompt)
+            + count_tokens(challenger_prompt),
+        )
+        challenger_stage_started_at = monotonic()
+        challenger_snapshot = _token_snapshot(context)
+        challenger_result = await finalize_review(
+            synthesis_system_prompt,
+            [{"role": "user", "content": challenger_prompt}],
+            context,
+            model_name=challenger_resolution.model,
+            provider=challenger_resolution.provider,
+            allow_retry=False,
+        )
+        debate_conflict_score = _calculate_conflict_score(
+            synthesis_result.findings, challenger_result.findings
+        )
+        await _record_model_audit(
+            context=context,
+            stage="challenger",
+            provider=challenger_resolution.provider,
+            model=challenger_resolution.model,
+            token_before=challenger_snapshot,
+            findings_count=len(challenger_result.findings),
+            conflict_score=debate_conflict_score,
+            decision="chunked_synthesis_challenged",
+            model_resolution=challenger_resolution,
+            stage_started_at=challenger_stage_started_at,
+            extra_metadata={
+                "chunk_mode": True,
+                "source_stage": "synthesis",
+                "chunk_count": len(chunk_plan.chunks),
+                "primary_findings_count": len(synthesis_result.findings),
+                "challenger_findings_count": len(challenger_result.findings),
+            },
+        )
+        tie_break_result: ReviewResult | None = None
+        should_tie_break = (
+            debate_conflict_score >= review_config.max_mode.conflict_threshold
+            or _has_high_risk_findings(
+                synthesis_result.findings, review_config.max_mode.high_risk_severity
+            )
+        )
+        if should_tie_break:
+            tie_break_prompt = _build_tie_break_prompt(synthesis_result, challenger_result)
+            tie_break_resolution = _resolve_runtime_model(
+                context,
+                review_config,
+                "tie_break",
+                context_tokens=count_tokens(synthesis_system_prompt)
+                + count_tokens(tie_break_prompt),
+                previous_provider=challenger_resolution.provider,
+            )
+            tie_break_stage_started_at = monotonic()
+            tie_break_snapshot = _token_snapshot(context)
+            tie_break_result = await finalize_review(
+                synthesis_system_prompt,
+                [{"role": "user", "content": tie_break_prompt}],
+                context,
+                model_name=tie_break_resolution.model,
+                provider=tie_break_resolution.provider,
+                allow_retry=False,
+            )
+            await _record_model_audit(
+                context=context,
+                stage="tie_break",
+                provider=tie_break_resolution.provider,
+                model=tie_break_resolution.model,
+                token_before=tie_break_snapshot,
+                findings_count=len(tie_break_result.findings),
+                conflict_score=debate_conflict_score,
+                decision="chunked_synthesis_tie_break",
+                model_resolution=tie_break_resolution,
+                stage_started_at=tie_break_stage_started_at,
+                extra_metadata={
+                    "chunk_mode": True,
+                    "source_stage": "synthesis",
+                    "chunk_count": len(chunk_plan.chunks),
+                },
+            )
+        synthesis_result = _merge_debate_results(
+            primary=synthesis_result,
+            challenger=challenger_result,
+            tie_break=tie_break_result,
+        )
     synthesis_findings = filter_findings_with_valid_anchors(
         attach_anchor_metadata(synthesis_result.findings, files_in_diff),
         files_in_diff,
@@ -1817,7 +2026,9 @@ async def _run_cross_chunk_synthesis(
         "synthesis",
         context_tokens=count_tokens(system_prompt) + count_tokens(synthesis_prompt),
     )
-    return await finalize_review(
+    synthesis_stage_started_at = monotonic()
+    synthesis_snapshot = _token_snapshot(context)
+    result = await finalize_review(
         system_prompt,
         [{"role": "user", "content": synthesis_prompt}],
         context,
@@ -1825,6 +2036,25 @@ async def _run_cross_chunk_synthesis(
         provider=synthesis_resolution.provider,
         allow_retry=False,
     )
+    await _record_model_audit(
+        context=context,
+        stage="synthesis",
+        provider=synthesis_resolution.provider,
+        model=synthesis_resolution.model,
+        token_before=synthesis_snapshot,
+        findings_count=len(result.findings),
+        decision="generated",
+        model_resolution=synthesis_resolution,
+        stage_started_at=synthesis_stage_started_at,
+        extra_metadata={
+            "chunk_mode": True,
+            "source_stage": "synthesis",
+            "chunk_count": len(chunk_plan.chunks),
+            "chunk_summaries_count": len(chunk_summaries),
+            "structured_findings_count": len(structured_findings),
+        },
+    )
+    return result
 
 
 def _filter_diff_files(
@@ -2077,6 +2307,41 @@ def _token_snapshot(context: dict[str, Any]) -> dict[str, int]:
         "output_tokens": int(context.get("output_tokens", 0)),
         "tokens_used": int(context.get("tokens_used", 0)),
     }
+
+
+def _hydrate_cache_read_ratio_by_layer(
+    context_telemetry: ContextTelemetry, context: dict[str, Any]
+) -> None:
+    entries = context.get("llm_usage", [])
+    input_tokens = 0
+    cached_input_tokens = 0
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            input_tokens += int(entry.get("input_tokens", 0) or 0)
+            cached_input_tokens += int(entry.get("cached_input_tokens", 0) or 0)
+    if input_tokens <= 0:
+        return
+
+    global_ratio = max(0.0, min(1.0, cached_input_tokens / input_tokens))
+    layer_usage = context_telemetry.layer_token_usage
+    ratio_by_layer: dict[str, float] = {}
+    for layer_name in (
+        "L0.base_static",
+        "L1.repo_profile",
+        "L2.repo_dynamic",
+        "L3.user_policy",
+        "L4.review_hunks",
+        "L5.surrounding_context",
+        "L6.anchors",
+        "L7.tool_results",
+        "L8.output_reserve",
+    ):
+        if int(layer_usage.get(layer_name, 0)) <= 0:
+            continue
+        ratio_by_layer[layer_name] = round(global_ratio, 4)
+    context_telemetry.cache_read_ratio_by_layer = ratio_by_layer
 
 
 def _llm_usage_since(context: dict[str, Any], token_before: dict[str, int]) -> dict[str, object]:

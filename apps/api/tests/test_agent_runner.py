@@ -9,7 +9,7 @@ from app.agent.chunking import ChunkPlan, ClassifiedDiffFile, PlannedChunk
 from app.agent.context_builder import ContextTelemetry
 from app.agent.anchors import attach_anchor_metadata, filter_findings_with_valid_anchors
 from app.agent.dedupe import dedupe_findings
-from app.agent.review_config import ReviewConfig, ReviewModelConfig
+from app.agent.review_config import FastPathConfig, ReviewConfig, ReviewModelConfig
 from app.agent.runner import (
     _apply_policy_filters,
     _apply_review_config_filters,
@@ -19,6 +19,8 @@ from app.agent.runner import (
     _calculate_conflict_score,
     _merge_debate_results,
     _mark_review_done,
+    _apply_missing_confidence_guardrail,
+    _maybe_post_fast_path_classification_context,
     _repair_findings_from_files,
     _review_config_for_fast_path_decision,
     _run_fast_path_stage,
@@ -357,9 +359,12 @@ async def test_run_fast_path_stage_records_audit_and_debug_metadata(
     assert decision.decision == "skip_review"
     assert used_resolution == resolution
     assert context["debug_artifacts"]["fast_path_decision"]["decision"] == "skip_review"
+    assert context["debug_artifacts"]["fast_path_decision"]["review_surface_count"] == 1
+    assert context["debug_artifacts"]["fast_path_decision"]["produces_findings"] is False
     assert audits[0]["stage"] == "fast_path"
     assert audits[0]["decision"] == "skip_review"
     assert audits[0]["extra_metadata"]["confidence"] == 95
+    assert audits[0]["extra_metadata"]["produces_findings"] is False
 
 
 @pytest.mark.anyio
@@ -625,6 +630,7 @@ async def test_run_fast_path_stage_rotates_to_next_provider_after_non_quota_erro
 
 def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> None:
     config = ReviewConfig(
+        fast_path=FastPathConfig(force_economy_on_light_review=True),
         models=ModelsRoutingConfig(
             roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
         )
@@ -645,6 +651,7 @@ def test_light_review_forces_economy_primary_when_primary_is_not_explicit() -> N
 
 def test_light_review_keeps_explicit_primary_model_pin() -> None:
     config = ReviewConfig(
+        fast_path=FastPathConfig(force_economy_on_light_review=True),
         model=ReviewModelConfig(provider="openai", name="gpt-5.5", explicit=True),
         models=ModelsRoutingConfig(
             roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
@@ -663,6 +670,152 @@ def test_light_review_keeps_explicit_primary_model_pin() -> None:
 
     assert effective is config
     assert effective.models.roles["primary_review"].tier == "balanced"
+
+
+def test_light_review_preserves_primary_tier_by_default() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
+        )
+    )
+    decision = FastPathDecision(
+        decision="light_review",
+        risk_labels=["low_risk"],
+        reason="Small low-risk change.",
+        confidence=90,
+        review_surface=["tests/test_app.py"],
+        requires_full_context=False,
+    )
+
+    effective = _review_config_for_fast_path_decision(config, decision)
+
+    assert effective is config
+    assert effective.models.roles["primary_review"].tier == "balanced"
+
+
+def test_missing_confidence_guardrail_forces_economy_and_tighter_budgets() -> None:
+    config = ReviewConfig()
+    decision = FastPathDecision(
+        decision="full_review",
+        risk_labels=["missing_confidence"],
+        reason="Fast-path model omitted confidence; escalated for safety.",
+        confidence=None,
+        review_surface=[],
+        requires_full_context=True,
+    )
+
+    effective, applied = _apply_missing_confidence_guardrail(config, decision)
+
+    assert applied is True
+    assert effective.models.roles["primary_review"].tier == "economy"
+    assert effective.budgets.diff_hunks <= config.budgets.diff_hunks
+    assert effective.budgets.surrounding_context <= config.budgets.surrounding_context
+
+
+def test_missing_confidence_guardrail_noop_when_label_absent() -> None:
+    config = ReviewConfig()
+    decision = FastPathDecision(
+        decision="full_review",
+        risk_labels=["low_confidence"],
+        reason="Escalated for low confidence.",
+        confidence=60,
+        review_surface=[],
+        requires_full_context=True,
+    )
+
+    effective, applied = _apply_missing_confidence_guardrail(config, decision)
+
+    assert applied is False
+    assert effective is config
+
+
+def test_high_risk_review_escalates_profile() -> None:
+    config = ReviewConfig(
+        severity_threshold="medium",
+        max_mode=ReviewConfig().max_mode,
+        models=ModelsRoutingConfig(
+            roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
+        ),
+    )
+    decision = FastPathDecision(
+        decision="high_risk_review",
+        risk_labels=["auth_sensitive_path"],
+        reason="Touched auth/session routes.",
+        confidence=93,
+        review_surface=["apps/api/src/app/api/router.py"],
+        requires_full_context=True,
+    )
+
+    effective = _review_config_for_fast_path_decision(config, decision)
+
+    assert effective.severity_threshold == "low"
+    assert effective.max_mode.enabled is True
+    assert effective.packaging.partial_review_mode_enabled is False
+    assert effective.models.roles["primary_review"].tier == "frontier"
+
+
+def test_high_risk_review_keeps_explicit_primary_model_pin() -> None:
+    config = ReviewConfig(
+        model=ReviewModelConfig(provider="openai", name="gpt-5.5", explicit=True),
+        models=ModelsRoutingConfig(
+            roles={"primary_review": ModelRoleRoutingConfig(tier="balanced")}
+        ),
+    )
+    decision = FastPathDecision(
+        decision="high_risk_review",
+        risk_labels=["security"],
+        reason="High-risk security files touched.",
+        confidence=91,
+        review_surface=["apps/api/src/app/webhooks/router.py"],
+        requires_full_context=True,
+    )
+
+    effective = _review_config_for_fast_path_decision(config, decision)
+
+    assert effective.models.roles["primary_review"].tier == "balanced"
+    assert effective.severity_threshold == "low"
+    assert effective.max_mode.enabled is True
+
+
+@pytest.mark.anyio
+async def test_maybe_post_fast_path_classification_context_respects_opt_in() -> None:
+    posted: list[str] = []
+
+    class FakeGitHubClient:
+        async def post_issue_comment(
+            self, _owner: str, _repo: str, _issue_number: int, body: str
+        ) -> None:
+            posted.append(body)
+
+    context = {"owner": "acme", "repo": "repo", "pr_number": 7, "review_id": 1}
+    decision = FastPathDecision(
+        decision="light_review",
+        risk_labels=["test_only"],
+        reason="Small test-only update.",
+        confidence=87,
+        review_surface=["apps/api/tests/test_agent_runner.py"],
+        requires_full_context=False,
+    )
+    disabled_config = ReviewConfig(fast_path=FastPathConfig(post_classification_context_comment=False))
+    enabled_config = ReviewConfig(fast_path=FastPathConfig(post_classification_context_comment=True))
+
+    gh = FakeGitHubClient()
+    await _maybe_post_fast_path_classification_context(
+        gh=gh,
+        context=context,
+        review_config=disabled_config,
+        decision=decision,
+    )
+    await _maybe_post_fast_path_classification_context(
+        gh=gh,
+        context=context,
+        review_config=enabled_config,
+        decision=decision,
+    )
+
+    assert len(posted) == 1
+    assert "FastPath classification context" in posted[0]
+    assert "`light_review`" in posted[0]
 
 
 def test_extract_tool_call_history_collects_tool_use_blocks() -> None:
