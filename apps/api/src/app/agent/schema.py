@@ -225,10 +225,27 @@ class ContextBudgets(BaseModel):
     fetched_files_headroom: int = Field(default=20_000, ge=0)
     output: int = Field(default=8000, ge=0)
     total_cap: int = Field(default=120_000, ge=1)
+    pressure_yellow: float = Field(default=0.60, ge=0.0, le=1.0)
+    pressure_orange: float = Field(default=0.80, ge=0.0, le=1.0)
+    pressure_red: float = Field(default=0.95, ge=0.0, le=1.0)
+    enforcement: Literal["observe", "advise", "enforce"] = "observe"
 
 
 class ContextSegment(BaseModel):
-    layer: Literal["project", "repo", "review"]
+    layer: Literal[
+        "project",
+        "repo",
+        "review",
+        "L0.base_static",
+        "L1.repo_profile",
+        "L2.repo_dynamic",
+        "L3.user_policy",
+        "L4.review_hunks",
+        "L5.surrounding_context",
+        "L6.anchors",
+        "L7.tool_results",
+        "L8.output_reserve",
+    ]
     source_id: str
     fidelity: ContextFidelity
     text: str

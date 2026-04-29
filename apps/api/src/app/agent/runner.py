@@ -986,6 +986,7 @@ async def run_review(
             raise RuntimeError(
                 f"All primary provider attempts failed due to quota/rate-limit: {last_primary_error}"
             )
+        _hydrate_cache_read_ratio_by_layer(context_bundle.telemetry, context)
         await _record_model_audit(
             context=context,
             stage="primary",
@@ -2306,6 +2307,41 @@ def _token_snapshot(context: dict[str, Any]) -> dict[str, int]:
         "output_tokens": int(context.get("output_tokens", 0)),
         "tokens_used": int(context.get("tokens_used", 0)),
     }
+
+
+def _hydrate_cache_read_ratio_by_layer(
+    context_telemetry: ContextTelemetry, context: dict[str, Any]
+) -> None:
+    entries = context.get("llm_usage", [])
+    input_tokens = 0
+    cached_input_tokens = 0
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            input_tokens += int(entry.get("input_tokens", 0) or 0)
+            cached_input_tokens += int(entry.get("cached_input_tokens", 0) or 0)
+    if input_tokens <= 0:
+        return
+
+    global_ratio = max(0.0, min(1.0, cached_input_tokens / input_tokens))
+    layer_usage = context_telemetry.layer_token_usage
+    ratio_by_layer: dict[str, float] = {}
+    for layer_name in (
+        "L0.base_static",
+        "L1.repo_profile",
+        "L2.repo_dynamic",
+        "L3.user_policy",
+        "L4.review_hunks",
+        "L5.surrounding_context",
+        "L6.anchors",
+        "L7.tool_results",
+        "L8.output_reserve",
+    ):
+        if int(layer_usage.get(layer_name, 0)) <= 0:
+            continue
+        ratio_by_layer[layer_name] = round(global_ratio, 4)
+    context_telemetry.cache_read_ratio_by_layer = ratio_by_layer
 
 
 def _llm_usage_since(context: dict[str, Any], token_before: dict[str, int]) -> dict[str, object]:

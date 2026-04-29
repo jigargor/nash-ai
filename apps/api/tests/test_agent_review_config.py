@@ -100,9 +100,22 @@ def test_parse_model_config_accepts_legacy_direct_pricing_keys() -> None:
 
 
 def test_parse_budgets_overrides_known_values() -> None:
-    budgets = _parse_budgets({"diff_hunks": 12345, "surrounding_context": 9000})
+    budgets = _parse_budgets(
+        {
+            "diff_hunks": 12345,
+            "surrounding_context": 9000,
+            "pressure_yellow": 0.55,
+            "pressure_orange": 0.75,
+            "pressure_red": 0.92,
+            "enforcement": "observe",
+        }
+    )
     assert budgets.diff_hunks == 12345
     assert budgets.surrounding_context == 9000
+    assert budgets.pressure_yellow == 0.55
+    assert budgets.pressure_orange == 0.75
+    assert budgets.pressure_red == 0.92
+    assert budgets.enforcement == "observe"
 
 
 def test_parse_packaging_applies_threshold_paths_and_summary_cap() -> None:

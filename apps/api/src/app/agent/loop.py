@@ -2,6 +2,7 @@ from time import monotonic
 from typing import Any
 
 from app.agent.constants import MAX_ITERATIONS
+from app.agent.context_builder import count_tokens
 from app.agent.provider_clients import (
     anthropic_tools_to_openai_tools,
     create_openai_compatible_client,
@@ -13,6 +14,10 @@ from app.agent.tools import TOOLS, execute_tool
 from app.llm.errors import coerce_quota_error
 from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
 from app.observability import create_async_anthropic_client
+
+
+def _result_token_count(content: object) -> int:
+    return count_tokens(str(content))
 
 
 async def run_agent(
@@ -47,6 +52,8 @@ async def _run_agent_anthropic(
     messages: list[dict[str, Any]] = [{"role": "user", "content": initial_user_message}]
     turns = 0
     fetch_file_content_calls = 0
+    tool_result_tokens_by_tool: dict[str, int] = {}
+    tool_result_calls_by_tool: dict[str, int] = {}
     started_at = monotonic()
     anthropic_system: Any = adapter.render_anthropic_system(system_prompt, _cache_options(context))
 
@@ -86,6 +93,8 @@ async def _run_agent_anthropic(
                     fetch_file_content_calls += 1
                 result = await execute_tool(block.name, block.input, context)
                 normalized = result if str(result).strip() else "Tool returned empty output."
+                tool_result_tokens_by_tool[block.name] = tool_result_tokens_by_tool.get(block.name, 0) + _result_token_count(normalized)
+                tool_result_calls_by_tool[block.name] = tool_result_calls_by_tool.get(block.name, 0) + 1
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -110,6 +119,10 @@ async def _run_agent_anthropic(
         "fetch_file_content_calls": fetch_file_content_calls,
         "first_model_call_latency_ms": context.get("first_model_call_latency_ms", 0),
         "provider": "anthropic",
+        "tool_result_tokens": tool_result_tokens_by_tool,
+        "tool_result_tokens_by_tool": tool_result_tokens_by_tool,
+        "tool_result_calls_by_tool": tool_result_calls_by_tool,
+        "tool_result_tokens_total": sum(tool_result_tokens_by_tool.values()),
     }
     return messages
 
@@ -131,6 +144,8 @@ async def _run_agent_openai_compatible(
     ]
     turns = 0
     fetch_file_content_calls = 0
+    tool_result_tokens_by_tool: dict[str, int] = {}
+    tool_result_calls_by_tool: dict[str, int] = {}
     started_at = monotonic()
     openai_tools = anthropic_tools_to_openai_tools(TOOLS)
 
@@ -205,6 +220,8 @@ async def _run_agent_openai_compatible(
                 )
                 result = await execute_tool(function_name, parsed_input, context)
                 normalized = result if str(result).strip() else "Tool returned empty output."
+                tool_result_tokens_by_tool[function_name] = tool_result_tokens_by_tool.get(function_name, 0) + _result_token_count(normalized)
+                tool_result_calls_by_tool[function_name] = tool_result_calls_by_tool.get(function_name, 0) + 1
                 messages.append(
                     {
                         "role": "tool",
@@ -221,6 +238,10 @@ async def _run_agent_openai_compatible(
         "fetch_file_content_calls": fetch_file_content_calls,
         "first_model_call_latency_ms": context.get("first_model_call_latency_ms", 0),
         "provider": provider,
+        "tool_result_tokens": tool_result_tokens_by_tool,
+        "tool_result_tokens_by_tool": tool_result_tokens_by_tool,
+        "tool_result_calls_by_tool": tool_result_calls_by_tool,
+        "tool_result_tokens_total": sum(tool_result_tokens_by_tool.values()),
     }
     return messages
 

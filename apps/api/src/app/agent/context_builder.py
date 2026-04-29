@@ -1,4 +1,5 @@
 import hashlib
+import re
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from typing import Any, Literal
@@ -40,6 +41,13 @@ class ContextTelemetry:
     summarization_used: bool = False
     summarization_calls: int = 0
     partial_review_mode: bool = False
+    layer_duplication_tokens: dict[str, int] = field(default_factory=dict)
+    bloat_score: float = 0.0
+    poisoning_score: float = 0.0
+    pressure_ratio: float = 0.0
+    pressure_state: str = "green"
+    observe_mode: bool = True
+    cache_read_ratio_by_layer: dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -49,6 +57,13 @@ class ContextTelemetry:
             "summarization_used": self.summarization_used,
             "summarization_calls": self.summarization_calls,
             "partial_review_mode": self.partial_review_mode,
+            "layer_duplication_tokens": self.layer_duplication_tokens,
+            "bloat_score": self.bloat_score,
+            "poisoning_score": self.poisoning_score,
+            "pressure_ratio": self.pressure_ratio,
+            "pressure_state": self.pressure_state,
+            "observe_mode": self.observe_mode,
+            "cache_read_ratio_by_layer": self.cache_read_ratio_by_layer,
         }
 
 
@@ -98,6 +113,15 @@ async def build_context_bundle(
         "repo": 0,
         "review_diff_hunks": 0,
         "review_surrounding": 0,
+        "L0.base_static": 0,
+        "L1.repo_profile": 0,
+        "L2.repo_dynamic": 0,
+        "L3.user_policy": 0,
+        "L4.review_hunks": 0,
+        "L5.surrounding_context": 0,
+        "L6.anchors": 0,
+        "L7.tool_results": 0,
+        "L8.output_reserve": active_budgets.output,
     }
 
     project_text = (
@@ -110,6 +134,7 @@ async def build_context_bundle(
     if project_segment.token_count <= active_budgets.system_prompt:
         package.project.append(project_segment)
         token_usage["project"] += project_segment.token_count
+        token_usage["L3.user_policy"] += project_segment.token_count
     else:
         dropped_segments.append("project-policy")
 
@@ -128,6 +153,7 @@ async def build_context_bundle(
             continue
         package.repo.append(segment)
         token_usage["repo"] += segment.token_count
+        token_usage["L1.repo_profile"] += segment.token_count
 
     summary_calls = 0
     for file_in_diff in included_files:
@@ -167,6 +193,7 @@ async def build_context_bundle(
                     continue
                 package.review.append(hunk_segment)
                 token_usage["review_diff_hunks"] += hunk_segment.token_count
+                token_usage["L4.review_hunks"] += hunk_segment.token_count
 
                 if is_generated or is_lockfile:
                     continue
@@ -196,6 +223,7 @@ async def build_context_bundle(
                 ):
                     package.review.append(context_segment)
                     token_usage["review_surrounding"] += context_segment.token_count
+                    token_usage["L5.surrounding_context"] += context_segment.token_count
                     continue
 
                 if not active_packaging.summarization_enabled:
@@ -224,6 +252,7 @@ async def build_context_bundle(
                 ):
                     package.review.append(summary_segment)
                     token_usage["review_surrounding"] += summary_segment.token_count
+                    token_usage["L5.surrounding_context"] += summary_segment.token_count
                 else:
                     dropped_segments.append(summary_segment.source_id)
 
@@ -242,6 +271,7 @@ async def build_context_bundle(
                 )
             )
             included_anchor_lines.add((file_in_diff.path, line_no))
+            token_usage["L6.anchors"] += count_tokens(line_content)
 
     package.dropped_segments = dropped_segments
     package.ignored_anchor_files = _ignored_anchor_files(files_in_diff, included_files)
@@ -266,9 +296,28 @@ async def build_context_bundle(
                 text=partial_note,
             )
         )
+        token_usage["repo"] += count_tokens(partial_note)
+        token_usage["L2.repo_dynamic"] += count_tokens(partial_note)
 
     package.dropped_segments = dropped_segments
     rendered = _render_package(package)
+    duplication_tokens = _estimate_layer_duplication(
+        project_segments=[segment.text for segment in package.project],
+        repo_segments=[segment.text for segment in package.repo],
+    )
+    pressure_ratio = _compute_pressure_ratio(token_usage, active_budgets)
+    pressure_state = _pressure_state(pressure_ratio, active_budgets)
+    poisoning_score = _poisoning_score(
+        project_segments=[segment.text for segment in package.project],
+        repo_segments=[segment.text for segment in package.repo],
+        review_segments=[segment.text for segment in package.review],
+    )
+    bloat_score = _bloat_score(
+        token_usage=token_usage,
+        dropped_segments=dropped_segments,
+        duplication_tokens=duplication_tokens,
+    )
+
     telemetry = ContextTelemetry(
         layer_token_usage=token_usage,
         dropped_segments=dropped_segments,
@@ -276,6 +325,12 @@ async def build_context_bundle(
         summarization_used=package.summarization_used,
         summarization_calls=package.summarization_calls,
         partial_review_mode=package.partial_review_mode,
+        layer_duplication_tokens=duplication_tokens,
+        bloat_score=bloat_score,
+        poisoning_score=poisoning_score,
+        pressure_ratio=pressure_ratio,
+        pressure_state=pressure_state,
+        observe_mode=active_budgets.enforcement == "observe",
     )
     return ContextBundle(
         rendered=rendered, fetched_files=fetched_files, package=package, telemetry=telemetry
@@ -671,3 +726,96 @@ def _ignored_anchor_files(
 ) -> list[str]:
     included = {file.path for file in included_files}
     return sorted(file.path for file in all_files if file.path not in included)
+
+
+INJECTION_MARKERS = (
+    "ignore previous instructions",
+    "ignore all previous",
+    "system prompt",
+    "developer message",
+    "do not follow prior",
+    "tool output says",
+    "act as",
+    "you are chatgpt",
+    "jailbreak",
+)
+
+
+def _estimate_layer_duplication(
+    *, project_segments: list[str], repo_segments: list[str]
+) -> dict[str, int]:
+    base_ngrams = _five_gram_hashes("\n".join(project_segments))
+    overlap_tokens = 0
+    for segment in repo_segments:
+        segment_ngrams = _five_gram_hashes(segment)
+        if not segment_ngrams:
+            continue
+        overlap_ratio = len(segment_ngrams.intersection(base_ngrams)) / len(segment_ngrams)
+        if overlap_ratio >= 0.5:
+            overlap_tokens += count_tokens(segment)
+    return {
+        "L3_vs_L0": overlap_tokens,
+    }
+
+
+def _five_gram_hashes(text: str) -> set[str]:
+    tokens = [token for token in re.findall(r"[a-z0-9_]+", text.lower()) if token]
+    if len(tokens) < 5:
+        return set()
+    return {
+        hashlib.sha1(" ".join(tokens[index : index + 5]).encode("utf-8")).hexdigest()
+        for index in range(len(tokens) - 4)
+    }
+
+
+def _compute_pressure_ratio(token_usage: dict[str, int], budgets: ContextBudgets) -> float:
+    prompt_tokens = (
+        token_usage.get("project", 0)
+        + token_usage.get("repo", 0)
+        + token_usage.get("review_diff_hunks", 0)
+        + token_usage.get("review_surrounding", 0)
+        + token_usage.get("L6.anchors", 0)
+    )
+    denominator = max(1, budgets.total_cap - budgets.output)
+    return min(1.5, prompt_tokens / denominator)
+
+
+def _pressure_state(ratio: float, budgets: ContextBudgets) -> str:
+    if ratio >= budgets.pressure_red:
+        return "red"
+    if ratio >= budgets.pressure_orange:
+        return "orange"
+    if ratio >= budgets.pressure_yellow:
+        return "yellow"
+    return "green"
+
+
+def _poisoning_score(
+    *, project_segments: list[str], repo_segments: list[str], review_segments: list[str]
+) -> float:
+    corpus = "\n".join([*project_segments, *repo_segments, *review_segments]).lower()
+    hits = sum(corpus.count(marker) for marker in INJECTION_MARKERS)
+    if hits <= 0:
+        return 0.0
+    return min(1.0, hits / 5.0)
+
+
+def _bloat_score(
+    *,
+    token_usage: dict[str, int],
+    dropped_segments: list[str],
+    duplication_tokens: dict[str, int],
+) -> float:
+    total_prompt_tokens = (
+        token_usage.get("project", 0)
+        + token_usage.get("repo", 0)
+        + token_usage.get("review_diff_hunks", 0)
+        + token_usage.get("review_surrounding", 0)
+        + token_usage.get("L6.anchors", 0)
+    )
+    if total_prompt_tokens <= 0:
+        return 0.0
+    duplicate_tokens = sum(duplication_tokens.values())
+    drop_penalty = min(1.0, len(dropped_segments) / 20.0)
+    duplicate_ratio = min(1.0, duplicate_tokens / total_prompt_tokens)
+    return round((0.75 * duplicate_ratio) + (0.25 * drop_penalty), 4)
