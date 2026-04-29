@@ -169,26 +169,26 @@ def _select_relevant_facts_with_meta(diff: str) -> tuple[list[dict[str, object]]
 
     expanded_ids = set(direct_ids)
     for fact_id in list(direct_ids):
-        fact = fact_by_id.get(fact_id)
-        if fact is None:
+        related_fact = fact_by_id.get(fact_id)
+        if related_fact is None:
             continue
-        for related_id in _as_string_list(fact.get("parents")):
+        for related_id in _as_string_list(related_fact.get("parents")):
             if related_id in fact_by_id:
                 expanded_ids.add(related_id)
-        for related_id in _as_string_list(fact.get("children")):
+        for related_id in _as_string_list(related_fact.get("children")):
             if related_id in fact_by_id:
                 expanded_ids.add(related_id)
-        for related_id in _as_string_list(fact.get("can_precede")):
+        for related_id in _as_string_list(related_fact.get("can_precede")):
             if related_id in fact_by_id:
                 expanded_ids.add(related_id)
 
     scored: list[tuple[float, str, dict[str, object]]] = []
     for fact_id in expanded_ids:
-        fact = fact_by_id.get(fact_id)
-        if fact is None:
+        scored_fact = fact_by_id.get(fact_id)
+        if scored_fact is None:
             continue
-        score = _fact_score(fact, diff_lower, direct_hit=fact_id in direct_ids)
-        scored.append((-score, fact_id, fact))
+        score = _fact_score(scored_fact, diff_lower, direct_hit=fact_id in direct_ids)
+        scored.append((-score, fact_id, scored_fact))
     scored.sort()
     selected = [entry[2] for entry in scored[:8]]
     telemetry: dict[str, Any] = {

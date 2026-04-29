@@ -18,7 +18,8 @@ async def _recent_debug_artifact_rows(
             query = query.where(Review.installation_id == installation_id)
         if repo_full_name is not None:
             query = query.where(Review.repo_full_name == repo_full_name)
-        return (await session.execute(query)).all()
+        result = await session.execute(query)
+        return [(int(row[0]), row[1]) for row in result.all()]
 
 
 async def summarize_target_line_mismatch_telemetry(
