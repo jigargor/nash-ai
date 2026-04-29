@@ -1,0 +1,50 @@
+---
+description: Core project context — always loaded
+globs:
+alwaysApply: true
+---
+
+# AI Code Review Agent — Project Context
+
+## What this is
+
+A GitHub App that reviews pull requests using Claude. When a PR opens or syncs, we parse the diff, run a tool-augmented ReAct agent, and post inline review comments with severity-ranked findings and one-click `suggestion` blocks.
+
+## Repository layout
+
+```
+apps/
+  api/               # Python 3.12 + FastAPI backend
+    src/app/
+      config.py      # pydantic-settings
+      main.py        # FastAPI app + lifespan
+      github/        # App JWT auth + API client
+      webhooks/      # HMAC verification + event routing
+      agent/         # ReAct loop, tools, schemas
+      queue/         # ARQ workers
+      db/            # SQLAlchemy models, session, migrations
+  web/               # Next.js 15 + TypeScript frontend
+    src/
+      app/           # App Router pages
+      components/    # Reusable UI components
+      hooks/         # Custom React hooks
+      lib/           # API client, utilities
+      stores/        # Zustand stores
+packages/
+  shared-types/      # TypeScript types shared across apps
+```
+
+## Non-negotiable rules
+
+1. **GitHub App, not OAuth App.** We use installation tokens for repo access, user OAuth only for dashboard login.
+2. **HMAC-verify every webhook** before processing. Use `hmac.compare_digest`, never `==`.
+3. **Never persist installation tokens.** Fetch fresh on each job (they're 1-hour lived).
+4. **Encrypt user OAuth tokens** with Fernet before storing in `users.token_enc`.
+5. **Webhooks must respond < 10s** — always enqueue to ARQ, never process inline.
+6. **Strict typing.** Python: `mypy --strict` clean. TypeScript: no `any` except with an inline comment explaining why.
+7. **Review Comments API**, not Issue Comments. Findings are inline, line-specific.
+8. **`suggestion` code blocks** for fixes so reviewers get one-click commits.
+
+## Current phase
+
+See `docs/PLAN.md` for the full phased plan. Before starting work, confirm which phase we're in so you apply the right rules.

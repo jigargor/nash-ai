@@ -126,6 +126,6 @@ class WorkerSettings:
     on_startup = worker_startup
     cron_jobs = [
         cron(classify_pending_outcomes, hour=3, minute=0),
-        cron(archive_review_snapshots, hour=4, minute=15),
+        cron(archive_review_snapshots, weekday="sun", hour=4, minute=15),
         cron(refresh_llm_catalog, hour=2, minute=30),
     ]

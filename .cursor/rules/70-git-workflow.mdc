@@ -1,0 +1,64 @@
+---
+description: Git, commits, and PR workflow
+globs:
+alwaysApply: false
+---
+
+# Git & PR Workflow
+
+## Branches
+
+- `main` is deployable at all times.
+- Feature branches: `feat/<short-description>` (e.g., `feat/opus-model-support`).
+- Fixes: `fix/<short-description>`.
+- Prompt changes: `prompt/<description>` — these trigger evals in CI.
+
+## Commits
+
+- Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
+- Subject line under 72 characters.
+- Body explains WHY, not WHAT (the diff shows what).
+- Reference issues: `Closes #123` in the body.
+- Don't commit commented-out code. Delete it; Git remembers.
+
+## Pull requests
+
+- One logical change per PR. If you're adding a feature and refactoring, those are two PRs.
+- PR title mirrors the commit message (squash merge produces one commit).
+- Description template:
+  ```
+  ## What
+  <1–2 sentences>
+
+  ## Why
+  <context/motivation>
+
+  ## How
+  <key design decisions>
+
+  ## Testing
+  <how you verified, screenshots if UI>
+
+  ## Risk
+  <what could break, rollback plan>
+  ```
+- Mark as draft until you're confident it's reviewable.
+
+## Review expectations
+
+- Reviewer SLA: same day for small PRs, 48h for large PRs.
+- At least one approval required for merge.
+- CI must be green. No force-merges.
+- If you push changes after review, re-request review explicitly.
+
+## Merging
+
+- Squash merge into `main`. Preserves clean history.
+- Delete the branch after merging.
+- If the PR introduces a schema or API breaking change, the PR title must start with `!` (e.g., `feat!: rename reviews to pr_reviews`).
+
+## Hotfixes
+
+- Create `hotfix/<description>` from `main`.
+- Fix, test, open PR, get one approval, merge, deploy.
+- Post-mortem within 48h.

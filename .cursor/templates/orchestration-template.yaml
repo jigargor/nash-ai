@@ -1,0 +1,89 @@
+orchestration:
+  goal: "Design a full dashboard redo that is elegant, functional, easy on the eyes, and operationally safe; deliver a concrete implementation plan for UX, analytics, and a new 'Evaluate External' capability."
+  mode: "implement" # analyze|implement|review
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  scoring:
+    correctness: 0.3
+    maintainability: 0.2
+    risk: 0.3
+    performance: 0.2
+
+  workers:
+    - id: "w1"
+      agent: "graphic-artist"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Lead visual direction for the dashboard redesign: typography scale, spacing rhythm, color system, contrast/accessibility, hierarchy, information density, and interaction polish. Propose multiple visual concepts and converge on an elegant default that minimizes cognitive load."
+
+    - id: "w2"
+      agent: "data-scientist"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Define metrics and insight architecture for the new dashboard: API usage by service, daily/weekly usage trends, and session cap visibility. Recommend data model changes, rollups, anomaly flags, and the minimum high-signal charts needed for rapid operator decisions."
+
+    - id: "w3"
+      agent: "frontend-engineer"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Own implementation strategy for Next.js dashboard UX and system integration. Add 'Evaluate External' to menu, define route architecture, UX flows, resilience/loading states, and coordinate a horizontally scaling multi-agent backend for full-repo analysis with strict security controls."
+
+  dashboard_requirements:
+    ui_goals:
+      - "Elegant, calm, and readable interface with strong visual hierarchy"
+      - "Functional decision support: fast scanning, low clutter, high information quality"
+      - "Accessible defaults (contrast, focus states, keyboard flow, responsive behavior)"
+    must_add:
+      - "API usage by service (per-service request volume and trend)"
+      - "Daily usage and weekly usage trend views"
+      - "Session cap visibility with near-cap and over-cap indicators"
+    navigation:
+      - "Add a top-level menu item: Evaluate External"
+      - "Evaluate External must allow linking a public GitHub repository URL"
+      - "Show clear progress lifecycle: queued -> scanning -> analyzing -> synthesizing -> complete"
+
+  evaluate_external:
+    objective: "Analyze an entire public repo using a horizontally scaling team of agents and return only critical findings."
+    finding_policy:
+      include_only:
+        - "security vulnerabilities"
+        - "severe coding best-practice violations with real risk"
+        - "high-impact performance bottlenecks"
+      exclude:
+        - "low-value praise"
+        - "nitpicks and non-actionable style commentary"
+    cost_controls:
+      - "Display mandatory upfront warning: full-repo evaluation can be expensive, especially for large repos."
+      - "Require user acknowledgment before launch when projected cost exceeds threshold."
+      - "Show live cost estimate updates based on repo size, language mix, and planned agent count."
+      - "Provide budget caps and graceful stop/partial-result behavior when caps are reached."
+    scale_strategy:
+      - "Shard repository by directories/files and assign shards to parallel analysis agents."
+      - "Use dynamic team sizing from quick pre-scan results (repo size, complexity, risk hotspots)."
+      - "Use synthesis agents to deduplicate findings and keep only critical, evidence-backed outputs."
+    pre_scan_strategy:
+      - "Run a cheap-model pre-scan pass (or multiple cheap agents in parallel) before main analysis."
+      - "Detect likely nonsense/filler files, generated junk, and maliciously planted distraction content."
+      - "Detect prompt injection patterns in files/README/docs/diffs and mark content as untrusted."
+      - "Use pre-scan output to set team size, model tier allocation, and routing priorities."
+    security_requirements:
+      - "Never execute repository code during analysis."
+      - "Treat all repo content and diffs as untrusted input."
+      - "Harden agent prompts against instruction hijacking from code/comments/docs."
+      - "Isolate tool outputs and ensure malicious file content cannot alter orchestration policy."
+
+  constraints:
+    - "No API break for existing consumers unless explicitly versioned and documented."
+    - "Do not weaken auth/session, webhook, or tenant isolation controls."
+    - "All analysis must be robust against prompt injection from repository content."
+    - "External-repo evaluation must remain cost-aware and budget-constrained by design."
+    - "All implementations must align with existing .cursor/rules and project security constraints"
+    - "Minimize workflow churn while introducing the new dashboard IA and menu structure."
+    - "Critical findings must be reproducible, line-anchored, and evidence-backed."
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: true
+    include_data_contracts: true
+    include_external_eval_architecture: true

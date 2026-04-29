@@ -1,0 +1,18 @@
+---
+description: When filling Cursor templates under .cursor/templates, write a new instance file—never overwrite the template itself.
+alwaysApply: true
+---
+
+# Template instances (do not overwrite templates)
+
+When **filling out** or **specializing** a file under `.cursor/templates/` (for example `orchestration-template.yaml`, `entire-repo-review.yaml`, or similar):
+
+1. **Do not save filled content back onto the template file.** Templates stay canonical placeholders / examples so future sessions stay consistent.
+
+2. **Create a new file in the same folder** (`.cursor/templates/`) containing the filled orchestration or checklist.
+
+3. **Naming:** If the user gives an explicit filename (including extension), use it. Otherwise derive a **short kebab-case** name from the task or ask (3–6 words max, drop filler words), e.g. `review-chain-orchestration.yaml`, `api-rate-limit-rollout.yaml`.
+
+4. After creating the instance file, leave the template unchanged except when deliberately updating the shared scaffold (then edit only the template, not instance copies).
+
+Apply this workflow whenever templates under `.cursor/templates/` are edited or generated from a prompt.
