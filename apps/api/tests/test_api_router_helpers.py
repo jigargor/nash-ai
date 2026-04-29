@@ -85,6 +85,14 @@ def test_normalize_review_status_filter_maps_all_to_none() -> None:
     assert api_router._normalize_review_status_filter("all") is None  # type: ignore[attr-defined]
 
 
+def test_normalize_review_status_filter_none_stays_none() -> None:
+    assert api_router._normalize_review_status_filter(None) is None  # type: ignore[attr-defined]
+
+
+def test_normalize_review_status_filter_blank_to_none() -> None:
+    assert api_router._normalize_review_status_filter("   ") is None  # type: ignore[attr-defined]
+
+
 def test_normalize_review_status_filter_lowercases() -> None:
     assert api_router._normalize_review_status_filter(" RUNNING ") == "running"  # type: ignore[attr-defined]
 
