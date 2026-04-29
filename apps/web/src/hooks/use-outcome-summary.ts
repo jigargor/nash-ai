@@ -2,12 +2,14 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchOutcomeSummary } from "@/lib/api/reviews";
+import { actionFetchOutcomeSummary } from "@/app/actions/dashboard-api";
+import { dashboardListMetricsQueryOptions } from "@/lib/query/dashboard-query-options";
 
 export function useOutcomeSummary(installationId?: number, repoFullName?: string) {
   return useQuery({
     queryKey: ["outcome-summary", installationId ?? null, repoFullName ?? null],
-    queryFn: () => fetchOutcomeSummary(installationId, repoFullName),
+    queryFn: () => actionFetchOutcomeSummary(installationId, repoFullName),
     enabled: installationId !== undefined,
+    ...dashboardListMetricsQueryOptions,
   });
 }

@@ -480,77 +480,91 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         </p>
         <ModelUsageHover entries={modelUsageEntries} />
         <ProviderAvailabilityIndicator audits={currentRunAudits} debugArtifacts={data.debug_artifacts} />
-        <div style={{ marginTop: "0.45rem", position: "relative", display: "inline-flex", alignItems: "center", gap: "0.45rem" }}>
-          <button
-            type="button"
-            onClick={() => setHistoryOpen((open) => !open)}
-            aria-label="Show run history"
-            title="Run history"
-            style={{
-              width: "2rem",
-              height: "2rem",
-              borderRadius: "999px",
-              border: "1px solid var(--border-strong)",
-              background: "var(--card-muted)",
-              color: "var(--text-muted)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
+        <div
+          style={{
+            marginTop: "0.45rem",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "1rem",
+            rowGap: "0.5rem",
+            width: "100%",
+          }}
+        >
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "0.9rem", flexWrap: "wrap" }}>
+            <div style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: "0.45rem", flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((open) => !open)}
+                aria-label="Show run history"
+                title="Run history"
+                style={{
+                  width: "2rem",
+                  height: "2rem",
+                  borderRadius: "999px",
+                  border: "1px solid var(--border-strong)",
+                  background: "var(--card-muted)",
+                  color: "var(--text-muted)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  <path d="M3 12a9 9 0 1 0 3-6.7" />
+                  <polyline points="3 3 3 9 9 9" />
+                  <path d="M12 7v5l3 3" />
+                </svg>
+              </button>
+              <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                {isInFlight ? "Current run" : selectedRunId ? `Run ${selectedRunId.slice(0, 8)}` : "Run history"}
+              </span>
+              {historyOpen && runHistory.length > 0 && !isInFlight ? (
+                <div style={{ position: "absolute", top: "2.2rem", left: 0, zIndex: 30, border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", background: "var(--card)", minWidth: "15rem", padding: "0.45rem" }}>
+                  {runHistory.map((run) => (
+                    <button
+                      key={run.runId}
+                      type="button"
+                      onClick={() => {
+                        setUserSelectedRunId(run.runId);
+                        setHistoryOpen(false);
+                      }}
+                      style={{
+                        width: "100%",
+                        textAlign: "left",
+                        border: "none",
+                        background: selectedRunId === run.runId ? "var(--accent-muted)" : "transparent",
+                        color: "inherit",
+                        borderRadius: "var(--radius-sm)",
+                        padding: "0.4rem 0.45rem",
+                        cursor: "pointer",
+                        fontSize: "0.78rem",
+                      }}
+                    >
+                      <div>{run.startedAt ? new Date(run.startedAt).toLocaleString() : "Unknown date"}</div>
+                      <div style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>
+                        {run.stageCount} stage{run.stageCount === 1 ? "" : "s"} · {run.runId.slice(0, 8)}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <Button
+            variant={isFailedReview ? "danger" : "ghost"}
+            disabled={isInFlight}
+            onClick={() => {
+              setUserSelectedRunId(null);
+              setHistoryOpen(false);
+              rerunMutation.mutate({ reviewId, installationId });
             }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-              <path d="M3 12a9 9 0 1 0 3-6.7" />
-              <polyline points="3 3 3 9 9 9" />
-              <path d="M12 7v5l3 3" />
-            </svg>
-          </button>
-          <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
-            {isInFlight ? "Current run" : selectedRunId ? `Run ${selectedRunId.slice(0, 8)}` : "Run history"}
-          </span>
-          {historyOpen && runHistory.length > 0 && !isInFlight ? (
-            <div style={{ position: "absolute", top: "2.2rem", left: 0, zIndex: 30, border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", background: "var(--card)", minWidth: "15rem", padding: "0.45rem" }}>
-              {runHistory.map((run) => (
-                <button
-                  key={run.runId}
-                  type="button"
-                  onClick={() => {
-                    setUserSelectedRunId(run.runId);
-                    setHistoryOpen(false);
-                  }}
-                  style={{
-                    width: "100%",
-                    textAlign: "left",
-                    border: "none",
-                    background: selectedRunId === run.runId ? "var(--accent-muted)" : "transparent",
-                    color: "inherit",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "0.4rem 0.45rem",
-                    cursor: "pointer",
-                    fontSize: "0.78rem",
-                  }}
-                >
-                  <div>{run.startedAt ? new Date(run.startedAt).toLocaleString() : "Unknown date"}</div>
-                  <div style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>
-                    {run.stageCount} stage{run.stageCount === 1 ? "" : "s"} · {run.runId.slice(0, 8)}
-                  </div>
-                </button>
-              ))}
-            </div>
-          ) : null}
+            {isInFlight ? "Review in progress…" : isFailedReview ? "Retry review" : "Re-run review"}
+          </Button>
         </div>
-        <Button
-          variant={isFailedReview ? "danger" : "ghost"}
-          disabled={isInFlight}
-          onClick={() => {
-            setUserSelectedRunId(null);
-            setHistoryOpen(false);
-            rerunMutation.mutate({ reviewId, installationId });
-          }}
-          style={{ marginTop: "0.75rem" }}
-        >
-          {isInFlight ? "Review in progress…" : isFailedReview ? "Retry review" : "Re-run review"}
-        </Button>
       </Panel>
 
       <ActionChain
@@ -585,7 +599,12 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         </Panel>
       )}
 
-      <ReviewTimeline events={events} />
+      <ReviewTimeline
+        events={events}
+        reviewStartedAt={data.started_at ?? data.created_at}
+        reviewCompletedAt={data.completed_at}
+        isInFlight={isInFlight}
+      />
     </section>
   );
 }

@@ -1,0 +1,23 @@
+---
+description: Path-aware strictness for auth, webhook, and migration touch points
+alwaysApply: true
+---
+
+# Path-Aware Review Strictness
+
+When touched paths include sensitive zones, escalate review strictness and evidence requirements.
+
+Sensitive path prefixes:
+- `apps/api/src/app/webhooks/`
+- `apps/api/src/app/api/`
+- `apps/api/src/app/db/`
+- `apps/api/alembic/`
+- `apps/web/src/app/api/`
+- `apps/web/src/middleware.ts`
+
+For sensitive paths:
+- Prioritize security and tenant-isolation risks over general maintainability comments.
+- Require explicit verification notes for auth/session boundaries and signature checks.
+- Require migration safety checks (forward + rollback assumptions) for schema/RLS changes.
+- Raise severity floor for uncertain findings only when concrete evidence exists.
+- Never accept ungrounded claims; missing evidence means the finding should be downgraded or dropped.

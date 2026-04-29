@@ -357,6 +357,85 @@ class ApiUsageEvent(Base):
     )
 
 
+class FastPathThresholdConfig(Base):
+    __tablename__ = "fast_path_threshold_configs"
+
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("installations.installation_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    current_threshold: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("90")
+    )
+    minimum_threshold: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("60")
+    )
+    step_down: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
+    target_disagreement_low: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("5")
+    )
+    target_disagreement_high: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("15")
+    )
+    max_false_accept_rate: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("5")
+    )
+    max_dismiss_rate: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("25")
+    )
+    min_samples: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("100"))
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FastPathThresholdHistory(Base):
+    __tablename__ = "fast_path_threshold_history"
+    __table_args__ = (
+        Index("fast_path_threshold_history_installation_time", "installation_id", "recorded_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("installations.installation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    previous_threshold: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_threshold: Mapped[int] = mapped_column(Integer, nullable=False)
+    disagreement_rate: Mapped[float] = mapped_column(
+        Numeric(10, 6), nullable=False, server_default=text("0")
+    )
+    dismiss_rate: Mapped[float] = mapped_column(
+        Numeric(10, 6), nullable=False, server_default=text("0")
+    )
+    false_accept_rate: Mapped[float] = mapped_column(
+        Numeric(10, 6), nullable=False, server_default=text("0")
+    )
+    sample_size: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    action: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'hold'"))
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ProviderMetricConfig(Base):
+    __tablename__ = "provider_metric_configs"
+
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    redact_user_fields: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    allowed_dimensions: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class ExternalEvaluation(Base):
     __tablename__ = "external_evaluations"
     __table_args__ = (

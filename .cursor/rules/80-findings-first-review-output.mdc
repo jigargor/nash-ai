@@ -1,0 +1,19 @@
+---
+description: Findings-first review output contract for PR and repo reviews
+alwaysApply: true
+---
+
+# Findings-First Review Contract
+
+- Lead with material risk findings before style or readability comments.
+- Every finding must cite concrete evidence:
+  - file/path location, and
+  - changed-line or check/log anchor whenever available.
+- Every finding must include:
+  - severity (`critical|high|medium|low`),
+  - impact/rationale,
+  - concise reproduction signal (what was observed and where).
+- Provide actionable remediation for each material finding.
+- Include a `suggestion` block when the fix is concrete and line-local.
+- If no material risk is found, explicitly state that and avoid filler praise.
+- Do not post style-only nitpicks before unresolved correctness/security/performance risk.

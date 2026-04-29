@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "command": "python .cursor/hooks/build_context_pack.py",
+        "matcher": "MCP: user-github",
+        "timeout": 20,
+        "failClosed": false
+      },
+      {
+        "command": "python .cursor/hooks/score_test_gap.py",
+        "matcher": "MCP: user-github",
+        "timeout": 20,
+        "failClosed": false
+      },
+      {
+        "command": "python .cursor/hooks/score_risk.py",
+        "matcher": "MCP: user-github",
+        "timeout": 20,
+        "failClosed": false
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "python .cursor/hooks/validate_review_payload.py",
+        "matcher": "MCP: user-github",
+        "timeout": 20,
+        "failClosed": true
+      }
+    ]
+  }
+}

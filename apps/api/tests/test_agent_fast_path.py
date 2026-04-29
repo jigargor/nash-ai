@@ -49,7 +49,27 @@ def test_normalize_invalid_decision_escalates_to_full_review() -> None:
     decision = normalize_fast_path_decision({"decision": "skip_review"}, FastPathConfig(), [])
 
     assert decision.decision == "full_review"
-    assert "invalid decision schema" in decision.reason
+    assert (
+        "invalid decision schema" in decision.reason
+        or "omitted confidence" in decision.reason
+    )
+
+
+def test_normalize_missing_confidence_escalates_to_full_review() -> None:
+    decision = normalize_fast_path_decision(
+        {
+            "decision": "skip_review",
+            "risk_labels": ["docs_only"],
+            "reason": "safe",
+            "review_surface": ["docs/README.md"],
+            "requires_full_context": False,
+        },
+        FastPathConfig(),
+        [],
+    )
+
+    assert decision.decision == "full_review"
+    assert "missing_confidence" in decision.risk_labels
 
 
 def test_low_confidence_skip_escalates_to_full_review() -> None:

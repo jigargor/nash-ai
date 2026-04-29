@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 from typing import Any
 from urllib.parse import urlparse
@@ -34,7 +35,9 @@ _logger.warning(
 )
 
 from app.agent.runner import run_review  # noqa: E402
+from app.agent.review_config import ReviewConfig  # noqa: E402
 from app.agent.snapshot import archive_expired_snapshots  # noqa: E402
+from app.agent.threshold_tuner import tune_all_installations  # noqa: E402
 from app.agent.external.orchestrator import (  # noqa: E402
     run_external_eval_prepass,
     run_external_eval_shard,
@@ -88,6 +91,12 @@ async def archive_review_snapshots(ctx: dict[str, Any]) -> None:
     ctx["archived_review_snapshots"] = archived
 
 
+async def tune_fast_path_thresholds(ctx: dict[str, Any]) -> None:
+    config = ReviewConfig().adaptive_threshold
+    results = await tune_all_installations(config)
+    ctx["threshold_tuning_results"] = [dataclasses.asdict(result) for result in results]
+
+
 async def external_eval_prepass(ctx: dict[str, Any], external_eval_id: int) -> None:
     await run_external_eval_prepass(eval_id=external_eval_id, redis=ctx.get("redis"))
 
@@ -112,6 +121,7 @@ class WorkerSettings:
         classify_pr_outcomes,
         classify_pending_outcomes,
         archive_review_snapshots,
+        tune_fast_path_thresholds,
         refresh_llm_catalog,
         external_eval_prepass,
         external_eval_shard,
@@ -126,6 +136,7 @@ class WorkerSettings:
     on_startup = worker_startup
     cron_jobs = [
         cron(classify_pending_outcomes, hour=3, minute=0),
+        cron(tune_fast_path_thresholds, minute=10),
         cron(archive_review_snapshots, weekday="sun", hour=4, minute=15),
         cron(refresh_llm_catalog, hour=2, minute=30),
     ]

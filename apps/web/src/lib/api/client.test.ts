@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, apiFetch } from "./client";
+import { ApiError, assertBrowserDashboardApiPath, apiFetch } from "./client";
 
 describe("apiFetch", () => {
   afterEach(() => {
@@ -31,5 +31,18 @@ describe("apiFetch", () => {
     const { apiFetch: apiFetchFresh } = await import("./client");
     await apiFetchFresh("/api/v1/reviews");
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/v1/reviews");
+  });
+});
+
+describe("assertBrowserDashboardApiPath", () => {
+  it("rejects non-BFF URLs and paths when running in a browser", () => {
+    const original = globalThis.window;
+    vi.stubGlobal("window", {} as Window & typeof globalThis);
+    try {
+      expect(() => assertBrowserDashboardApiPath("/v1/foo")).toThrow(/BFF/);
+      expect(() => assertBrowserDashboardApiPath("https://api.example/upstream")).toThrow(/BFF/);
+    } finally {
+      vi.stubGlobal("window", original);
+    }
   });
 });

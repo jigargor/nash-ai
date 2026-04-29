@@ -2,8 +2,8 @@
 
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
+import { actionDismissFinding, actionRerunReview } from "@/app/actions/dashboard-api";
 import type { ReviewDetail, ReviewListItem } from "@/lib/api/reviews";
-import { dismissFinding, rerunReview } from "@/lib/api/reviews";
 
 interface RerunContext {
   previousReview: ReviewDetail | undefined;
@@ -15,7 +15,7 @@ export function useRerunReview() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ reviewId, installationId }: { reviewId: number; installationId: number }) =>
-      rerunReview(reviewId, installationId),
+      actionRerunReview(reviewId, installationId),
     onMutate: async ({ reviewId, installationId }) => {
       const reviewQueryKey = ["review", reviewId, installationId] as const;
       await queryClient.cancelQueries({ queryKey: reviewQueryKey });
@@ -60,7 +60,7 @@ export function useDismissFinding() {
       reviewId: number;
       findingIndex: number;
       installationId: number;
-    }) => dismissFinding(reviewId, findingIndex, installationId),
+    }) => actionDismissFinding(reviewId, findingIndex, installationId),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["review", variables.reviewId] });
     },

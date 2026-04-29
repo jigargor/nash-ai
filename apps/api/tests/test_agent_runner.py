@@ -25,6 +25,7 @@ from app.agent.runner import (
     _run_chunked_review,
     _load_user_provider_keys,
     _summarize_target_line_mismatch_subtypes,
+    _track_fast_path_confidence_anomaly,
     _validate_result,
     _validation_feedback,
     cross_check_fact_ids,
@@ -359,6 +360,47 @@ async def test_run_fast_path_stage_records_audit_and_debug_metadata(
     assert audits[0]["stage"] == "fast_path"
     assert audits[0]["decision"] == "skip_review"
     assert audits[0]["extra_metadata"]["confidence"] == 95
+
+
+@pytest.mark.anyio
+async def test_track_fast_path_confidence_anomaly_flags_repeated_zeros() -> None:
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.store: dict[str, int] = {}
+
+        async def incr(self, key: str) -> int:
+            self.store[key] = int(self.store.get(key, 0)) + 1
+            return self.store[key]
+
+        async def expire(self, _key: str, _seconds: int) -> bool:
+            return True
+
+        async def delete(self, key: str) -> int:
+            self.store.pop(key, None)
+            return 1
+
+    context = {"installation_id": 42, "_redis": FakeRedis()}
+    count_1, flagged_1 = await _track_fast_path_confidence_anomaly(
+        context=context,
+        provider="openai",
+        model="gpt-5-mini",
+        confidence=0,
+        limit=2,
+        enabled=True,
+    )
+    count_2, flagged_2 = await _track_fast_path_confidence_anomaly(
+        context=context,
+        provider="openai",
+        model="gpt-5-mini",
+        confidence=0,
+        limit=2,
+        enabled=True,
+    )
+
+    assert count_1 == 1
+    assert flagged_1 is False
+    assert count_2 == 2
+    assert flagged_2 is True
 
 
 @pytest.mark.anyio

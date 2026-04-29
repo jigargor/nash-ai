@@ -1,5 +1,20 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") ?? "";
 
+/** Enforces dashboard data flow through Next.js `/api/v1/*` BFF in the browser (same-origin fetch). */
+export function assertBrowserDashboardApiPath(path: string): void {
+  if (typeof window === "undefined") return;
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    throw new Error(
+      "Dashboard API calls must use same-origin `/api/v1/...` paths (Next.js BFF), not absolute upstream URLs.",
+    );
+  }
+  if (!path.startsWith("/api/")) {
+    throw new Error(
+      `Dashboard API calls must target the Next.js BFF (path starting with "/api/"), got: ${path}`,
+    );
+  }
+}
+
 export class ApiError extends Error {
   status: number;
 
@@ -10,7 +25,7 @@ export class ApiError extends Error {
 }
 
 function resolveApiRequestUrl(path: string): string {
-  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  assertBrowserDashboardApiPath(path);
   // Dashboard data must hit the Next.js BFF (`/api/v1/*` routes) so cookies and `X-Api-Key` work.
   // Never merge NEXT_PUBLIC_API_BASE with `/api/…` or the browser CSP blocks cross-origin connects.
   if (path.startsWith("/api/")) return path;

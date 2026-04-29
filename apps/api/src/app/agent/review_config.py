@@ -80,6 +80,21 @@ class FastPathConfig:
     light_review_min_confidence: int = 80
     max_diff_excerpt_tokens: int = 3000
     allow_skip: bool = True
+    confidence_bug_check: bool = True
+    zero_confidence_limit: int = 5
+
+
+@dataclass
+class AdaptiveThresholdConfig:
+    enabled: bool = True
+    initial_threshold: int = 90
+    minimum_threshold: int = 60
+    step_down: int = 2
+    target_disagreement_low: int = 5
+    target_disagreement_high: int = 15
+    max_false_accept_rate: int = 5
+    max_dismiss_rate: int = 25
+    min_samples: int = 100
 
 
 @dataclass
@@ -98,6 +113,7 @@ class ReviewConfig:
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     models: ModelsRoutingConfig = field(default_factory=ModelsRoutingConfig)
     fast_path: FastPathConfig = field(default_factory=FastPathConfig)
+    adaptive_threshold: AdaptiveThresholdConfig = field(default_factory=AdaptiveThresholdConfig)
 
 
 async def load_review_config(
@@ -134,6 +150,7 @@ async def load_review_config(
     packaging = _parse_packaging(parsed)
     chunking = _parse_chunking(parsed.get("chunking"))
     fast_path = _parse_fast_path(parsed.get("fast_path"))
+    adaptive_threshold = _parse_adaptive_threshold(parsed.get("adaptive_threshold"))
     return ReviewConfig(
         confidence_threshold=threshold,
         severity_threshold=severity_threshold,
@@ -149,6 +166,7 @@ async def load_review_config(
         packaging=packaging,
         chunking=chunking,
         fast_path=fast_path,
+        adaptive_threshold=adaptive_threshold,
     )
 
 
@@ -450,6 +468,36 @@ def _parse_fast_path(raw_value: object) -> FastPathConfig:
             raw_value.get("max_diff_excerpt_tokens"), 3000
         ),
         allow_skip=bool(raw_value.get("allow_skip", True)),
+        confidence_bug_check=bool(raw_value.get("confidence_bug_check", True)),
+        zero_confidence_limit=_normalize_positive_int(raw_value.get("zero_confidence_limit"), 5),
+    )
+
+
+def _parse_adaptive_threshold(raw_value: object) -> AdaptiveThresholdConfig:
+    if not isinstance(raw_value, Mapping):
+        return AdaptiveThresholdConfig()
+    return AdaptiveThresholdConfig(
+        enabled=bool(raw_value.get("enabled", True)),
+        initial_threshold=_normalize_bounded_int(
+            raw_value.get("initial_threshold"), 90, minimum=0, maximum=100
+        ),
+        minimum_threshold=_normalize_bounded_int(
+            raw_value.get("minimum_threshold"), 60, minimum=0, maximum=100
+        ),
+        step_down=_normalize_bounded_int(raw_value.get("step_down"), 2, minimum=1, maximum=50),
+        target_disagreement_low=_normalize_bounded_int(
+            raw_value.get("target_disagreement_low"), 5, minimum=0, maximum=100
+        ),
+        target_disagreement_high=_normalize_bounded_int(
+            raw_value.get("target_disagreement_high"), 15, minimum=0, maximum=100
+        ),
+        max_false_accept_rate=_normalize_bounded_int(
+            raw_value.get("max_false_accept_rate"), 5, minimum=0, maximum=100
+        ),
+        max_dismiss_rate=_normalize_bounded_int(
+            raw_value.get("max_dismiss_rate"), 25, minimum=0, maximum=100
+        ),
+        min_samples=_normalize_positive_int(raw_value.get("min_samples"), 100),
     )
 
 

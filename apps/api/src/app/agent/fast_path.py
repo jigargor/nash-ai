@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError
@@ -14,6 +15,7 @@ from app.llm.providers import StructuredOutputRequest, get_provider_adapter
 from app.llm.types import ModelProvider
 
 FastPathDecisionValue = Literal["skip_review", "light_review", "full_review", "high_risk_review"]
+logger = logging.getLogger(__name__)
 
 HIGH_RISK_PATH_TOKENS = (
     "auth",
@@ -43,7 +45,7 @@ class FastPathDecision(BaseModel):
     decision: FastPathDecisionValue
     risk_labels: list[str] = Field(default_factory=list)
     reason: str
-    confidence: int = Field(default=0, ge=0, le=100)
+    confidence: int | None = Field(default=None, ge=0, le=100)
     review_surface: list[str] = Field(default_factory=list)
     requires_full_context: bool = True
 
@@ -60,7 +62,7 @@ def fallback_full_review(reason: str, *, risk_labels: list[str] | None = None) -
         decision="full_review",
         risk_labels=risk_labels or ["uncertain"],
         reason=reason[:500],
-        confidence=0,
+        confidence=None,
         review_surface=[],
         requires_full_context=True,
     )
@@ -69,10 +71,24 @@ def fallback_full_review(reason: str, *, risk_labels: list[str] | None = None) -
 def normalize_fast_path_decision(
     raw: object, config: FastPathConfig, classified: list[ClassifiedDiffFile]
 ) -> FastPathDecision:
+    if not isinstance(raw, dict):
+        return fallback_full_review("Fast-path model returned an invalid decision schema.")
+    payload = dict(raw)
+    if "confidence" not in payload:
+        logger.warning("Fast-path decision missing confidence. Escalating to full review.")
+        return fallback_full_review(
+            "Fast-path model omitted confidence; escalated for safety.",
+            risk_labels=["missing_confidence"],
+        )
     try:
-        decision = FastPathDecision.model_validate(raw)
+        decision = FastPathDecision.model_validate(payload)
     except ValidationError:
         return fallback_full_review("Fast-path model returned an invalid decision schema.")
+    if decision.confidence is None:
+        return fallback_full_review(
+            "Fast-path model returned null confidence; escalated for safety.",
+            risk_labels=["missing_confidence"],
+        )
 
     high_risk_paths = [item.path for item in classified if is_high_risk_path(item.path)]
     if high_risk_paths and decision.decision in {"skip_review", "light_review"}:
@@ -94,7 +110,7 @@ def normalize_fast_path_decision(
                 review_surface=decision.review_surface,
                 requires_full_context=True,
             )
-        if decision.confidence < config.skip_min_confidence:
+        if int(decision.confidence) < config.skip_min_confidence:
             return FastPathDecision(
                 decision="full_review",
                 risk_labels=sorted({*decision.risk_labels, "low_confidence"}),
@@ -105,7 +121,7 @@ def normalize_fast_path_decision(
             )
     if (
         decision.decision == "light_review"
-        and decision.confidence < config.light_review_min_confidence
+        and int(decision.confidence) < config.light_review_min_confidence
     ):
         return FastPathDecision(
             decision="full_review",

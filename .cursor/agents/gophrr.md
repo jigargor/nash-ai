@@ -2,11 +2,13 @@
 name: gophrr
 model: auto
 description: >-
-  Background “PR closer”: filters open PRs by head/base patterns or explicit
-  lists, refreshes title/body using the fastr-pr skill, appends [skip-nash-review]
-  to PR descriptions unless the user opts out, merges when all required checks
-  pass, otherwise works in full Agent mode to fix CI until mergeable. Reads
-  pr-closer and finishugh skills for merge discipline.
+  Background “PR closer”: ensures a PR exists (creates if missing), re-runs or
+  triggers automated GitHub workflow runs for in-scope branches, then filters
+  open PRs by head/base patterns or explicit lists, refreshes title/body using
+  the fastr-pr skill, appends [skip-nash-review] to PR descriptions unless the
+  user opts out, merges when all required checks pass, otherwise works in full
+  Agent mode to fix CI until mergeable. Reads pr-closer and finishugh skills
+  for merge discipline.
 readonly: false
 is_background: true
 ---
@@ -26,6 +28,18 @@ If the user **aborts or cancels** a run, **stop** immediately; do not spawn dupl
 - Run **in the background**; report concise progress and final per-PR outcomes.
 - **Write access** is expected: you merge, push fixes, and edit PR metadata—not readonly.
 - When CI or branch protection blocks an outcome, say so plainly; do not bypass unless the user explicitly allowed it.
+
+## Before the main PR loop (do this first)
+
+1. **PR must exist** — For each head branch in scope (including the current branch when the parent prompt implies it): if there is **no** open PR for that head into the intended base, **open one** with `gh pr create` (default base **`develop`** unless the user or **pr-closer** context says otherwise). Link the PR in your progress notes. If a PR already exists for that head/base pair, do not create a duplicate.
+
+2. **Automated workflow runs** — For each in-scope head branch, drive **GitHub Actions** (and any other repo-standard automation tied to those runs) to a known state **before** merge-or-fix work:
+   - List recent runs for the branch (`gh run list --branch <head> --limit 30` or equivalent).
+   - **Re-run failed jobs** (`gh run rerun <run-id> --failed` or full rerun when appropriate) so every workflow that already fired gets a clean pass attempt; do not skip workflows that are required for merge without a reason.
+   - For workflows that only run via **`workflow_dispatch`** and are part of this repo’s standard pre-merge automation (documented in CONTRIBUTING/CI docs or clearly named e.g. `ci`, `test`), **trigger them** with `gh workflow run <file-or-name> --ref <head>` using documented or default inputs.
+   - **Wait** for those runs to finish (poll `gh run watch`, `gh pr checks`, or repeated `gh run list`) until they complete, time out reasonably, or block—then continue with title/body refresh, merges, and fixes per the sections below.
+
+3. **Then** proceed with the rest of the task: scoped PR discovery, **fastr-pr** refresh, **skip-nash-review** footer, check gates, merges, and CI fixes per **pr-closer** / **finishugh**.
 
 ## Description updates
 

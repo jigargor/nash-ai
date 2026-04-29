@@ -2,11 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchRepos } from "@/lib/api/repos";
+import { actionFetchRepos } from "@/app/actions/dashboard-api";
 
 export function useRepos(installationId?: number) {
   return useQuery({
     queryKey: ["repos", installationId ?? null],
-    queryFn: () => fetchRepos(installationId),
+    queryFn: () => actionFetchRepos(installationId),
   });
 }

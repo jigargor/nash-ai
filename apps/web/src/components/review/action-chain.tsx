@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { ReviewModelAudit } from "@/lib/api/reviews";
 
@@ -35,6 +35,48 @@ function fmtMs(ms: number | null | undefined): string {
 
 function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function formatStageTimestamp(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "medium" });
+}
+
+function parseUsd(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
+function fmtUsd(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `$${value.toFixed(6)}`;
+}
+
+function formatElapsedMs(ms: number | null): string {
+  if (ms == null || ms < 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  if (hours > 0) return `${hours} h ${minutes % 60} m ${seconds % 60} s`;
+  if (minutes > 0) return `${minutes} m ${seconds % 60} s`;
+  return `${seconds} s`;
+}
+
+function deriveLivePipelinePresentation(
+  hasChunking: boolean,
+  audits: ReviewModelAudit[],
+): { label: string; icon: string; color: string } {
+  if (audits.length === 0) {
+    return { label: "Starting pipeline…", icon: "⏳", color: "var(--text-muted)" };
+  }
+  const last = audits[audits.length - 1].stage;
+  if (!hasChunking && (last === "chunk_review" || last === "synthesis")) return stageMeta(last);
+  return stageMeta(last);
 }
 
 function extractStatusCode(audit: ReviewModelAudit): number | null {
@@ -472,54 +514,74 @@ function FinalPostBody({ debugArtifacts }: { debugArtifacts: Record<string, unkn
   );
 }
 
-function LiveStageProgress({ audits }: { audits: ReviewModelAudit[] }) {
-  const completed = new Set(audits.map((audit) => audit.stage));
-  const baseOrder = ["fast_path", "primary", "chunk_review", "synthesis", "editor", "final_post"];
-  const known = new Set(baseOrder);
-  const stages = [...baseOrder, ...audits.map((audit) => audit.stage).filter((stage) => !known.has(stage))];
-
+function LiveStageProgress({ label, icon }: { label: string; icon: string }) {
   return (
-    <div style={{ marginBottom: "0.6rem", border: "1px dashed var(--border-strong)", borderRadius: "var(--radius-md)", padding: "0.55rem 0.65rem" }}>
-      <p style={{ margin: 0, marginBottom: "0.35rem", color: "var(--text-muted)", fontSize: "0.74rem" }}>
-        Live stage progress
+    <div
+      style={{
+        marginBottom: "0.75rem",
+        border: "2px dashed var(--border-strong)",
+        borderRadius: "var(--radius-md)",
+        padding: "1.1rem 1rem",
+        minHeight: "8.5rem",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "0.45rem",
+        background: "var(--card-muted)",
+        textAlign: "center",
+      }}
+    >
+      <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
+        Current pipeline step
       </p>
-      <div style={{ display: "grid", gap: "0.25rem" }}>
-        {stages.map((stage) => {
-          const meta = stageMeta(stage);
-          const done = completed.has(stage);
-          return (
-            <div key={stage} style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.78rem" }}>
-              <span style={{ width: "1rem" }}>{done ? "✓" : meta.icon}</span>
-              <span style={{ color: done ? "var(--text-primary)" : "var(--text-muted)" }}>{meta.label}</span>
-              {!done ? (
-                <span style={{ display: "inline-flex", gap: "0.2rem", marginLeft: "0.25rem" }}>
-                  <span className="live-dot" />
-                  <span className="live-dot" style={{ animationDelay: "0.15s" }} />
-                  <span className="live-dot" style={{ animationDelay: "0.3s" }} />
-                </span>
-              ) : null}
-            </div>
-          );
-        })}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.55rem", flexWrap: "wrap", width: "100%" }}>
+        <span style={{ fontSize: "1.35rem", lineHeight: 1 }} aria-hidden>
+          {icon}
+        </span>
+        <span style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--text-primary)" }}>{label}</span>
       </div>
+      <div className="orbit-loader" aria-hidden>
+        <span className="orbit-dot orbit-dot-1" />
+        <span className="orbit-dot orbit-dot-2" />
+        <span className="orbit-dot orbit-dot-3" />
+      </div>
+      <p style={{ margin: 0, fontSize: "0.7rem", color: "var(--text-muted)", maxWidth: "28rem", lineHeight: 1.45 }}>
+        Waiting for this step to finish. Completed step details appear in this same panel.
+      </p>
       <style jsx>{`
-        .live-dot {
-          width: 0.28rem;
-          height: 0.28rem;
+        .orbit-loader {
+          position: relative;
+          width: 1.5rem;
+          height: 1.5rem;
+          animation: orbit-spin 1.4s linear infinite;
+        }
+        .orbit-dot {
+          position: absolute;
+          width: 0.32rem;
+          height: 0.32rem;
           border-radius: 999px;
           background: var(--accent);
-          animation: pulse-dot 1s infinite ease-in-out;
+          top: 50%;
+          left: 50%;
+          margin-top: -0.16rem;
+          margin-left: -0.16rem;
         }
-        @keyframes pulse-dot {
-          0%,
-          80%,
-          100% {
-            opacity: 0.25;
-            transform: translateY(0);
+        .orbit-dot-1 {
+          transform: translateY(-0.65rem);
+        }
+        .orbit-dot-2 {
+          transform: rotate(120deg) translateY(-0.65rem);
+        }
+        .orbit-dot-3 {
+          transform: rotate(240deg) translateY(-0.65rem);
+        }
+        @keyframes orbit-spin {
+          from {
+            transform: rotate(0deg);
           }
-          40% {
-            opacity: 1;
-            transform: translateY(-2px);
+          to {
+            transform: rotate(360deg);
           }
         }
       `}</style>
@@ -536,14 +598,17 @@ function StageCard({
   debugArtifacts,
   defaultOpen,
   isLast,
+  estimatedCostUsd,
 }: {
   audit: ReviewModelAudit;
   debugArtifacts: Record<string, unknown> | null;
   defaultOpen: boolean;
   isLast: boolean;
+  estimatedCostUsd: number | null;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { label, icon, color } = stageMeta(audit.stage);
+  const startedAtLabel = formatStageTimestamp(audit.created_at);
   const statusCode = extractStatusCode(audit) ?? 200;
   const statusFailed = isFailedStage(audit);
   const meta = audit.stage === "final_post" ? null : audit.metadata_json;
@@ -593,32 +658,48 @@ function StageCard({
           }}
         >
           <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", alignItems: "stretch", width: "100%" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-              <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>{label}</span>
-              <DecisionBadge decision={audit.decision} />
-              {hasBody ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", width: "100%" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", minWidth: 0 }}>
+                <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)" }}>{label}</span>
+                <DecisionBadge decision={audit.decision} />
+                {hasBody ? (
+                  <span
+                    style={{
+                      fontSize: "0.65rem",
+                      color: "var(--text-muted)",
+                      display: "inline-block",
+                      transform: open ? "rotate(90deg)" : "none",
+                      transition: "transform 0.15s",
+                    }}
+                  >
+                    ▶
+                  </span>
+                ) : null}
                 <span
                   style={{
-                    fontSize: "0.65rem",
-                    color: "var(--text-muted)",
-                    display: "inline-block",
-                    transform: open ? "rotate(90deg)" : "none",
-                    transition: "transform 0.15s",
+                    fontSize: "0.68rem",
+                    fontWeight: 600,
+                    color: statusFailed ? "#f43f5e" : "#34d399",
                   }}
+                  title={statusFailed ? "Detected stage failure" : "Successful stage response"}
                 >
-                  ▶
+                  {statusCode}
+                </span>
+              </div>
+              {startedAtLabel ? (
+                <span
+                  style={{
+                    fontSize: "0.68rem",
+                    color: "var(--text-muted)",
+                    marginLeft: "auto",
+                    flexShrink: 0,
+                    fontFamily: "var(--font-geist-mono), ui-monospace, monospace",
+                  }}
+                  title="Stage started"
+                >
+                  {startedAtLabel}
                 </span>
               ) : null}
-              <span
-                style={{
-                  fontSize: "0.68rem",
-                  fontWeight: 600,
-                  color: statusFailed ? "#f43f5e" : "#34d399",
-                }}
-                title={statusFailed ? "Detected stage failure" : "Successful stage response"}
-              >
-                {statusCode}
-              </span>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", alignItems: "center", width: "100%" }}>
               <span
@@ -649,6 +730,11 @@ function StageCard({
                   {audit.accepted_findings_count != null && audit.accepted_findings_count !== audit.findings_count
                     ? ` → ${audit.accepted_findings_count} kept`
                     : ""}
+                </span>
+              ) : null}
+              {estimatedCostUsd != null ? (
+                <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                  · est. {fmtUsd(estimatedCostUsd)}
                 </span>
               ) : null}
             </div>
@@ -792,16 +878,20 @@ function ChunkingCallout({ plan }: { plan: Record<string, unknown> }) {
 // Token summary footer
 // ---------------------------------------------------------------------------
 
-function TokenSummary({
+function BottomPanelSummary({
   audits,
   costUsd,
   postedFindingsCount,
   pipelineStagedFindingsPeak,
+  isInFlight,
+  nowMs,
 }: {
   audits: ReviewModelAudit[];
   costUsd: string | null;
   postedFindingsCount: number;
   pipelineStagedFindingsPeak: number;
+  isInFlight: boolean;
+  nowMs: number;
 }) {
   let totalInput = 0,
     totalOutput = 0,
@@ -813,12 +903,44 @@ function TokenSummary({
   }
 
   const showTokens = totalAll > 0;
-  const showCost = Boolean(costUsd);
+  const totalCostNumber = parseUsd(costUsd);
+  const showCost = totalCostNumber != null;
+  const startedAtMs =
+    audits.length > 0 && audits[0].created_at ? new Date(audits[0].created_at).getTime() : null;
+  const endedAtMs =
+    !isInFlight && audits.length > 0 && audits[audits.length - 1].created_at
+      ? new Date(audits[audits.length - 1].created_at!).getTime()
+      : null;
+  const runtimeMs =
+    startedAtMs == null
+      ? null
+      : endedAtMs == null
+        ? isInFlight
+          ? nowMs - startedAtMs
+          : null
+        : endedAtMs - startedAtMs;
+  const completedNodes = audits.length;
 
   return (
     <div style={{ display: "flex", gap: "0.75rem" }}>
       <div style={{ width: "24px", flexShrink: 0 }} />
-      <div style={{ flex: 1, borderTop: "1px solid var(--border)", paddingTop: "0.6rem", display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center" }}>
+      <div style={{ flex: 1, borderTop: "1px solid var(--border)", paddingTop: "0.6rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.55rem 0.75rem" }}>
+        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+          Start: <strong style={{ color: "var(--text-primary)" }}>{formatStageTimestamp(audits[0]?.created_at ?? null) ?? "—"}</strong>
+        </span>
+        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+          End:{" "}
+          <strong style={{ color: "var(--text-primary)" }}>
+            {isInFlight ? "In progress…" : formatStageTimestamp(audits[audits.length - 1]?.created_at ?? null) ?? "—"}
+          </strong>
+        </span>
+        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+          Runtime: <strong style={{ color: "var(--text-primary)" }}>{formatElapsedMs(runtimeMs)}</strong>
+          {runtimeMs != null && isInFlight ? " so far" : ""}
+        </span>
+        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+          Nodes: <strong style={{ color: "var(--text-primary)" }}>{completedNodes}</strong>
+        </span>
         {showTokens ? (
           <>
             <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
@@ -832,22 +954,20 @@ function TokenSummary({
             </span>
           </>
         ) : null}
-        <span style={{ marginLeft: "auto", display: "inline-flex", gap: "0.65rem", alignItems: "center", flexWrap: "wrap" }}>
-          {showCost ? (
-            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-              Est. cost: <strong style={{ color: "var(--accent)" }}>${costUsd}</strong>
-            </span>
-          ) : null}
+        {showCost ? (
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-            Posted: <strong style={{ color: "var(--text-primary)" }}>{postedFindingsCount}</strong>
-            {pipelineStagedFindingsPeak > postedFindingsCount ? (
-              <>
-                {" "}
-                · pipeline max:{" "}
-                <strong style={{ color: "var(--text-primary)" }}>{pipelineStagedFindingsPeak}</strong>
-              </>
-            ) : null}
+            Est. cost: <strong style={{ color: "var(--accent)" }}>{fmtUsd(totalCostNumber)}</strong>
           </span>
+        ) : null}
+        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+          Posted: <strong style={{ color: "var(--text-primary)" }}>{postedFindingsCount}</strong>
+          {pipelineStagedFindingsPeak > postedFindingsCount ? (
+            <>
+              {" "}
+              · pipeline max:{" "}
+              <strong style={{ color: "var(--text-primary)" }}>{pipelineStagedFindingsPeak}</strong>
+            </>
+          ) : null}
         </span>
       </div>
     </div>
@@ -874,6 +994,19 @@ interface ActionChainProps {
 }
 
 const AUTO_OPEN_STAGES = new Set(["primary", "challenger", "tie_break"]);
+const STAGE_SEQUENCE = ["fast_path", "primary", "chunk_review", "synthesis", "challenger", "tie_break", "editor", "final_post"];
+
+function nextStageLabel(currentStage: string | null, hasChunking: boolean): { label: string; icon: string } {
+  if (!currentStage) return { label: "Starting pipeline…", icon: "⏳" };
+  const currentIndex = STAGE_SEQUENCE.indexOf(currentStage);
+  const next = STAGE_SEQUENCE[currentIndex + 1];
+  if (!next) return { label: "Finalizing review", icon: "✅" };
+  if (!hasChunking && (next === "chunk_review" || next === "synthesis")) {
+    return nextStageLabel(next, hasChunking);
+  }
+  const meta = stageMeta(next);
+  return { label: meta.label, icon: meta.icon };
+}
 
 export function ActionChain({
   audits,
@@ -887,9 +1020,48 @@ export function ActionChain({
 }: ActionChainProps) {
   const chunkingPlan = debugArtifacts?.chunking_plan as Record<string, unknown> | undefined;
   const hasChunking = chunkingPlan && Array.isArray(chunkingPlan.chunks) && (chunkingPlan.chunks as unknown[]).length > 1;
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const lastRunIdRef = useRef<string | null>(null);
+  const lastAuditCountRef = useRef(0);
+  const [showCompletedUntilMs, setShowCompletedUntilMs] = useState<number | null>(null);
 
-  // Insert chunking callout before the first chunk_review stage
-  const firstChunkIdx = audits.findIndex((a) => a.stage === "chunk_review");
+  const currentRunId = audits[audits.length - 1]?.run_id ?? null;
+  const totalTokens = useMemo(() => audits.reduce((sum, audit) => sum + audit.total_tokens, 0), [audits]);
+  const totalCostNumber = parseUsd(costUsd ?? null);
+  const latestAudit = audits[audits.length - 1] ?? null;
+  const pendingMeta = nextStageLabel(latestAudit?.stage ?? null, Boolean(hasChunking));
+  const latestEstimatedCostUsd =
+    latestAudit && totalCostNumber != null && totalTokens > 0
+      ? (latestAudit.total_tokens / totalTokens) * totalCostNumber
+      : null;
+
+  useEffect(() => {
+    if (!isInFlight) return;
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [isInFlight]);
+
+  useEffect(() => {
+    if (currentRunId !== lastRunIdRef.current) {
+      lastRunIdRef.current = currentRunId;
+      lastAuditCountRef.current = audits.length;
+      setShowCompletedUntilMs(null);
+      return;
+    }
+    if (audits.length > lastAuditCountRef.current && isInFlight) {
+      lastAuditCountRef.current = audits.length;
+      setShowCompletedUntilMs(Date.now() + 1800);
+      return;
+    }
+    if (audits.length < lastAuditCountRef.current) {
+      lastAuditCountRef.current = audits.length;
+      setShowCompletedUntilMs(null);
+    }
+  }, [audits.length, currentRunId, isInFlight]);
+
+  const shouldShowLatestCompleted =
+    latestAudit != null &&
+    (!isInFlight || (showCompletedUntilMs != null && nowMs <= showCompletedUntilMs));
 
   return (
     <div
@@ -924,25 +1096,52 @@ export function ActionChain({
             "No pipeline stages recorded yet. If the review is still running, refresh after it completes."}
         </p>
       ) : null}
-      {isInFlight ? <LiveStageProgress audits={audits} /> : null}
-      <div>
-        {audits.map((audit, i) => (
-          <div key={audit.id}>
-            {hasChunking && i === firstChunkIdx && <ChunkingCallout plan={chunkingPlan!} />}
-            <StageCard
-              audit={audit}
-              debugArtifacts={debugArtifacts}
-              defaultOpen={AUTO_OPEN_STAGES.has(audit.stage)}
-              isLast={i === audits.length - 1}
-            />
-          </div>
-        ))}
-      </div>
-      <TokenSummary
+      {hasChunking && chunkingPlan ? <ChunkingCallout plan={chunkingPlan} /> : null}
+      {shouldShowLatestCompleted && latestAudit ? (
+        <div
+          style={{
+            marginBottom: "0.75rem",
+            border: "2px dashed var(--border-strong)",
+            borderRadius: "var(--radius-md)",
+            padding: "0.75rem",
+            background: "var(--card-muted)",
+          }}
+        >
+          <p style={{ margin: "0 0 0.55rem", color: "var(--text-muted)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
+            Completed step
+          </p>
+          <StageCard
+            audit={latestAudit}
+            debugArtifacts={debugArtifacts}
+            defaultOpen={AUTO_OPEN_STAGES.has(latestAudit.stage)}
+            isLast
+            estimatedCostUsd={latestEstimatedCostUsd}
+          />
+        </div>
+      ) : isInFlight ? (
+        <LiveStageProgress label={pendingMeta.label} icon={pendingMeta.icon} />
+      ) : (
+        <div
+          style={{
+            marginBottom: "0.75rem",
+            border: "2px dashed var(--border-strong)",
+            borderRadius: "var(--radius-md)",
+            padding: "1rem",
+            background: "var(--card-muted)",
+          }}
+        >
+          <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.75rem" }}>
+            No completed step available for this run yet.
+          </p>
+        </div>
+      )}
+      <BottomPanelSummary
         audits={audits}
         costUsd={costUsd ?? null}
         postedFindingsCount={postedFindingsCount}
         pipelineStagedFindingsPeak={pipelineStagedFindingsPeak}
+        isInFlight={Boolean(isInFlight)}
+        nowMs={nowMs}
       />
     </div>
   );

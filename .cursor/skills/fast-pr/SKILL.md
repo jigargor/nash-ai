@@ -15,6 +15,7 @@ Lightweight PR artifacts: **speed and clarity** over exhaustive review. Defer de
 
 1. If the user gives a branch or task, infer scope from minimal **git context** when available (`git status`, `git diff`, `git log -1`)—only what you need to summarize.
 2. If the request is vague (“open a PR”), ask for **branch name** or **what changed** in one line, then proceed.
+3. If **base and head** are known (e.g. `develop` → `main`), follow **fastr-pr** “Grounding” in [../fastr-pr/SKILL.md](../fastr-pr/SKILL.md): `git log base..head` and `git diff --stat base...head` before writing summary bullets—no generic integration-only copy.
 
 ## Output format (default, markdown copy-paste)
 

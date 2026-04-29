@@ -2,11 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchModelsCatalog } from "@/lib/api/models";
+import { actionFetchModelsCatalog } from "@/app/actions/dashboard-api";
 
 export function useModelsCatalog() {
   return useQuery({
     queryKey: ["models-catalog"],
-    queryFn: fetchModelsCatalog,
+    queryFn: actionFetchModelsCatalog,
   });
 }
