@@ -29,6 +29,7 @@ export default function DashboardHomePage() {
   const capLabel =
     capState === "capped" ? "Cap reached" : capState === "near-cap" ? "Near cap" : "Within cap";
   const perKeyCaps = usageSummary.data?.api_key_caps ?? [];
+  const configuredProviderCount = usageSummary.data?.configured_provider_count ?? 0;
   const cumulativeCaps = usageSummary.data?.cumulative_caps;
 
   const selectedCapRows = useMemo(() => {
@@ -54,8 +55,11 @@ export default function DashboardHomePage() {
     <section style={{ display: "grid", gap: "1rem" }}>
       <div className="metrics-grid">
         <article className="metric-card">
-          <p className="metric-label">Active providers</p>
-          <p className="metric-value">{perKeyCaps.length}</p>
+          <p className="metric-label">Providers with API keys</p>
+          <p className="metric-value">{configuredProviderCount}</p>
+          <p className="metric-label" style={{ marginTop: "0.35rem", fontSize: "0.75rem", opacity: 0.85 }}>
+            With token usage in table (24h window): {perKeyCaps.length}
+          </p>
         </article>
         <article className="metric-card">
           <p className="metric-label">Service requests (24h)</p>

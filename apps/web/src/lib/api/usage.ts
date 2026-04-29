@@ -39,6 +39,8 @@ export interface UsageSummary {
     daily_token_budget: number;
     state: "safe" | "near-cap" | "capped";
   };
+  configured_providers?: string[];
+  configured_provider_count?: number;
 }
 
 export function fetchUsageSummary(installationId: number) {

@@ -39,7 +39,7 @@ from app.queue.connection import require_app_redis
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -274,6 +274,12 @@ def _diff_stats_from_debug_artifacts(review: Review) -> tuple[int | None, int | 
     changed_files = _as_int_or_none(fast_path.get("changed_file_count"))
     changed_lines = _as_int_or_none(fast_path.get("changed_line_count"))
     return changed_files, changed_lines
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _review_list_item(review: Review) -> dict[str, object]:
@@ -561,19 +567,37 @@ async def generate_repo_codereview_template(
 async def list_reviews(
     installation_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
+    created_after: datetime | None = Query(
+        default=None,
+        description="ISO-8601: include reviews with created_at on or after this instant (UTC if naive).",
+    ),
+    created_before: datetime | None = Query(
+        default=None,
+        description="ISO-8601: include reviews with created_at on or before this instant (UTC if naive).",
+    ),
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[dict[str, object]]:
+    time_clauses: list = []
+    if created_after is not None:
+        time_clauses.append(Review.created_at >= _ensure_utc(created_after))
+    if created_before is not None:
+        time_clauses.append(Review.created_at <= _ensure_utc(created_before))
+    time_filter = and_(*time_clauses) if time_clauses else None
+
     async with AsyncSessionLocal() as session:
         allowed_installation_ids = await _allowed_installation_ids(session, current_user)
         if installation_id is not None:
             _require_installation_access(allowed_installation_ids, installation_id)
             await set_installation_context(session, installation_id)
-            reviews = await session.scalars(
+            stmt = (
                 select(Review)
                 .where(Review.installation_id == installation_id)
                 .order_by(Review.created_at.desc())
                 .limit(limit)
             )
+            if time_filter is not None:
+                stmt = stmt.where(time_filter)
+            reviews = await session.scalars(stmt)
             return [_review_list_item(review) for review in reviews]
 
         installations = await _list_installation_rows(
@@ -585,12 +609,15 @@ async def list_reviews(
         all_reviews: list[Review] = []
         for installation in installations:
             await set_installation_context(session, int(installation.installation_id))
-            reviews = await session.scalars(
+            stmt = (
                 select(Review)
                 .where(Review.installation_id == int(installation.installation_id))
                 .order_by(Review.created_at.desc())
                 .limit(limit)
             )
+            if time_filter is not None:
+                stmt = stmt.where(time_filter)
+            reviews = await session.scalars(stmt)
             all_reviews.extend(reviews)
 
         all_reviews.sort(key=lambda review: review.created_at, reverse=True)

@@ -467,9 +467,13 @@ async def test_run_fast_path_stage_rotates_to_next_provider_after_quota_error(
     async def fake_audit(**_kwargs: object) -> None:
         return None
 
+    async def noop_rate_limit_sleep(**_kwargs: object) -> None:
+        return None
+
     monkeypatch.setattr("app.agent.runner._resolve_runtime_attempt_chain", fake_resolve_attempts)
     monkeypatch.setattr("app.agent.runner.run_fast_path_prepass", fake_prepass)
     monkeypatch.setattr("app.agent.runner._record_model_audit", fake_audit)
+    monkeypatch.setattr("app.agent.runner.sleep_after_llm_rate_limit", noop_rate_limit_sleep)
 
     context = {
         "review_id": 123,

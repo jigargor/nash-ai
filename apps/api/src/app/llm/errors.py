@@ -14,18 +14,48 @@ _QUOTA_KEYWORDS = (
 
 
 class LLMQuotaOrRateLimitError(RuntimeError):
-    def __init__(self, *, provider: str, model: str, detail: str) -> None:
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        detail: str,
+        retry_after_seconds: float | None = None,
+        rate_limit_reset_hint: str | None = None,
+    ) -> None:
         super().__init__(detail)
         self.provider = provider
         self.model = model
         self.detail = detail
+        self.retry_after_seconds = retry_after_seconds
+        self.rate_limit_reset_hint = rate_limit_reset_hint
 
 
 def coerce_quota_error(exc: Exception, *, provider: str, model: str) -> LLMQuotaOrRateLimitError | None:
     if _has_quota_signal(exc):
         detail = str(exc) or f"{provider} quota or rate limit exceeded"
-        return LLMQuotaOrRateLimitError(provider=provider, model=model, detail=detail)
+        retry_after = _parse_retry_after_seconds_from_exc(exc)
+        reset_hint = _parse_rate_limit_reset_hint_from_exc(exc)
+        return LLMQuotaOrRateLimitError(
+            provider=provider,
+            model=model,
+            detail=detail,
+            retry_after_seconds=retry_after,
+            rate_limit_reset_hint=reset_hint,
+        )
     return None
+
+
+def _parse_retry_after_seconds_from_exc(exc: BaseException) -> float | None:
+    from app.llm import rate_limit_backoff
+
+    return rate_limit_backoff.parse_retry_after_seconds_from_exception(exc)
+
+
+def _parse_rate_limit_reset_hint_from_exc(exc: BaseException) -> str | None:
+    from app.llm import rate_limit_backoff
+
+    return rate_limit_backoff.parse_rate_limit_reset_http_date(exc)
 
 
 def _has_quota_signal(exc: Exception) -> bool:

@@ -14,6 +14,8 @@ export interface ReviewListItem {
   findings_count?: number;
   files_changed?: number | null;
   lines_changed?: number | null;
+  created_at?: string;
+  completed_at?: string | null;
 }
 
 export interface ReviewDetail {
@@ -66,8 +68,17 @@ export interface ReviewModelAuditsResponse {
   model_audits: ReviewModelAudit[];
 }
 
-export function fetchReviews(installationId?: number) {
-  const suffix = installationId ? `?installation_id=${installationId}` : "";
+export interface ReviewListFilters {
+  createdAfter?: string;
+  createdBefore?: string;
+}
+
+export function fetchReviews(installationId?: number, filters?: ReviewListFilters) {
+  const params = new URLSearchParams();
+  if (installationId) params.set("installation_id", String(installationId));
+  if (filters?.createdAfter) params.set("created_after", filters.createdAfter);
+  if (filters?.createdBefore) params.set("created_before", filters.createdBefore);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
   return apiFetch<ReviewListItem[]>(`/api/v1/reviews${suffix}`);
 }
 
