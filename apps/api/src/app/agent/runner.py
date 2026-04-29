@@ -60,7 +60,13 @@ from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
 from app.agent.prompts import build_initial_user_prompt, build_system_prompt, load_verified_fact_ids
 from app.agent.review_config import ReviewConfig, load_review_config
-from app.agent.schema import DropReason, EditedReview, Finding, ReviewResult
+from app.agent.schema import (
+    DropReason,
+    EditedReview,
+    FastPathAuditMetadata,
+    Finding,
+    ReviewResult,
+)
 from app.agent.validator import FindingValidator
 from app.agent.vendor_detect import auto_tag_vendor_claims
 from app.config import settings
@@ -443,10 +449,12 @@ async def _run_fast_path_stage(
         diff_tokens=diff_tokens,
         fallback_reason=fallback_reason,
     )
+    metadata["produces_findings"] = False
     metadata["skip_min_confidence_applied"] = runtime_fast_path_config.skip_min_confidence
     metadata["light_review_min_confidence_applied"] = (
         runtime_fast_path_config.light_review_min_confidence
     )
+    metadata = FastPathAuditMetadata.model_validate(metadata).model_dump(mode="json")
     context.setdefault("debug_artifacts", {})
     debug_artifacts = context.get("debug_artifacts")
     if isinstance(debug_artifacts, dict):
@@ -521,6 +529,35 @@ def _review_config_for_fast_path_decision(
         else ModelRoleRoutingConfig(tier="economy")
     )
     return replace(review_config, models=replace(review_config.models, roles=roles))
+
+
+def _apply_missing_confidence_guardrail(
+    review_config: ReviewConfig, decision: FastPathDecision
+) -> tuple[ReviewConfig, bool]:
+    if decision.decision != "full_review" or "missing_confidence" not in set(decision.risk_labels):
+        return review_config, False
+    # Keep safety-first full-review routing, but force economy defaults + tighter budgets
+    # to avoid runaway cost/latency when providers intermittently omit confidence.
+    roles = dict(review_config.models.roles)
+    existing = roles.get("primary_review")
+    if not review_config.model.explicit:
+        roles["primary_review"] = (
+            replace(existing, tier="economy")
+            if existing is not None
+            else ModelRoleRoutingConfig(tier="economy")
+        )
+    budgets = review_config.budgets.model_copy(deep=True)
+    budgets.diff_hunks = max(8_000, int(budgets.diff_hunks * 0.8))
+    budgets.surrounding_context = max(3_000, int(budgets.surrounding_context * 0.8))
+    budgets.fetched_files_headroom = max(8_000, int(budgets.fetched_files_headroom * 0.85))
+    return (
+        replace(
+            review_config,
+            budgets=budgets,
+            models=replace(review_config.models, roles=roles),
+        ),
+        True,
+    )
 
 
 async def _load_user_provider_keys(github_id: int) -> dict[str, str]:
@@ -645,7 +682,7 @@ async def run_review(
                 summary="Skipped automated review because this pull request is a draft.",
             )
             await _mark_review_done(
-                session_data=result, context=context, status="done", review_config=review_config
+                session_data=result, context=context, status="skipped", review_config=review_config
             )
             return
         diff_tokens = count_tokens(diff_text)
@@ -679,12 +716,18 @@ async def run_review(
                 summary="Skipped full review after low-risk fast-path classification.",
             )
             await _mark_review_done(
-                session_data=result, context=context, status="done", review_config=review_config
+                session_data=result, context=context, status="skipped", review_config=review_config
             )
             return
         effective_review_config = _review_config_for_fast_path_decision(
             review_config, fast_path_decision
         )
+        (
+            effective_review_config,
+            fast_path_missing_confidence_guardrail_applied,
+        ) = _apply_missing_confidence_guardrail(effective_review_config, fast_path_decision)
+        if fast_path_missing_confidence_guardrail_applied:
+            context["fast_path_missing_confidence_guardrail_applied"] = True
         debug_artifacts = context.get("debug_artifacts")
         fast_path_failed_all = bool(
             isinstance(debug_artifacts, dict)
@@ -1229,6 +1272,9 @@ async def run_review(
                 "incoming_findings_count": len(draft_result.findings),
                 "outgoing_findings_count": len(final_result.findings),
                 "fast_path_compaction_applied": bool(context.get("fast_path_compaction_applied")),
+                "fast_path_missing_confidence_guardrail_applied": bool(
+                    context.get("fast_path_missing_confidence_guardrail_applied")
+                ),
             },
         )
         _attach_debug_artifacts(

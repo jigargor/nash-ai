@@ -115,15 +115,7 @@ export function DashboardShell({ children }: PropsWithChildren) {
               <h2 className="app-topbar-title">{pageTitle(pathname)}</h2>
               <p className="app-topbar-subtitle">Track usage, findings, and external evaluation risk.</p>
             </div>
-            <div className="app-topbar-actions">
-              <input
-                className="app-search"
-                type="search"
-                disabled
-                aria-label="Search (coming soon)"
-                placeholder="Search PRs, repos, issues (coming soon)"
-              />
-            </div>
+            <div className="app-topbar-actions" />
           </div>
         </header>
 

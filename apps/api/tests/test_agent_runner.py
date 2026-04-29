@@ -19,6 +19,7 @@ from app.agent.runner import (
     _calculate_conflict_score,
     _merge_debate_results,
     _mark_review_done,
+    _apply_missing_confidence_guardrail,
     _repair_findings_from_files,
     _review_config_for_fast_path_decision,
     _run_fast_path_stage,
@@ -357,9 +358,12 @@ async def test_run_fast_path_stage_records_audit_and_debug_metadata(
     assert decision.decision == "skip_review"
     assert used_resolution == resolution
     assert context["debug_artifacts"]["fast_path_decision"]["decision"] == "skip_review"
+    assert context["debug_artifacts"]["fast_path_decision"]["review_surface_count"] == 1
+    assert context["debug_artifacts"]["fast_path_decision"]["produces_findings"] is False
     assert audits[0]["stage"] == "fast_path"
     assert audits[0]["decision"] == "skip_review"
     assert audits[0]["extra_metadata"]["confidence"] == 95
+    assert audits[0]["extra_metadata"]["produces_findings"] is False
 
 
 @pytest.mark.anyio
@@ -663,6 +667,42 @@ def test_light_review_keeps_explicit_primary_model_pin() -> None:
 
     assert effective is config
     assert effective.models.roles["primary_review"].tier == "balanced"
+
+
+def test_missing_confidence_guardrail_forces_economy_and_tighter_budgets() -> None:
+    config = ReviewConfig()
+    decision = FastPathDecision(
+        decision="full_review",
+        risk_labels=["missing_confidence"],
+        reason="Fast-path model omitted confidence; escalated for safety.",
+        confidence=None,
+        review_surface=[],
+        requires_full_context=True,
+    )
+
+    effective, applied = _apply_missing_confidence_guardrail(config, decision)
+
+    assert applied is True
+    assert effective.models.roles["primary_review"].tier == "economy"
+    assert effective.budgets.diff_hunks <= config.budgets.diff_hunks
+    assert effective.budgets.surrounding_context <= config.budgets.surrounding_context
+
+
+def test_missing_confidence_guardrail_noop_when_label_absent() -> None:
+    config = ReviewConfig()
+    decision = FastPathDecision(
+        decision="full_review",
+        risk_labels=["low_confidence"],
+        reason="Escalated for low confidence.",
+        confidence=60,
+        review_surface=[],
+        requires_full_context=True,
+    )
+
+    effective, applied = _apply_missing_confidence_guardrail(config, decision)
+
+    assert applied is False
+    assert effective is config
 
 
 def test_extract_tool_call_history_collects_tool_use_blocks() -> None:

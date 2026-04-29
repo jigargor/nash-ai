@@ -2,6 +2,7 @@ from app.agent.diff_parser import FileInDiff, NumberedLine
 from app.agent.fast_path import (
     FastPathDecision,
     build_fast_path_prompt,
+    fast_path_metadata,
     is_high_risk_path,
     normalize_fast_path_decision,
 )
@@ -72,6 +73,44 @@ def test_normalize_missing_confidence_escalates_to_full_review() -> None:
     assert "missing_confidence" in decision.risk_labels
 
 
+def test_normalize_recovers_confidence_from_alias_key() -> None:
+    decision = normalize_fast_path_decision(
+        {
+            "decision": "light_review",
+            "risk_labels": ["config_only"],
+            "reason": "Small config-only change.",
+            "confidence_score": 88,
+            "review_surface": ["apps/web/next.config.ts"],
+            "requires_full_context": False,
+        },
+        FastPathConfig(light_review_min_confidence=80),
+        classify_diff_files([_file("apps/web/next.config.ts")], generated_paths=[], vendor_paths=[]),
+    )
+
+    assert decision.decision == "light_review"
+    assert decision.confidence == 88
+    assert "confidence_recovered" in decision.risk_labels
+
+
+def test_normalize_recovers_confidence_from_low_risk_heuristic() -> None:
+    decision = normalize_fast_path_decision(
+        {
+            "decision": "skip_review",
+            "risk_labels": ["docs_only"],
+            "reason": "Only docs changed.",
+            "review_surface": ["docs/README.md"],
+            "requires_full_context": False,
+        },
+        FastPathConfig(skip_min_confidence=90),
+        classify_diff_files([_file("docs/README.md", added_lines=3)], generated_paths=[], vendor_paths=[]),
+    )
+
+    assert decision.decision == "skip_review"
+    assert decision.confidence is not None
+    assert decision.confidence >= 90
+    assert "confidence_recovered" in decision.risk_labels
+
+
 def test_low_confidence_skip_escalates_to_full_review() -> None:
     raw = FastPathDecision(
         decision="skip_review",
@@ -114,3 +153,51 @@ def test_high_risk_path_detection_covers_security_sensitive_surfaces() -> None:
     assert is_high_risk_path("apps/api/alembic/versions/add_rls_policy.py") is True
     assert is_high_risk_path(".github/workflows/api-db-security.yml") is True
     assert is_high_risk_path("docs/README.md") is False
+
+
+def test_fast_path_metadata_separates_surface_paths_and_count() -> None:
+    classified = classify_diff_files(
+        [_file("apps/web/next.config.ts", added_lines=5)],
+        generated_paths=[],
+        vendor_paths=[],
+    )
+    decision = FastPathDecision(
+        decision="full_review",
+        risk_labels=["missing_confidence"],
+        reason="Escalated for safety.",
+        confidence=None,
+        review_surface=["apps/web/next.config.ts"],
+        requires_full_context=True,
+    )
+
+    metadata = fast_path_metadata(
+        decision,
+        classified=classified,
+        diff_tokens=123,
+        fallback_reason="missing_confidence",
+    )
+
+    assert metadata["review_surface_paths"] == ["apps/web/next.config.ts"]
+    assert metadata["review_surface_count"] == 1
+    assert metadata["review_surface"] == ["apps/web/next.config.ts"]
+    assert sum(int(value) for value in metadata["file_classes"].values()) == 1
+
+
+def test_fast_path_metadata_marks_recovered_confidence_source() -> None:
+    decision = FastPathDecision(
+        decision="full_review",
+        risk_labels=["missing_confidence", "confidence_recovered"],
+        reason="Escalated for safety.",
+        confidence=65,
+        review_surface=["apps/web/next.config.ts"],
+        requires_full_context=True,
+    )
+    metadata = fast_path_metadata(
+        decision,
+        classified=classify_diff_files(
+            [_file("apps/web/next.config.ts", added_lines=5)], generated_paths=[], vendor_paths=[]
+        ),
+        diff_tokens=123,
+        fallback_reason="missing_confidence",
+    )
+    assert metadata["confidence_source"] == "recovered"

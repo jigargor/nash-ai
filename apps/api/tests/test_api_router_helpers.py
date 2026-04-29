@@ -76,6 +76,26 @@ def test_as_int_or_none_none() -> None:
 
 
 # ---------------------------------------------------------------------------
+# status filter helpers
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_review_status_filter_maps_all_to_none() -> None:
+    assert api_router._normalize_review_status_filter("all") is None  # type: ignore[attr-defined]
+
+
+def test_normalize_review_status_filter_lowercases() -> None:
+    assert api_router._normalize_review_status_filter(" RUNNING ") == "running"  # type: ignore[attr-defined]
+
+
+def test_status_clause_running_matches_queued_or_running() -> None:
+    clause = api_router._status_clause("running")  # type: ignore[attr-defined]
+    compiled = str(clause.compile(compile_kwargs={"literal_binds": True}))
+    assert "reviews.status = 'queued'" in compiled
+    assert "reviews.status = 'running'" in compiled
+
+
+# ---------------------------------------------------------------------------
 # _diff_stats_from_debug_artifacts
 # ---------------------------------------------------------------------------
 

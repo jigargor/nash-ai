@@ -371,6 +371,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     [currentRunAudits],
   );
   const postedFindingsCount = displayedFindings.length;
+  const showFindingsWorkspace = !isInFlight && postedFindingsCount > 0;
   const nodeCount = currentRunAudits.length;
 
   const summaryParagraph = useMemo(() => {
@@ -650,7 +651,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         getDebugExportPayload={getDebugExportPayload}
       />
 
-      {postedFindingsCount > 0 ? (
+      {showFindingsWorkspace ? (
         <div className="review-workspace-grid panel panel-elevated">
           <FileTree findings={displayedFindings} onSelectFinding={setSelectedFindingIndex} />
           <DiffViewer findings={displayedFindings} selectedFindingIndex={selectedFindingIndex} onSelectFinding={setSelectedFindingIndex} />
@@ -663,13 +664,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
             onCopySuggestion={handleCopySuggestion}
           />
         </div>
-      ) : (
-        <Panel>
-          <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.9rem" }}>
-            No inline findings to show in the diff panels. Use the review pipeline above for pipeline detail and token cost.
-          </p>
-        </Panel>
-      )}
+      ) : null}
 
     </section>
   );

@@ -177,6 +177,11 @@ function getRaw(meta: Record<string, unknown> | null, key: string): unknown {
   return meta?.[key] ?? undefined;
 }
 
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 // ---------------------------------------------------------------------------
 // Decision badge
 // ---------------------------------------------------------------------------
@@ -219,10 +224,17 @@ function DecisionBadge({ decision }: { decision: string | null }) {
 function FastPathBody({ meta }: { meta: Record<string, unknown> | null }) {
   const decision = String(getRaw(meta, "decision") ?? "");
   const confidence = getRaw(meta, "confidence") as number | undefined;
-  const riskLabels = (getRaw(meta, "risk_labels") as string[] | undefined) ?? [];
+  const riskLabels = toStringArray(getRaw(meta, "risk_labels"));
   const reason = getRaw(meta, "reason") as string | undefined;
   const fileClasses = (getRaw(meta, "file_classes") as Record<string, number> | undefined) ?? {};
-  const reviewSurface = getRaw(meta, "review_surface") as number | undefined;
+  const reviewSurfacePaths = toStringArray(
+    getRaw(meta, "review_surface_paths") ?? getRaw(meta, "review_surface"),
+  );
+  const reviewSurfaceCountRaw = getRaw(meta, "review_surface_count");
+  const reviewSurfaceCount =
+    typeof reviewSurfaceCountRaw === "number" && Number.isFinite(reviewSurfaceCountRaw)
+      ? reviewSurfaceCountRaw
+      : reviewSurfacePaths.length;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
@@ -237,12 +249,37 @@ function FastPathBody({ meta }: { meta: Record<string, unknown> | null }) {
             confidence: <strong style={{ color: "var(--text-primary)" }}>{confidence}%</strong>
           </span>
         )}
-        {reviewSurface != null && (
+        {reviewSurfaceCount > 0 && (
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-            · files reviewed: <strong style={{ color: "var(--text-primary)" }}>{reviewSurface}</strong>
+            · files reviewed:{" "}
+            <strong style={{ color: "var(--text-primary)" }}>{reviewSurfaceCount}</strong>
           </span>
         )}
       </div>
+      {reviewSurfacePaths.length > 0 && (
+        <details>
+          <summary style={{ cursor: "pointer", fontSize: "0.72rem", color: "var(--text-muted)" }}>
+            reviewed paths
+          </summary>
+          <div style={{ marginTop: "0.35rem", display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+            {reviewSurfacePaths.map((path) => (
+              <span
+                key={path}
+                style={{
+                  fontSize: "0.7rem",
+                  background: "var(--card-muted)",
+                  border: "1px solid var(--border-strong)",
+                  borderRadius: "4px",
+                  padding: "0.1rem 0.4rem",
+                  color: "var(--text-muted)",
+                }}
+              >
+                {path}
+              </span>
+            ))}
+          </div>
+        </details>
+      )}
       {riskLabels.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
           {riskLabels.map((label) => (
@@ -761,10 +798,14 @@ function StageCard({
               </span>
               {audit.findings_count != null ? (
                 <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
-                  {audit.findings_count} finding{audit.findings_count !== 1 ? "s" : ""}
-                  {audit.accepted_findings_count != null && audit.accepted_findings_count !== audit.findings_count
-                    ? ` → ${audit.accepted_findings_count} kept`
-                    : ""}
+                  {audit.stage === "fast_path" || audit.metadata_json?.produces_findings === false
+                    ? "findings: N/A"
+                    : `${audit.findings_count} finding${audit.findings_count !== 1 ? "s" : ""}${
+                        audit.accepted_findings_count != null &&
+                        audit.accepted_findings_count !== audit.findings_count
+                          ? ` → ${audit.accepted_findings_count} kept`
+                          : ""
+                      }`}
                 </span>
               ) : null}
               {estimatedCostUsd != null ? (

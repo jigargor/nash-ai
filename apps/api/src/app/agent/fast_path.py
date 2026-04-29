@@ -53,8 +53,23 @@ class FastPathDecision(BaseModel):
 FAST_PATH_TOOL = {
     "name": "classify_fast_path",
     "description": "Classify whether a pull request needs full code review.",
-    "input_schema": FastPathDecision.model_json_schema(),
+    "input_schema": {},
 }
+
+
+def _fast_path_input_schema() -> dict[str, Any]:
+    schema = cast(dict[str, Any], FastPathDecision.model_json_schema())
+    required = schema.get("required")
+    required_set = set(required) if isinstance(required, list) else set()
+    required_set.update({"decision", "reason", "confidence"})
+    schema["required"] = sorted(required_set)
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        props["confidence"] = {"type": "integer", "minimum": 0, "maximum": 100}
+    return schema
+
+
+FAST_PATH_TOOL["input_schema"] = _fast_path_input_schema()
 
 
 def fallback_full_review(reason: str, *, risk_labels: list[str] | None = None) -> FastPathDecision:
@@ -74,6 +89,20 @@ def normalize_fast_path_decision(
     if not isinstance(raw, dict):
         return fallback_full_review("Fast-path model returned an invalid decision schema.")
     payload = dict(raw)
+    confidence_source = "model"
+    recovered = _recover_confidence(payload, classified)
+    if recovered is not None:
+        payload["confidence"] = recovered[0]
+        confidence_source = recovered[1]
+        labels = payload.get("risk_labels")
+        if isinstance(labels, list):
+            labels = [str(item) for item in labels]
+            if "confidence_recovered" not in labels:
+                labels.append("confidence_recovered")
+            payload["risk_labels"] = labels
+        else:
+            payload["risk_labels"] = ["confidence_recovered"]
+    payload["confidence_source"] = confidence_source
     if "confidence" not in payload:
         logger.warning("Fast-path decision missing confidence. Escalating to full review.")
         return fallback_full_review(
@@ -141,6 +170,61 @@ def normalize_fast_path_decision(
             requires_full_context=True,
         )
     return decision
+
+
+def _recover_confidence(
+    payload: dict[str, Any], classified: list[ClassifiedDiffFile]
+) -> tuple[int, str] | None:
+    for key in ("confidence", "confidence_score", "score", "certainty", "probability"):
+        raw_value = payload.get(key)
+        candidate = _normalize_confidence_value(raw_value)
+        if candidate is not None:
+            return candidate, f"alias:{key}"
+    inferred = _heuristic_confidence(classified)
+    if inferred is not None:
+        return inferred, "heuristic:file_profile"
+    return None
+
+
+def _normalize_confidence_value(raw_value: object) -> int | None:
+    if isinstance(raw_value, bool):
+        return None
+    if isinstance(raw_value, int):
+        if 0 <= raw_value <= 100:
+            return raw_value
+        return None
+    if isinstance(raw_value, float):
+        if 0 <= raw_value <= 1:
+            return int(round(raw_value * 100))
+        if 0 <= raw_value <= 100:
+            return int(round(raw_value))
+        return None
+    if isinstance(raw_value, str):
+        cleaned = raw_value.strip().replace("%", "")
+        if not cleaned:
+            return None
+        try:
+            parsed = float(cleaned)
+        except ValueError:
+            return None
+        return _normalize_confidence_value(parsed)
+    return None
+
+
+def _heuristic_confidence(classified: list[ClassifiedDiffFile]) -> int | None:
+    if not classified:
+        return None
+    changed_lines = sum(max(0, int(item.changed_lines)) for item in classified)
+    classes = {item.file_class for item in classified}
+    if any(is_high_risk_path(item.path) for item in classified):
+        return 40
+    if classes.issubset({"docs_only", "generated", "lockfile"}) and changed_lines <= 250:
+        return 95
+    if classes.issubset({"config_only", "test_only", "docs_only"}) and changed_lines <= 180:
+        return 84
+    if changed_lines <= 80 and len(classified) <= 3:
+        return 78
+    return 65
 
 
 async def run_fast_path_prepass(
@@ -219,6 +303,7 @@ def build_fast_path_prompt(
     }
     return (
         "Classify this PR for review routing. Return only the classify_fast_path tool call.\n"
+        "Always provide confidence as an integer from 0 to 100; never omit or null this field.\n"
         "Use skip_review only for clearly non-runtime changes such as docs, generated files, or lockfiles with no reviewable risk.\n"
         "Use light_review for simple low-risk tests/config/code changes. Use full_review when uncertain.\n"
         "Use high_risk_review when security, auth, DB, billing, infra, permissions, secrets, or webhook behavior may be affected.\n\n"
@@ -247,12 +332,21 @@ def fast_path_metadata(
     fallback_reason: str | None,
 ) -> dict[str, Any]:
     changed_line_count = sum(int(item.changed_lines) for item in classified)
+    review_surface_paths = [
+        str(path).strip() for path in decision.review_surface if isinstance(path, str) and path.strip()
+    ]
     return {
         "decision": decision.decision,
         "risk_labels": decision.risk_labels,
         "confidence": decision.confidence,
+        "confidence_source": "model"
+        if "confidence_recovered" not in set(decision.risk_labels)
+        else "recovered",
         "reason": decision.reason,
-        "review_surface": decision.review_surface,
+        "review_surface_paths": review_surface_paths,
+        "review_surface_count": len(review_surface_paths),
+        # Backward compatibility for existing consumers.
+        "review_surface": review_surface_paths,
         "requires_full_context": decision.requires_full_context,
         "fallback_reason": fallback_reason,
         "diff_tokens": diff_tokens,

@@ -8,16 +8,19 @@ import { StateBlock } from "@/components/ui/state-block";
 import { useInstallations } from "@/hooks/use-installations";
 import { useReviews } from "@/hooks/use-reviews";
 import type { ReviewListFilters } from "@/lib/api/reviews";
+import { isReviewInFlightStatus } from "@/lib/review-status";
 
 function statusVisualClass(status: string): string {
   if (status === "done") return "review-status-dot review-status-done";
   if (status === "failed") return "review-status-dot review-status-failed";
+  if (status === "skipped") return "review-status-dot review-status-running";
   return "review-status-dot review-status-running";
 }
 
 function statusAriaLabel(status: string): string {
   if (status === "done") return "Done";
   if (status === "failed") return "Failed";
+  if (status === "skipped") return "Skipped";
   return "Running";
 }
 
@@ -35,6 +38,14 @@ function formatReviewInstant(iso: string | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+const CANONICAL_STATUS_OPTIONS = ["done", "failed", "running", "skipped"] as const;
+
+function matchesStatusFilter(status: string, statusFilter: string): boolean {
+  if (statusFilter === "all") return true;
+  if (statusFilter === "running") return isReviewInFlightStatus(status);
+  return status === statusFilter;
 }
 
 function localInputToIsoEndOfDay(dateOnly: string): string | undefined {
@@ -65,23 +76,26 @@ export default function ReviewsPage() {
     const beforeIso = localInputToIsoEndOfDay(createdOnOrBefore);
     if (afterIso) filters.createdAfter = afterIso;
     if (beforeIso) filters.createdBefore = beforeIso;
-    if (!filters.createdAfter && !filters.createdBefore) return undefined;
+    filters.status = statusFilter;
+    if (!filters.createdAfter && !filters.createdBefore && (!filters.status || filters.status === "all")) {
+      return undefined;
+    }
     return filters;
-  }, [createdOnOrAfter, createdOnOrBefore]);
+  }, [createdOnOrAfter, createdOnOrBefore, statusFilter]);
 
   const reviewsQuery = useReviews(installationId, reviewDateFilters);
 
-  const allStatuses = useMemo(() => {
+  const statusOptions = useMemo(() => {
     const reviews = reviewsQuery.data ?? [];
-    return [...new Set(reviews.map((item) => item.status))];
+    const fromData = [...new Set(reviews.map((item) => item.status).filter(Boolean))];
+    const unknown = fromData.filter((status) => !CANONICAL_STATUS_OPTIONS.includes(status as (typeof CANONICAL_STATUS_OPTIONS)[number]));
+    return [...CANONICAL_STATUS_OPTIONS, ...unknown];
   }, [reviewsQuery.data]);
 
   const filteredReviews = useMemo(() => {
     const reviews = reviewsQuery.data ?? [];
     let list = reviews;
-    if (statusFilter !== "all") {
-      list = list.filter((item) => item.status === statusFilter);
-    }
+    list = list.filter((item) => matchesStatusFilter(item.status, statusFilter));
     if (findingsFilter === "zero") {
       list = list.filter((item) => (item.findings_count ?? 0) === 0);
     } else if (findingsFilter === "nonzero") {
@@ -127,7 +141,7 @@ export default function ReviewsPage() {
             onChange={(event) => setStatusFilter(event.target.value)}
           >
             <option value="all">All statuses</option>
-            {allStatuses.map((status) => (
+            {statusOptions.map((status) => (
               <option key={status} value={status}>
                 {status}
               </option>

@@ -39,7 +39,7 @@ from app.queue.connection import require_app_redis
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -253,6 +253,21 @@ def _findings_count_from_review_row(review: Review) -> int:
         return 0
     findings_list = raw.get("findings")
     return len(findings_list) if isinstance(findings_list, list) else 0
+
+
+def _normalize_review_status_filter(raw_status: str | None) -> str | None:
+    if raw_status is None:
+        return None
+    normalized = raw_status.strip().lower()
+    if not normalized or normalized == "all":
+        return None
+    return normalized
+
+
+def _status_clause(status_filter: str) -> ColumnElement[bool]:
+    if status_filter == "running":
+        return or_(Review.status == "queued", Review.status == "running")
+    return Review.status == status_filter
 
 
 def _as_int_or_none(value: object) -> int | None:
@@ -568,6 +583,10 @@ async def generate_repo_codereview_template(
 async def list_reviews(
     installation_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
+    status: Annotated[
+        str | None,
+        Query(description="Optional status filter. Use 'running' to include queued and running rows."),
+    ] = None,
     created_after: Annotated[
         datetime | None,
         Query(
@@ -582,6 +601,7 @@ async def list_reviews(
     ] = None,
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[dict[str, object]]:
+    normalized_status = _normalize_review_status_filter(status)
     time_clauses: list[ColumnElement[bool]] = []
     if created_after is not None:
         time_clauses.append(Review.created_at >= _ensure_utc(created_after))
@@ -602,6 +622,8 @@ async def list_reviews(
             )
             if time_filter is not None:
                 stmt = stmt.where(time_filter)
+            if normalized_status is not None:
+                stmt = stmt.where(_status_clause(normalized_status))
             reviews = await session.scalars(stmt)
             return [_review_list_item(review) for review in reviews]
 
@@ -622,6 +644,8 @@ async def list_reviews(
             )
             if time_filter is not None:
                 stmt = stmt.where(time_filter)
+            if normalized_status is not None:
+                stmt = stmt.where(_status_clause(normalized_status))
             reviews = await session.scalars(stmt)
             all_reviews.extend(reviews)
 

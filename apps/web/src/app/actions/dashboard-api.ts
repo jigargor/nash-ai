@@ -60,6 +60,7 @@ export async function actionFetchReviews(
   if (installationId) params.set("installation_id", String(installationId));
   if (filters?.createdAfter) params.set("created_after", filters.createdAfter);
   if (filters?.createdBefore) params.set("created_before", filters.createdBefore);
+  if (filters?.status && filters.status !== "all") params.set("status", filters.status);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return serverBffFetch<ReviewListItem[]>(`/api/v1/reviews${suffix}`);
 }

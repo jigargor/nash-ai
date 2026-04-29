@@ -1,7 +1,7 @@
 import re
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
@@ -28,6 +28,44 @@ class RunContext(TypedDict, total=False):
     tokens_used: int
     debug_artifacts: dict[str, Any]
     agent_metrics: dict[str, Any]
+
+
+FastPathDecisionValue = Literal["skip_review", "light_review", "full_review", "high_risk_review"]
+
+
+class FastPathAuditMetadata(BaseModel):
+    """Typed metadata contract for fast-path stage telemetry and UI rendering."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: FastPathDecisionValue
+    risk_labels: list[str] = Field(default_factory=list)
+    confidence: int | None = Field(default=None, ge=0, le=100)
+    confidence_source: str = "model"
+    reason: str
+    review_surface_paths: list[str] = Field(default_factory=list)
+    review_surface_count: int = Field(default=0, ge=0)
+    # Backward-compat key retained while clients migrate to review_surface_paths.
+    review_surface: list[str] = Field(default_factory=list)
+    requires_full_context: bool = True
+    fallback_reason: str | None = None
+    diff_tokens: int = Field(default=0, ge=0)
+    changed_file_count: int = Field(default=0, ge=0)
+    changed_line_count: int = Field(default=0, ge=0)
+    file_classes: dict[str, int] = Field(default_factory=dict)
+    skip_min_confidence_applied: int = Field(default=0, ge=0)
+    light_review_min_confidence_applied: int = Field(default=0, ge=0)
+    produces_findings: bool = False
+
+    @model_validator(mode="after")
+    def check_surface_count(self) -> "FastPathAuditMetadata":
+        expected = len(self.review_surface_paths)
+        if self.review_surface_count != expected:
+            raise ValueError(
+                f"review_surface_count={self.review_surface_count} does not match "
+                f"review_surface_paths length={expected}"
+            )
+        return self
 
 
 Severity = Literal["critical", "high", "medium", "low"]

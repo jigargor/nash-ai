@@ -60,7 +60,7 @@ export interface ReviewModelAudit {
   conflict_score: number | null;
   decision: string;
   stage_duration_ms: number | null;
-  metadata_json: Record<string, unknown> | null;
+  metadata_json: ReviewAuditMetadata | null;
   created_at: string | null;
 }
 
@@ -72,13 +72,36 @@ export interface ReviewModelAuditsResponse {
 export interface ReviewListFilters {
   createdAfter?: string;
   createdBefore?: string;
+  status?: string;
 }
+
+export interface FastPathAuditMetadata {
+  decision: "skip_review" | "light_review" | "full_review" | "high_risk_review";
+  risk_labels: string[];
+  confidence: number | null;
+  reason: string;
+  review_surface_paths: string[];
+  review_surface_count: number;
+  review_surface?: string[];
+  requires_full_context: boolean;
+  fallback_reason: string | null;
+  diff_tokens: number;
+  changed_file_count: number;
+  changed_line_count: number;
+  file_classes: Record<string, number>;
+  skip_min_confidence_applied: number;
+  light_review_min_confidence_applied: number;
+  produces_findings: boolean;
+}
+
+export type ReviewAuditMetadata = Record<string, unknown> | FastPathAuditMetadata;
 
 export function fetchReviews(installationId?: number, filters?: ReviewListFilters) {
   const params = new URLSearchParams();
   if (installationId) params.set("installation_id", String(installationId));
   if (filters?.createdAfter) params.set("created_after", filters.createdAfter);
   if (filters?.createdBefore) params.set("created_before", filters.createdBefore);
+  if (filters?.status && filters.status !== "all") params.set("status", filters.status);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return apiFetch<ReviewListItem[]>(`/api/v1/reviews${suffix}`);
 }
