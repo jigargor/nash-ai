@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
@@ -18,12 +18,30 @@ function compareModels(left: ModelCatalogModel, right: ModelCatalogModel): numbe
   return left.model.localeCompare(right.model);
 }
 
+function matchesQuery(model: ModelCatalogModel, query: string): boolean {
+  if (!query) return true;
+  const haystack = [
+    model.provider,
+    model.model,
+    model.family,
+    model.tier,
+    model.status,
+    ...model.replacement_candidates,
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(query);
+}
+
 export default function ModelsPage() {
   const modelsCatalog = useModelsCatalog();
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
   const groupedByProvider = useMemo(() => {
     const providerMap = new Map<string, ModelCatalogModel[]>();
     const models = modelsCatalog.data?.catalog.models ?? [];
     for (const model of models) {
+      if (!matchesQuery(model, normalizedQuery)) continue;
       const existing = providerMap.get(model.provider);
       if (existing) {
         existing.push(model);
@@ -32,7 +50,7 @@ export default function ModelsPage() {
       providerMap.set(model.provider, [model]);
     }
     return providerMap;
-  }, [modelsCatalog.data?.catalog.models]);
+  }, [modelsCatalog.data?.catalog.models, normalizedQuery]);
 
   if (modelsCatalog.isLoading) {
     return <StateBlock title="Loading models catalog" description="Fetching provider and model pricing information." />;
@@ -43,6 +61,10 @@ export default function ModelsPage() {
   }
 
   const providers = modelsCatalog.data.catalog.providers;
+  const totalVisible = Array.from(groupedByProvider.values()).reduce(
+    (count, rows) => count + rows.length,
+    0,
+  );
 
   return (
     <section style={{ display: "grid", gap: "1rem" }}>
@@ -51,6 +73,26 @@ export default function ModelsPage() {
         <p style={{ marginTop: 0, color: "var(--text-muted)" }}>
           Provider model inventory with current baseline cost data. Prices are shown in USD per 1M tokens.
         </p>
+        <div style={{ display: "grid", gap: "0.55rem", marginTop: "0.65rem" }}>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search provider/model/family/tier/status… (e.g. flash-lite, haiku, economy)"
+            aria-label="Search model catalog"
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-md)",
+              background: "var(--card)",
+              color: "var(--text-primary)",
+              padding: "0.55rem 0.7rem",
+              fontSize: "0.9rem",
+            }}
+          />
+          <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.82rem" }}>
+            Showing {totalVisible} model{totalVisible === 1 ? "" : "s"}.
+          </p>
+        </div>
         <p style={{ marginTop: 0, color: "var(--text-muted)", fontSize: "0.85rem" }}>{modelsCatalog.data.sources_note}</p>
       </Panel>
 
@@ -67,10 +109,9 @@ export default function ModelsPage() {
                 API key setting: <code>{provider.api_key_setting}</code>
               </div>
               {models.length === 0 ? (
-                <StateBlock
-                  title="No models listed"
-                  description="This provider exists in the baseline catalog but currently has no model records."
-                />
+                <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.85rem" }}>
+                  No catalog rows match this search for {provider.display_name}.
+                </p>
               ) : (
                 <div style={{ display: "grid", gap: "0.45rem" }}>
                   {models.map((model) => (
@@ -88,6 +129,11 @@ export default function ModelsPage() {
                       <span style={{ color: "var(--text-muted)" }}>
                         Family: {model.family} · Tier: {model.tier} · Status: {model.status}
                       </span>
+                      {model.replacement_candidates.length > 0 ? (
+                        <span style={{ color: "var(--text-muted)" }}>
+                          Variants/replacements: {model.replacement_candidates.join(", ")}
+                        </span>
+                      ) : null}
                       <span style={{ color: "var(--text-muted)" }}>
                         Input: {formatPrice(model.pricing.input_per_1m)} · Cached:{" "}
                         {formatPrice(model.pricing.cached_input_per_1m)} · Output:{" "}

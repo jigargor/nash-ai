@@ -37,6 +37,26 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+function extractStatusCode(audit: ReviewModelAudit): number | null {
+  const reason = (audit.metadata_json?.reason ?? audit.metadata_json?.fallback_reason) as
+    | string
+    | undefined;
+  if (!reason) return null;
+  const patterns = [/error code:\s*(\d{3})/i, /status(?:_code| code)?[:=]\s*(\d{3})/i];
+  for (const pattern of patterns) {
+    const match = reason.match(pattern);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+function isFailedStage(audit: ReviewModelAudit): boolean {
+  const code = extractStatusCode(audit);
+  if (code != null && code >= 400) return true;
+  const reason = (audit.metadata_json?.reason as string | undefined)?.toLowerCase() ?? "";
+  return reason.includes("failed") || reason.includes("error");
+}
+
 function CopyDebugJsonButton({ getPayload }: { getPayload: () => Record<string, unknown> }) {
   const [copied, setCopied] = useState(false);
   async function handleClick(): Promise<void> {
@@ -452,6 +472,61 @@ function FinalPostBody({ debugArtifacts }: { debugArtifacts: Record<string, unkn
   );
 }
 
+function LiveStageProgress({ audits }: { audits: ReviewModelAudit[] }) {
+  const completed = new Set(audits.map((audit) => audit.stage));
+  const baseOrder = ["fast_path", "primary", "chunk_review", "synthesis", "editor", "final_post"];
+  const known = new Set(baseOrder);
+  const stages = [...baseOrder, ...audits.map((audit) => audit.stage).filter((stage) => !known.has(stage))];
+
+  return (
+    <div style={{ marginBottom: "0.6rem", border: "1px dashed var(--border-strong)", borderRadius: "var(--radius-md)", padding: "0.55rem 0.65rem" }}>
+      <p style={{ margin: 0, marginBottom: "0.35rem", color: "var(--text-muted)", fontSize: "0.74rem" }}>
+        Live stage progress
+      </p>
+      <div style={{ display: "grid", gap: "0.25rem" }}>
+        {stages.map((stage) => {
+          const meta = stageMeta(stage);
+          const done = completed.has(stage);
+          return (
+            <div key={stage} style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.78rem" }}>
+              <span style={{ width: "1rem" }}>{done ? "✓" : meta.icon}</span>
+              <span style={{ color: done ? "var(--text-primary)" : "var(--text-muted)" }}>{meta.label}</span>
+              {!done ? (
+                <span style={{ display: "inline-flex", gap: "0.2rem", marginLeft: "0.25rem" }}>
+                  <span className="live-dot" />
+                  <span className="live-dot" style={{ animationDelay: "0.15s" }} />
+                  <span className="live-dot" style={{ animationDelay: "0.3s" }} />
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <style jsx>{`
+        .live-dot {
+          width: 0.28rem;
+          height: 0.28rem;
+          border-radius: 999px;
+          background: var(--accent);
+          animation: pulse-dot 1s infinite ease-in-out;
+        }
+        @keyframes pulse-dot {
+          0%,
+          80%,
+          100% {
+            opacity: 0.25;
+            transform: translateY(0);
+          }
+          40% {
+            opacity: 1;
+            transform: translateY(-2px);
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Single stage card
 // ---------------------------------------------------------------------------
@@ -469,6 +544,8 @@ function StageCard({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { label, icon, color } = stageMeta(audit.stage);
+  const statusCode = extractStatusCode(audit) ?? 200;
+  const statusFailed = isFailedStage(audit);
   const meta = audit.stage === "final_post" ? null : audit.metadata_json;
 
   function renderBody() {
@@ -532,6 +609,16 @@ function StageCard({
                   ▶
                 </span>
               ) : null}
+              <span
+                style={{
+                  fontSize: "0.68rem",
+                  fontWeight: 600,
+                  color: statusFailed ? "#f43f5e" : "#34d399",
+                }}
+                title={statusFailed ? "Detected stage failure" : "Successful stage response"}
+              >
+                {statusCode}
+              </span>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", alignItems: "center", width: "100%" }}>
               <span
@@ -775,6 +862,7 @@ interface ActionChainProps {
   audits: ReviewModelAudit[];
   debugArtifacts: Record<string, unknown> | null;
   costUsd?: string | null;
+  isInFlight?: boolean;
   /** Final posted findings count (matches PR review summary). */
   postedFindingsCount: number;
   /** Largest `findings_count` from any pipeline stage (may exceed posted when a later stage failed). */
@@ -791,6 +879,7 @@ export function ActionChain({
   audits,
   debugArtifacts,
   costUsd,
+  isInFlight,
   postedFindingsCount,
   pipelineStagedFindingsPeak,
   pipelineEmptyHint,
@@ -835,6 +924,7 @@ export function ActionChain({
             "No pipeline stages recorded yet. If the review is still running, refresh after it completes."}
         </p>
       ) : null}
+      {isInFlight ? <LiveStageProgress audits={audits} /> : null}
       <div>
         {audits.map((audit, i) => (
           <div key={audit.id}>

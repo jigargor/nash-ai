@@ -267,6 +267,36 @@ def _available_provider_ids(context: dict[str, Any]) -> set[str]:
     return available
 
 
+def _update_provider_availability_debug(context: dict[str, Any]) -> None:
+    providers = ("anthropic", "openai", "gemini")
+    available = _available_provider_ids(context)
+    user_provider_keys = context.get("user_provider_keys")
+    user_key_providers = (
+        {provider for provider, key in user_provider_keys.items() if isinstance(key, str) and key.strip()}
+        if isinstance(user_provider_keys, dict)
+        else set()
+    )
+    provider_availability = {
+        "available": sorted(available),
+        "providers": {
+            provider: {
+                "configured": provider in available,
+                "source": "user_key"
+                if provider in user_key_providers
+                else "env"
+                if provider in available
+                else "missing",
+            }
+            for provider in providers
+        },
+    }
+    existing_debug_artifacts = context.get("debug_artifacts")
+    context["debug_artifacts"] = {
+        **(existing_debug_artifacts if isinstance(existing_debug_artifacts, dict) else {}),
+        "provider_availability": provider_availability,
+    }
+
+
 def _set_runtime_model_context(context: dict[str, Any], resolution: ModelResolution) -> None:
     context["runtime_model_provider"] = resolution.provider
     context["runtime_model"] = resolution.model
@@ -359,7 +389,7 @@ async def _run_fast_path_stage(
                 attempt.model,
                 exc,
             )
-            break
+            continue
     if decision is None:
         reason = str(last_error) if last_error is not None else "No provider attempt succeeded."
         decision = fallback_full_review(
@@ -523,6 +553,7 @@ async def run_review(
         "user_github_id": user_github_id,
         "_redis": redis,
     }
+    _update_provider_availability_debug(context)
     started_at = monotonic()
 
     try:
@@ -1247,10 +1278,10 @@ async def _mark_review_done(
             return
         review.status = status
         if review_config is not None:
-            review.model_provider = str(
-                context.get("runtime_model_provider") or review_config.model.provider
-            )
-            review.model = str(context.get("runtime_model") or review_config.model.name)
+            # Persist the configured primary model in review headers/cards.
+            # The action chain remains the source of truth for all runtime attempts.
+            review.model_provider = str(review_config.model.provider)
+            review.model = str(review_config.model.name)
         review.findings = session_data.model_dump(mode="json")
         current_artifacts = dict(review.debug_artifacts or {})
         incoming_artifacts = context.get("debug_artifacts")

@@ -25,6 +25,7 @@ export interface ReviewDetail {
   pr_number: number;
   pr_head_sha: string;
   status: string;
+  started_at?: string | null;
   model_provider?: string | null;
   model: string;
   findings: {

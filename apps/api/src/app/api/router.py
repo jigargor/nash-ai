@@ -42,6 +42,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
@@ -581,7 +582,7 @@ async def list_reviews(
     ] = None,
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[dict[str, object]]:
-    time_clauses: list = []
+    time_clauses: list[ColumnElement[bool]] = []
     if created_after is not None:
         time_clauses.append(Review.created_at >= _ensure_utc(created_after))
     if created_before is not None:
@@ -659,6 +660,7 @@ async def get_review(
             "pr_number": int(review.pr_number),
             "pr_head_sha": review.pr_head_sha,
             "status": review.status,
+            "started_at": review.started_at.isoformat() if review.started_at is not None else None,
             "model_provider": review.model_provider,
             "model": review.model,
             "findings": review.findings,
