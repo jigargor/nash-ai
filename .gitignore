@@ -58,3 +58,6 @@ private_docs/
 .cursor/
 
 coverage.json
+
+# Artiforge
+.artiforge/
