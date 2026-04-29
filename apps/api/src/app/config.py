@@ -39,8 +39,10 @@ class Settings(BaseSettings):
     github_webhook_secret: str
     APP_PRIVATE_KEY_PEM: str | None = None
     APP_PRIVATE_KEY_PEM_path: Path = Path("private-key.pem")
-    github_client_id: str
-    github_client_secret: str
+    # Dashboard OAuth (used by Next.js BFF). Optional on the API/worker: workers do not
+    # exchange user OAuth codes; omit on Railway worker services if unset.
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
     database_url: str
     db_pool_size: int = 10
     db_max_overflow: int = 20
@@ -89,6 +91,14 @@ class Settings(BaseSettings):
     # Max age for those keys before startup fails (production vs non-production).
     r2_access_key_max_age_days_production: int = 30
     r2_access_key_max_age_days_development: int = 90
+
+    @field_validator("github_client_id", "github_client_secret", mode="before")
+    @classmethod
+    def strip_optional_github_oauth(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
 
     @field_validator("github_app_id", mode="before")
     @classmethod
