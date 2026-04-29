@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchCurrentUser } from "@/lib/api/auth";
+import { actionFetchCurrentUser } from "@/app/actions/dashboard-api";
 import { ApiError } from "@/lib/api/client";
 
 export function useCurrentUser() {
@@ -10,7 +10,7 @@ export function useCurrentUser() {
     queryKey: ["current-user"],
     queryFn: async () => {
       try {
-        return await fetchCurrentUser();
+        return await actionFetchCurrentUser();
       } catch (error) {
         if (error instanceof ApiError && error.status === 401) return { authenticated: false } as const;
         throw error;

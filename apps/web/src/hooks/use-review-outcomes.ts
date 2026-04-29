@@ -2,12 +2,12 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchReviewOutcomes } from "@/lib/api/reviews";
+import { actionFetchReviewOutcomes } from "@/app/actions/dashboard-api";
 
 export function useReviewOutcomes(reviewId: number, installationId?: number) {
   return useQuery({
     queryKey: ["review-outcomes", reviewId, installationId ?? null],
-    queryFn: () => fetchReviewOutcomes(reviewId, installationId),
+    queryFn: () => actionFetchReviewOutcomes(reviewId, installationId),
     enabled: Number.isFinite(reviewId),
   });
 }

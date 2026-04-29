@@ -2,13 +2,16 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchReviews, type ReviewListFilters } from "@/lib/api/reviews";
+import { actionFetchReviews } from "@/app/actions/dashboard-api";
+import type { ReviewListFilters } from "@/lib/api/reviews";
+import { dashboardListMetricsQueryOptions } from "@/lib/query/dashboard-query-options";
 import { isReviewInFlightStatus } from "@/lib/review-status";
 
 export function useReviews(installationId?: number, filters?: ReviewListFilters) {
   return useQuery({
     queryKey: ["reviews", installationId ?? null, filters?.createdAfter ?? null, filters?.createdBefore ?? null],
-    queryFn: () => fetchReviews(installationId, filters),
+    queryFn: () => actionFetchReviews(installationId, filters),
+    ...dashboardListMetricsQueryOptions,
     refetchInterval: (query) => {
       const list = query.state.data;
       if (!list?.length) return false;

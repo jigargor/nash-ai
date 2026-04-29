@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchCodeReviewConfig } from "@/lib/api/repos";
+import { actionFetchCodeReviewConfig } from "@/app/actions/dashboard-api";
 
 export function useCodeReviewConfig(
   owner: string | null,
@@ -11,7 +11,7 @@ export function useCodeReviewConfig(
 ) {
   return useQuery({
     queryKey: ["codereview-config", owner, repo, installationId],
-    queryFn: () => fetchCodeReviewConfig(owner!, repo!, installationId!),
+    queryFn: () => actionFetchCodeReviewConfig(owner!, repo!, installationId!),
     enabled: owner !== null && repo !== null && installationId !== null,
   });
 }

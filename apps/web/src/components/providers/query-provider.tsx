@@ -3,14 +3,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { dashboardListMetricsQueryOptions } from "@/lib/query/dashboard-query-options";
+
 export function QueryProvider({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
     () =>
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 10_000,
-            refetchOnWindowFocus: false,
+            staleTime: dashboardListMetricsQueryOptions.staleTime,
+            refetchOnWindowFocus: dashboardListMetricsQueryOptions.refetchOnWindowFocus,
           },
         },
       }),
