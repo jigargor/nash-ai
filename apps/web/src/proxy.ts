@@ -63,6 +63,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     pathname.startsWith("/dashboard") ||
     pathname.startsWith("/repos") ||
     pathname.startsWith("/reviews") ||
+    pathname.startsWith("/code-tour") ||
     pathname.startsWith("/settings");
   if (!isDashboardRoute) return NextResponse.next();
 
@@ -81,6 +82,7 @@ export const config = {
     "/dashboard/:path*",
     "/repos/:path*",
     "/reviews/:path*",
+    "/code-tour/:path*",
     "/settings/:path*",
   ],
 };

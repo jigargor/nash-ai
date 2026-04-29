@@ -47,6 +47,7 @@ async def test_run_agent_end_turn_records_metrics(monkeypatch: pytest.MonkeyPatc
     assert context["agent_metrics"]["turn_count"] == 1
     assert context["agent_metrics"]["fetch_file_content_calls"] == 0
     assert context["agent_metrics"]["first_model_call_latency_ms"] >= 0
+    assert context["agent_metrics"]["tool_result_tokens_total"] == 0
 
 
 @pytest.mark.anyio
@@ -79,6 +80,8 @@ async def test_run_agent_tool_use_executes_tools_and_continues(
     assert context["agent_metrics"]["turn_count"] == 2
     assert context["agent_metrics"]["fetch_file_content_calls"] == 1
     assert context["agent_metrics"]["first_model_call_latency_ms"] >= 0
+    assert context["agent_metrics"]["tool_result_calls_by_tool"]["fetch_file_content"] == 1
+    assert context["agent_metrics"]["tool_result_tokens_total"] > 0
 
 
 @pytest.mark.anyio

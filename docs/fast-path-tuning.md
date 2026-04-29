@@ -22,6 +22,47 @@ This document describes the adaptive fast-path threshold policy and guardrails.
   - `fast_path_threshold_configs`
   - `fast_path_threshold_history`
 
+## Result Metadata Contract (v1)
+
+Fast-path is a routing stage, not a findings-producing stage. Its audit metadata
+must keep file-surface fields separate from risk labels and file-class counters.
+
+- `decision`: `skip_review | light_review | full_review | high_risk_review`
+- `risk_labels`: routing reasons such as `missing_confidence`
+- `confidence_source`: `model` or `recovered` (alias/heuristic rescue path)
+- `review_surface_paths`: explicit list of paths considered by fast-path
+- `review_surface_count`: count derived from `review_surface_paths`
+- `file_classes`: class histogram from diff classification (for example `config_only: 1`)
+- `produces_findings`: always `false` for `fast_path`
+
+## FastPath-First Routing
+
+FastPath runs on every queued PR review and acts only as a router/classifier:
+
+- `skip_review`: stop before main review
+- `light_review`: run reduced-cost main review profile
+- `full_review`: run standard main review profile
+- `high_risk_review`: run escalated main review profile
+
+This stage does not generate findings. It provides pre-review routing context.
+
+Backward compatibility:
+
+- Legacy `review_surface` remains populated for older UI readers.
+- New readers should prefer `review_surface_paths` and `review_surface_count`.
+
+## Missing-Confidence Guardrail
+
+When providers omit confidence repeatedly, fast-path now attempts recovery before
+escalating:
+
+- alias-based recovery (`confidence_score`, `score`, `probability`, etc.)
+- conservative heuristic from diff/file-class profile
+
+If routing still lands on `full_review` with `missing_confidence`, runtime applies
+an economy+tighter-budget guardrail to reduce avoidable cost/latency spikes while
+preserving safety.
+
 ## Confidence Bug Guard
 
 Fast-path confidence anomaly protection tracks repeated `0` confidence per:
@@ -31,6 +72,18 @@ Fast-path confidence anomaly protection tracks repeated `0` confidence per:
 - model
 
 If repeated zero-confidence hits the configured limit (`zero_confidence_limit`, default `5`), routing escalates to full review to prevent rubber-stamping.
+
+## Optional Classification Context Comment
+
+Classification context is internal by default. Repositories can opt in to a
+pre-review PR comment by setting:
+
+```yaml
+fast_path:
+  post_classification_context_comment: true
+```
+
+When disabled (default), no public classification comment is posted.
 
 ## Rollback
 

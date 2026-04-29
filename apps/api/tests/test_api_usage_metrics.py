@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
+from types import SimpleNamespace
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -9,7 +12,7 @@ from fastapi import FastAPI
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.api import usage_metrics
 from app.config import settings
-from app.db.models import ReviewModelAudit
+from app.db.models import ProviderMetricConfig, ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
 from conftest import _auth_headers, _insert_installation, _insert_review, _random_installation_id
 
@@ -86,6 +89,8 @@ async def test_usage_metrics_returns_provider_rows_and_redacts_metadata(
     assert payload["provider"] == "openai"
     assert payload["group_by"] == "model"
     assert payload["metrics"][0]["dimension"] == "gpt-5.5"
+    assert float(payload["estimated_provider_cost_usd"]) > 0.0
+    assert float(payload["estimated_primary_model_cost_usd"]) >= 0.0
     assert payload["metadata_sample"]["user_id"] == "[REDACTED]"
     assert payload["metadata_sample"]["email"] == "[REDACTED]"
 
@@ -298,3 +303,63 @@ def test_verify_api_access_rejects_invalid_key(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(usage_metrics.HTTPException) as exc_info:
         usage_metrics._verify_api_access("wrong")
     assert exc_info.value.status_code == 401
+
+
+def test_verify_api_access_returns_503_in_production_without_server_key_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "api_access_key", None)
+    with pytest.raises(usage_metrics.HTTPException) as exc_info:
+        usage_metrics._verify_api_access("any-header")
+    assert exc_info.value.status_code == 503
+
+
+def test_estimate_provider_audit_cost_skips_unknown_catalog_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        usage_metrics,
+        "load_baseline_catalog",
+        lambda: SimpleNamespace(find_model=lambda _provider, _model: None),
+    )
+    total = usage_metrics._estimate_provider_audit_cost_usd(
+        "anthropic",
+        [("unlikely-model-placeholder-zzz", 1_000_000, 1_000_000)],
+    )
+    assert total == Decimal("0")
+
+
+@pytest.mark.anyio
+async def test_provider_metric_config_empty_arrays_use_defaults_from_db_row(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+
+    async def fake_allowed_installation_ids(
+        *_args: object, **_kwargs: object
+    ) -> set[int]:
+        return {installation_id}
+
+    monkeypatch.setattr(usage_metrics, "_allowed_installation_ids", fake_allowed_installation_ids)
+    isolated_provider = f"zzz_metrics_{uuid4().hex}"
+
+    async with AsyncSessionLocal() as session:
+        session.add(
+            ProviderMetricConfig(
+                provider=isolated_provider,
+                enabled=True,
+                redact_user_fields=[],
+                allowed_dimensions=[],
+            )
+        )
+        await session.commit()
+
+    response = await client.get(
+        f"/api/v1/usage/metrics"
+        f"?installation_id={installation_id}&provider={isolated_provider}&group_by=model",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 200

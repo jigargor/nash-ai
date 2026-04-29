@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     r2_secret_access_key: str | None = None
     r2_region: str = "auto"
     r2_snapshot_prefix: str = "review-snapshots"
+    turnstile_secret_key: str | None = None
+    turnstile_siteverify_url: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
     @field_validator("github_app_id", mode="before")
     @classmethod

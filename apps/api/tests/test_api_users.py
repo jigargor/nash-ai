@@ -734,3 +734,17 @@ async def test_dashboard_token_secret_missing_fails_closed(
         headers={**_auth_headers(), "X-Dashboard-User-Token": valid_token},
     )
     assert response.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_upsert_key_rejects_short_api_key_before_storage(
+    client: httpx.AsyncClient,
+) -> None:
+    github_id = _rand_github_id()
+    await _seed_user(github_id)
+    response = await client.put(
+        "/api/v1/users/me/keys/openai?validate=false",
+        json={"api_key": "short"},
+        headers=_auth_headers_for_user(github_id),
+    )
+    assert response.status_code == 422

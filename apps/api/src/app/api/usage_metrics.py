@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -11,6 +12,7 @@ from sqlalchemy import Select, case, func, select
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.db.models import InstallationUser, ProviderMetricConfig, Review, ReviewModelAudit, User
 from app.db.session import AsyncSessionLocal, set_installation_context
+from app.llm.catalog.loader import load_baseline_catalog
 from app.telemetry.finding_outcomes import summarize_finding_outcomes
 from app.config import settings
 
@@ -18,6 +20,23 @@ GroupBy = Literal["provider", "model", "stage"]
 
 DEFAULT_REDACT_FIELDS = ["github_id", "user_id", "user_login", "email", "actor", "author", "username"]
 USER_KEY_PATTERN = re.compile(r"(user|login|email|actor|author|github)", re.IGNORECASE)
+
+
+def _estimate_provider_audit_cost_usd(
+    provider: str, model_rollups: list[tuple[str, int, int]]
+) -> Decimal:
+    catalog = load_baseline_catalog()
+    total = Decimal("0")
+    for model, input_tokens, output_tokens in model_rollups:
+        model_record = catalog.find_model(provider, model)
+        if model_record is None:
+            continue
+        pricing = model_record.pricing
+        if pricing.input_per_1m is not None:
+            total += (Decimal(max(input_tokens, 0)) / Decimal(1_000_000)) * pricing.input_per_1m
+        if pricing.output_per_1m is not None:
+            total += (Decimal(max(output_tokens, 0)) / Decimal(1_000_000)) * pricing.output_per_1m
+    return total
 
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
@@ -137,6 +156,19 @@ async def get_provider_usage_metrics(
             .where(Review.model_provider == provider)
             .where(Review.created_at >= since)
         )
+        audit_rollups = (
+            await session.execute(
+                select(
+                    ReviewModelAudit.model,
+                    func.coalesce(func.sum(ReviewModelAudit.input_tokens), 0),
+                    func.coalesce(func.sum(ReviewModelAudit.output_tokens), 0),
+                )
+                .where(ReviewModelAudit.installation_id == installation_id)
+                .where(ReviewModelAudit.provider == provider)
+                .where(ReviewModelAudit.created_at >= since)
+                .group_by(ReviewModelAudit.model)
+            )
+        ).all()
 
         metadata_sample: dict[str, Any] | None = None
         if include_metadata:
@@ -165,7 +197,20 @@ async def get_provider_usage_metrics(
         "provider": provider,
         "group_by": group_by,
         "window_days": days,
-        "estimated_provider_cost_usd": str(review_cost or 0),
+        "estimated_provider_cost_usd": str(
+            _estimate_provider_audit_cost_usd(
+                provider,
+                [
+                    (
+                        str(row.model),
+                        int(row[1] or 0),
+                        int(row[2] or 0),
+                    )
+                    for row in audit_rollups
+                ],
+            )
+        ),
+        "estimated_primary_model_cost_usd": str(review_cost or 0),
         "metrics": metrics,
         "metadata_sample": metadata_sample,
     }

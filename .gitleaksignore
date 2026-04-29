@@ -1,0 +1,4 @@
+# Historical leak in cbcbb971 (.cursor/environment.json, since removed + gitignored).
+# Keys were rotated/revoked — fingerprint-specific ignores only (see gitleaks README).
+cbcbb9716a6b610979b9aa8695f2213be68140c0:.cursor/environment.json:generic-api-key:2
+cbcbb9716a6b610979b9aa8695f2213be68140c0:.cursor/environment.json:generic-api-key:6

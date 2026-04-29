@@ -114,7 +114,7 @@ async def test_run_review_skips_draft_pr() -> None:
     ):
         await run_review(int(review.id), _INSTALLATION_ID, _OWNER, _REPO, _PR_NUMBER, _HEAD_SHA)
 
-    assert review.status == "done"
+    assert review.status == "skipped"
     assert "draft" in (review.findings or {}).get("summary", "").lower()
 
 

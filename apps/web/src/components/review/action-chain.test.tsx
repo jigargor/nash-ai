@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ReviewPipeline } from "@/components/review/action-chain";
@@ -72,5 +72,44 @@ describe("ReviewPipeline", () => {
 
     expect(screen.getAllByText((_, node) => node?.textContent?.includes("Start: —") ?? false).length).toBeGreaterThan(0);
     expect(screen.getAllByText((_, node) => node?.textContent?.includes("Nodes: 0") ?? false).length).toBeGreaterThan(0);
+  });
+
+  it("renders fast-path risk labels separately from reviewed files", () => {
+    const { container } = render(
+      <ReviewPipeline
+        audits={[
+          makeAudit({
+            stage: "fast_path",
+            decision: "full_review",
+            findings_count: 0,
+            metadata_json: {
+              decision: "full_review",
+              confidence: null,
+              reason: "Escalated for safety",
+              risk_labels: ["missing_confidence"],
+              review_surface_paths: ["apps/web/next.config.ts"],
+              review_surface_count: 1,
+              file_classes: { config_only: 1 },
+              produces_findings: false,
+            },
+          }),
+        ]}
+        debugArtifacts={null}
+        isInFlight={false}
+        costUsd={null}
+        postedFindingsCount={0}
+        pipelineStagedFindingsPeak={0}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /fast-path scan/i }));
+
+    const scoped = within(container);
+    expect(scoped.getByText("missing_confidence")).toBeInTheDocument();
+    expect(scoped.getAllByText("config_only:").length).toBeGreaterThan(0);
+    expect(
+      scoped.getAllByText((_, node) => node?.textContent?.includes("files reviewed: 1") ?? false).length,
+    ).toBeGreaterThan(0);
+    expect(scoped.getByText("findings: N/A")).toBeInTheDocument();
   });
 });

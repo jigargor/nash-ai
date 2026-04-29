@@ -55,6 +55,10 @@ budgets:
   fetched_files_headroom: 20000
   output: 8000
   total_cap: 120000
+  pressure_yellow: 0.60
+  pressure_orange: 0.80
+  pressure_red: 0.95
+  enforcement: observe # observe|advise|enforce (Phase 1 keeps observe)
 
 layered_context_enabled: true
 partial_review_mode_enabled: true
@@ -82,3 +86,10 @@ chunking:
   max_total_prompt_tokens: 120000
   max_latency_seconds: 240
   output_headroom_tokens: 4096
+
+fast_path:
+  enabled: true
+  allow_skip: true
+  skip_min_confidence: 90
+  light_review_min_confidence: 80
+  force_economy_on_light_review: false

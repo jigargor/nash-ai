@@ -4,6 +4,7 @@ import Image from "next/image";
 import { StaticDocument } from "@/components/layout/static-document";
 
 const GITHUB_REPO_URL = "https://github.com/jigargor/nash-ai";
+const GITHUB_PROFILE_URL = "https://github.com/jigargor";
 
 export const metadata: Metadata = {
   title: "About",
@@ -50,10 +51,14 @@ export default function AboutPage() {
           />
           <div className="static-document-bio">
             <p>
-              Hi, I&apos;m just a guy. I have some professional experience working as a full-stack engineer with a
-              background in clinical data systems and a deep curiosity about what AI can do when it&apos;s built
-              carefully. Nash AI started as a personal tool—I wanted to compare, contrast, and utilize interactions
-              between different models, multiple agents and so on. So I built it.
+              Hi, I&apos;m{" "}
+              <a href={GITHUB_PROFILE_URL} target="_blank" rel="noopener noreferrer">
+                Jigar
+              </a>
+              . I have some professional experience working as a full-stack engineer with a background in clinical
+              data systems and a deep curiosity about what AI can do when it&apos;s built carefully. Nash AI started
+              as a personal tool—I wanted to compare, contrast, and utilize interactions between different models,
+              multiple agents and so on. So I built it.
             </p>
             <p>
               I spent six years building data pipelines and LLM-integrated systems in healthcare, took a deliberate

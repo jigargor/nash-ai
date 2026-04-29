@@ -1,0 +1,105 @@
+{
+  "_comment": [
+    "Machine-readable rotation registry. Update last_rotated (YYYY-MM-DD) each time a secret is rotated.",
+    "Do NOT record secret values here — dates only.",
+    "Read by: .github/workflows/secret-rotation-reminder.yml",
+    "Also updated by: .github/workflows/secret-rotate.yml (artifact output, not auto-commit).",
+    "Guidance: docs/secrets-rotation.md",
+    "Matrix source: docs/secret-env-matrix.json"
+  ],
+  "secrets": [
+    {
+      "name": "GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET",
+      "platform": ["Railway", "Vercel", "GitHub Actions (APP_CLIENT_ID / APP_CLIENT_SECRET)"],
+      "last_rotated": "2026-04-29",
+      "max_age_days": 90,
+      "rotation_guide": "docs/secrets-rotation.md#21-github-app-backend--worker-github-ui--actions"
+    },
+    {
+      "name": "AUTH_SESSION_SECRET",
+      "platform": ["Vercel"],
+      "last_rotated": "2026-04-29",
+      "max_age_days": 90,
+      "rotation_guide": "docs/secrets-rotation.md#32-dashboard_user_jwt_secret--auth_session_secret"
+    },
+    {
+      "name": "GITHUB_WEBHOOK_SECRET",
+      "platform": ["Railway (API + worker)", "GitHub App settings", "GitHub Actions (APP_WEBHOOK_SECRET)"],
+      "last_rotated": "2026-04-26",
+      "max_age_days": 90,
+      "rotation_guide": "docs/secrets-rotation.md#21-github-app-backend--worker-github-ui--actions"
+    },
+    {
+      "name": "APP_PRIVATE_KEY_PEM",
+      "platform": ["Railway (API + worker)", "GitHub App settings"],
+      "last_rotated": "2026-04-26",
+      "max_age_days": 365,
+      "rotation_guide": "docs/secrets-rotation.md#21-github-app-backend--worker-github-ui--actions"
+    },
+    {
+      "name": "FERNET_KEY",
+      "platform": ["Railway (API + worker)"],
+      "last_rotated": "2026-04-26",
+      "max_age_days": 365,
+      "rotation_guide": "docs/secrets-rotation.md#31-fernet_key"
+    },
+    {
+      "name": "DASHBOARD_USER_JWT_SECRET",
+      "platform": ["Railway", "Vercel"],
+      "last_rotated": "2026-04-26",
+      "max_age_days": 90,
+      "rotation_guide": "docs/secrets-rotation.md#32-dashboard_user_jwt_secret--auth_session_secret"
+    },
+    {
+      "name": "API_ACCESS_KEY",
+      "platform": ["Railway", "Vercel"],
+      "last_rotated": "2026-04-26",
+      "max_age_days": 90,
+      "rotation_guide": "docs/secrets-rotation.md"
+    },
+    {
+      "name": "ADMIN_RETRY_API_KEY",
+      "platform": ["Railway"],
+      "last_rotated": "2026-04-26",
+      "max_age_days": 90,
+      "rotation_guide": "docs/secrets-rotation.md"
+    },
+    {
+      "name": "R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY",
+      "platform": ["Railway (API + worker)", "Cloudflare R2 console"],
+      "last_rotated": "2026-04-26",
+      "max_age_days": 90,
+      "rotation_guide": "docs/secrets-rotation.md#rotation-r2"
+    }
+  ],
+  "automation_groups": [
+    {
+      "group": "api_access_key",
+      "target": "all",
+      "last_rotated": null,
+      "last_mode": null,
+      "last_run_at": null
+    },
+    {
+      "group": "dashboard_jwt_secret",
+      "target": "all",
+      "last_rotated": null,
+      "last_mode": null,
+      "last_run_at": null
+    },
+    {
+      "group": "auth_session_secret",
+      "target": "vercel",
+      "last_rotated": null,
+      "last_mode": null,
+      "last_run_at": null
+    },
+    {
+      "group": "admin_retry_api_key",
+      "target": "railway",
+      "last_rotated": null,
+      "last_mode": null,
+      "last_run_at": null
+    }
+  ]
+}

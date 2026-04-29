@@ -101,19 +101,17 @@ async def queue_pull_request_review(
     head_sha = payload.pull_request.head.sha
     pr_title = payload.pull_request.title or ""
     pr_body = payload.pull_request.body or ""
-
-    if not _pr_text_has_force_review_tag(pr_title, pr_body) and _pr_text_has_skip_review_tag(
-        pr_title, pr_body
-    ):
+    has_force_tag = _pr_text_has_force_review_tag(pr_title, pr_body)
+    has_skip_tag = _pr_text_has_skip_review_tag(pr_title, pr_body)
+    if has_skip_tag or has_force_tag:
         logger.warning(
-            "Skipping review enqueue: PR title/body contains %s (override with %s) installation_id=%s repo=%s pr_number=%s",
-            SKIP_REVIEW_TAG,
-            FORCE_REVIEW_TAG,
+            "PR contains manual review tags skip_tag_present=%s force_tag_present=%s installation_id=%s repo=%s pr_number=%s",
+            has_skip_tag,
+            has_force_tag,
             installation_id,
             repo_full_name,
             pr_number,
         )
-        return
 
     provider_for_circuit = await _primary_provider_for_circuit_breaker(installation_id)
     # Check circuit breaker before doing any DB work or enqueue.
