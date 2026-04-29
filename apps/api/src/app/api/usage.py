@@ -8,7 +8,14 @@ from sqlalchemy import func, select
 
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.config import settings
-from app.db.models import ApiUsageEvent, InstallationUser, Review, User, UserProviderKey
+from app.db.models import (
+    ApiUsageEvent,
+    InstallationUser,
+    Review,
+    ReviewModelAudit,
+    User,
+    UserProviderKey,
+)
 from app.db.session import AsyncSessionLocal, set_installation_context
 
 
@@ -116,23 +123,21 @@ async def get_usage_summary(
         )
         provider_daily_rows = await session.execute(
             select(
-                func.coalesce(Review.model_provider, "unknown").label("provider"),
-                func.coalesce(func.sum(Review.tokens_used), 0).label("tokens"),
-                func.coalesce(func.sum(Review.cost_usd), 0).label("cost"),
+                func.coalesce(ReviewModelAudit.provider, "unknown").label("provider"),
+                func.coalesce(func.sum(ReviewModelAudit.total_tokens), 0).label("tokens"),
             )
-            .where(Review.installation_id == installation_id)
-            .where(Review.created_at >= day_start)
+            .where(ReviewModelAudit.installation_id == installation_id)
+            .where(ReviewModelAudit.created_at >= day_start)
             .group_by("provider")
             .order_by("provider")
         )
         provider_weekly_rows = await session.execute(
             select(
-                func.coalesce(Review.model_provider, "unknown").label("provider"),
-                func.coalesce(func.sum(Review.tokens_used), 0).label("tokens"),
-                func.coalesce(func.sum(Review.cost_usd), 0).label("cost"),
+                func.coalesce(ReviewModelAudit.provider, "unknown").label("provider"),
+                func.coalesce(func.sum(ReviewModelAudit.total_tokens), 0).label("tokens"),
             )
-            .where(Review.installation_id == installation_id)
-            .where(Review.created_at >= week_start)
+            .where(ReviewModelAudit.installation_id == installation_id)
+            .where(ReviewModelAudit.created_at >= week_start)
             .group_by("provider")
             .order_by("provider")
         )
@@ -146,18 +151,39 @@ async def get_usage_summary(
         elif cap_ratio >= 0.8:
             cap_state = "near-cap"
 
+        daily_cost_total = await session.scalar(
+            select(func.coalesce(func.sum(Review.cost_usd), 0))
+            .where(Review.installation_id == installation_id)
+            .where(Review.created_at >= day_start)
+        )
+        weekly_cost_total = await session.scalar(
+            select(func.coalesce(func.sum(Review.cost_usd), 0))
+            .where(Review.installation_id == installation_id)
+            .where(Review.created_at >= week_start)
+        )
+
+        daily_cost_per_token = (
+            float(daily_cost_total or 0) / daily_used if daily_used > 0 else 0.0
+        )
+        weekly_cost_per_token = (
+            float(weekly_cost_total or 0) / weekly_used if weekly_used > 0 else 0.0
+        )
+
         provider_daily: dict[str, dict[str, object]] = {}
-        for provider, tokens, cost in provider_daily_rows.all():
+        for provider, tokens in provider_daily_rows.all():
+            provider_name = str(provider)
+            daily_provider_tokens = int(tokens or 0)
             provider_daily[str(provider)] = {
-                "provider": str(provider),
-                "daily_tokens": int(tokens or 0),
-                "daily_cost_usd": str(cost or 0),
+                "provider": provider_name,
+                "daily_tokens": daily_provider_tokens,
+                "daily_cost_usd": str(daily_provider_tokens * daily_cost_per_token),
                 "weekly_tokens": 0,
                 "weekly_cost_usd": "0",
                 "effective_cap_tokens": cap,
             }
-        for provider, tokens, cost in provider_weekly_rows.all():
+        for provider, tokens in provider_weekly_rows.all():
             key = str(provider)
+            weekly_provider_tokens = int(tokens or 0)
             row = provider_daily.setdefault(
                 key,
                 {
@@ -169,8 +195,8 @@ async def get_usage_summary(
                     "effective_cap_tokens": cap,
                 },
             )
-            row["weekly_tokens"] = int(tokens or 0)
-            row["weekly_cost_usd"] = str(cost or 0)
+            row["weekly_tokens"] = weekly_provider_tokens
+            row["weekly_cost_usd"] = str(weekly_provider_tokens * weekly_cost_per_token)
 
         provider_caps = sorted(provider_daily.values(), key=lambda row: str(row["provider"]))
 
