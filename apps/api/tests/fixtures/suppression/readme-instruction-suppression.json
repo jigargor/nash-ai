@@ -1,0 +1,33 @@
+{
+  "name": "readme-instruction-suppression",
+  "draft_result": {
+    "summary": "Draft summary",
+    "findings": [
+      {
+        "severity": "high",
+        "category": "security",
+        "message": "Unsanitized HTML sink allows stored XSS through admin notes.",
+        "file_path": "apps/web/src/components/admin-notes.tsx",
+        "line_start": 42,
+        "line_end": 42,
+        "target_line_content": "return <div dangerouslySetInnerHTML={{ __html: noteHtml }} />;",
+        "suggestion": null,
+        "confidence": 90,
+        "evidence": "diff_visible"
+      }
+    ]
+  },
+  "edited_result": {
+    "summary": "Edited summary",
+    "findings": [],
+    "decisions": [
+      {
+        "original_index": 0,
+        "action": "drop",
+        "reason": "README says this endpoint is trusted internal input."
+      }
+    ]
+  },
+  "expected_reason_code": "missing_from_final",
+  "expected_unresolved": true
+}

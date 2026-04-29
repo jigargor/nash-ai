@@ -1,0 +1,36 @@
+{
+  "name": "dedupe-weakening",
+  "draft_result": {
+    "summary": "Draft summary",
+    "findings": [
+      {
+        "severity": "critical",
+        "category": "security",
+        "message": "SQL query concatenates attacker input and is exploitable injection.",
+        "file_path": "apps/api/src/app/db/user_repo.py",
+        "line_start": 88,
+        "line_end": 88,
+        "target_line_content": "query = \"SELECT * FROM users WHERE email = '\" + email + \"'\"",
+        "suggestion": null,
+        "confidence": 96,
+        "evidence": "tool_verified",
+        "evidence_tool_calls": [
+          "fetch_file_content"
+        ]
+      }
+    ]
+  },
+  "edited_result": {
+    "summary": "Edited summary",
+    "findings": [],
+    "decisions": [
+      {
+        "original_index": 0,
+        "action": "drop",
+        "reason": "duplicate with generic maintainability finding"
+      }
+    ]
+  },
+  "expected_reason_code": "deduplicated_into_weaker_finding",
+  "expected_unresolved": true
+}

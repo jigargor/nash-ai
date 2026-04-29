@@ -38,3 +38,93 @@
     Do NOT claim `report-uri` is outright broken or unusable in modern browsers.
   severity_ceiling_without_tool: medium
   confidence_ceiling_without_tool: 85
+
+- id: cwe_079_react_jsx_safe_interp
+  vendor: cwe
+  topic: CWE-79 React JSX interpolation
+  cwe_id: "CWE-79"
+  abstraction: variant
+  parents: ["cwe_079_dom_xss_sink_required"]
+  children: []
+  can_precede: ["cwe_079_dom_xss_sink_required"]
+  requires_sink: true
+  requires_attacker_control: true
+  keywords: ["{", "}", "react", "jsx", "userInput"]
+  anti_fact_keywords: ["dangerouslySetInnerHTML", "innerHTML", "href", "srcdoc"]
+  fact: |
+    Ordinary React JSX text interpolation is escaped by default. CWE-79 requires
+    attacker-controlled data reaching a concrete executable sink without proper
+    escaping or sanitization.
+  anti_fact: |
+    Do NOT flag plain JSX text interpolation as XSS by itself. Require a concrete
+    sink (for example dangerouslySetInnerHTML or direct DOM HTML injection) and
+    attacker control of that sink payload.
+  source: https://cwe.mitre.org/data/definitions/79.html
+  severity_ceiling_without_tool: medium
+  confidence_ceiling_without_tool: 85
+
+- id: cwe_079_dom_xss_sink_required
+  vendor: cwe
+  topic: CWE-79 sink requirement
+  cwe_id: "CWE-79"
+  abstraction: base
+  parents: []
+  children: ["cwe_079_react_jsx_safe_interp"]
+  can_precede: []
+  requires_sink: true
+  requires_attacker_control: true
+  keywords: ["dangerouslySetInnerHTML", "innerHTML", "document.write", "xss"]
+  anti_fact_keywords: ["escaped", "sanitized", "allowlist"]
+  fact: |
+    XSS claims require a concrete executable sink and attacker-controlled input
+    that reaches that sink without appropriate contextual controls.
+  anti_fact: |
+    Do NOT raise high or critical severity when no executable sink is shown.
+  source: https://cwe.mitre.org/data/definitions/79.html
+  severity_ceiling_without_tool: medium
+  confidence_ceiling_without_tool: 85
+
+- id: cwe_089_sqlalchemy_bound_params_safe
+  vendor: cwe
+  topic: CWE-89 SQLAlchemy bind parameters
+  cwe_id: "CWE-89"
+  abstraction: variant
+  parents: []
+  children: []
+  can_precede: []
+  requires_sink: true
+  requires_attacker_control: true
+  keywords: ["sqlalchemy", "text(", "bindparam", "execute(", "query("]
+  anti_fact_keywords: [":param", "params=", "bindparams", "?"]
+  fact: |
+    SQL injection requires user-controlled input to alter SQL structure. Bound
+    parameters in SQLAlchemy separate values from query structure.
+  anti_fact: |
+    Do NOT flag SQLi solely because user data reaches execute/query when bind
+    parameters are correctly used and SQL structure is not string-concatenated.
+  source: https://cwe.mitre.org/data/definitions/89.html
+  severity_ceiling_without_tool: medium
+  confidence_ceiling_without_tool: 85
+
+- id: cwe_022_path_resolve_containment_safe
+  vendor: cwe
+  topic: CWE-22 path resolve containment check
+  cwe_id: "CWE-22"
+  abstraction: variant
+  parents: []
+  children: []
+  can_precede: []
+  requires_sink: true
+  requires_attacker_control: true
+  keywords: ["path.resolve", "resolve()", "startsWith(", "path traversal", ".."]
+  anti_fact_keywords: ["realpath", "resolve", "normalized", "containment"]
+  fact: |
+    Path traversal requires attacker input to escape an allowed directory and
+    reach unauthorized file access. Normalization and post-join containment checks
+    can block traversal when applied before file access.
+  anti_fact: |
+    Do NOT flag traversal when the implementation resolves to a canonical path and
+    enforces allowed-root containment before opening/reading files.
+  source: https://cwe.mitre.org/data/definitions/22.html
+  severity_ceiling_without_tool: medium
+  confidence_ceiling_without_tool: 85

@@ -1,0 +1,33 @@
+{
+  "name": "generated-file-overreach",
+  "draft_result": {
+    "summary": "Draft summary",
+    "findings": [
+      {
+        "severity": "high",
+        "category": "security",
+        "message": "Path traversal in user upload extraction can escape temp directory.",
+        "file_path": "apps/api/src/app/uploads/extract.py",
+        "line_start": 64,
+        "line_end": 64,
+        "target_line_content": "target = base_dir / user_path",
+        "suggestion": null,
+        "confidence": 91,
+        "evidence": "diff_visible"
+      }
+    ]
+  },
+  "edited_result": {
+    "summary": "Edited summary",
+    "findings": [],
+    "decisions": [
+      {
+        "original_index": 0,
+        "action": "drop",
+        "reason": "generated file false positive"
+      }
+    ]
+  },
+  "expected_reason_code": "missing_from_final",
+  "expected_unresolved": true
+}
