@@ -11,7 +11,7 @@ from app.agent.offline_eval import replay_snapshot_to_review_result
 from app.agent.schema import Finding, ReviewResult
 from app.agent.snapshot import load_snapshot
 from app.config import settings
-from app.db.models import Review
+from app.db.models import Review, ReviewShadowBenchmark
 from app.db.session import AsyncSessionLocal, set_installation_context
 
 logger = logging.getLogger(__name__)
@@ -34,19 +34,46 @@ async def run_shadow_benchmark(
     installation_id: int,
     control_run_id: str,
 ) -> None:
+    provider = _benchmark_provider()
+    model_name = _default_model_for_provider(provider)
+    candidate_run_id = f"shadow-{review_id}-{int(datetime.now(timezone.utc).timestamp())}"
+    started = datetime.now(timezone.utc)
+    await _upsert_shadow_benchmark(
+        review_id=review_id,
+        installation_id=installation_id,
+        control_run_id=control_run_id,
+        candidate_run_id=candidate_run_id,
+        status="running",
+        candidate_provider=provider,
+        candidate_model=model_name,
+        started_at=started,
+        completed_at=None,
+        control_findings=None,
+        candidate_findings=None,
+        finding_overlap=None,
+        details_json=None,
+    )
+
     snapshot = await load_snapshot(review_id)
     if snapshot is None:
         logger.info("Skipping shadow benchmark: snapshot missing review_id=%s", review_id)
-        await _store_benchmark_artifact(
+        await _upsert_shadow_benchmark(
             review_id=review_id,
             installation_id=installation_id,
-            payload={"status": "skipped", "reason": "snapshot_missing", "control_run_id": control_run_id},
+            control_run_id=control_run_id,
+            candidate_run_id=candidate_run_id,
+            status="skipped",
+            candidate_provider=provider,
+            candidate_model=model_name,
+            started_at=started,
+            completed_at=datetime.now(timezone.utc),
+            control_findings=0,
+            candidate_findings=0,
+            finding_overlap=0.0,
+            details_json={"reason": "snapshot_missing"},
         )
         return
 
-    provider = _benchmark_provider()
-    model_name = _default_model_for_provider(provider)
-    started = datetime.now(timezone.utc)
     try:
         candidate = await replay_snapshot_to_review_result(
             {
@@ -62,20 +89,20 @@ async def run_shadow_benchmark(
         )
         control = await _load_control_review_result(review_id, installation_id)
         overlap = _finding_overlap(control.findings, candidate.findings)
-        await _store_benchmark_artifact(
+        await _upsert_shadow_benchmark(
             review_id=review_id,
             installation_id=installation_id,
-            payload={
-                "status": "done",
-                "control_run_id": control_run_id,
-                "candidate_provider": provider,
-                "candidate_model": model_name,
-                "started_at": started.isoformat(),
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "control_findings": len(control.findings),
-                "candidate_findings": len(candidate.findings),
-                "finding_overlap": overlap,
-            },
+            control_run_id=control_run_id,
+            candidate_run_id=candidate_run_id,
+            status="done",
+            candidate_provider=provider,
+            candidate_model=model_name,
+            started_at=started,
+            completed_at=datetime.now(timezone.utc),
+            control_findings=len(control.findings),
+            candidate_findings=len(candidate.findings),
+            finding_overlap=overlap,
+            details_json=None,
         )
     except Exception as exc:  # pragma: no cover - best effort path
         logger.warning(
@@ -84,16 +111,20 @@ async def run_shadow_benchmark(
             installation_id,
             exc,
         )
-        await _store_benchmark_artifact(
+        await _upsert_shadow_benchmark(
             review_id=review_id,
             installation_id=installation_id,
-            payload={
-                "status": "failed",
-                "control_run_id": control_run_id,
-                "candidate_provider": provider,
-                "candidate_model": model_name,
-                "error": type(exc).__name__,
-            },
+            control_run_id=control_run_id,
+            candidate_run_id=candidate_run_id,
+            status="failed",
+            candidate_provider=provider,
+            candidate_model=model_name,
+            started_at=started,
+            completed_at=datetime.now(timezone.utc),
+            control_findings=0,
+            candidate_findings=0,
+            finding_overlap=0.0,
+            details_json={"error": type(exc).__name__},
         )
 
 
@@ -140,20 +171,46 @@ async def _load_control_review_result(review_id: int, installation_id: int) -> R
     return ReviewResult.model_validate(review.findings)
 
 
-async def _store_benchmark_artifact(
+async def _upsert_shadow_benchmark(
     *,
     review_id: int,
     installation_id: int,
-    payload: dict[str, Any],
+    control_run_id: str,
+    candidate_run_id: str,
+    status: str,
+    candidate_provider: str,
+    candidate_model: str,
+    started_at: datetime,
+    completed_at: datetime | None,
+    control_findings: int | None,
+    candidate_findings: int | None,
+    finding_overlap: float | None,
+    details_json: dict[str, Any] | None,
 ) -> None:
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
-        review = (
-            await session.execute(select(Review).where(Review.id == review_id))
+        row = (
+            await session.execute(
+                select(ReviewShadowBenchmark).where(ReviewShadowBenchmark.review_id == review_id)
+            )
         ).scalar_one_or_none()
-        if review is None:
-            return
-        artifacts = dict(review.debug_artifacts or {})
-        artifacts["benchmark_shadow"] = payload
-        review.debug_artifacts = artifacts
+        if row is None:
+            row = ReviewShadowBenchmark(
+                review_id=review_id,
+                installation_id=installation_id,
+                control_run_id=control_run_id,
+            )
+            session.add(row)
+        row.control_run_id = control_run_id
+        row.candidate_run_id = candidate_run_id
+        row.status = status
+        row.candidate_provider = candidate_provider
+        row.candidate_model = candidate_model
+        row.started_at = started_at
+        row.completed_at = completed_at
+        row.control_findings = control_findings
+        row.candidate_findings = candidate_findings
+        row.finding_overlap = finding_overlap
+        row.details_json = details_json
+        row.updated_at = datetime.now(timezone.utc)
         await session.commit()

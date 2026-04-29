@@ -281,6 +281,40 @@ class BenchmarkRun(Base):
     totals_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
+class ReviewShadowBenchmark(Base):
+    __tablename__ = "review_shadow_benchmarks"
+    __table_args__ = (
+        UniqueConstraint("review_id"),
+        Index("review_shadow_benchmarks_installation_created", "installation_id", "created_at"),
+        Index("review_shadow_benchmarks_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    review_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("reviews.id", ondelete="CASCADE"), nullable=False
+    )
+    installation_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("installations.installation_id", ondelete="CASCADE"), nullable=False
+    )
+    control_run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    candidate_run_id: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'queued'"))
+    candidate_provider: Mapped[str | None] = mapped_column(Text)
+    candidate_model: Mapped[str | None] = mapped_column(Text)
+    control_findings: Mapped[int | None] = mapped_column(Integer)
+    candidate_findings: Mapped[int | None] = mapped_column(Integer)
+    finding_overlap: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    details_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class ReviewContextSnapshot(Base):
     """Gzip-compressed JSON snapshot of everything fed to the LLM for a review.
 

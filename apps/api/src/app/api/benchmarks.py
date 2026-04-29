@@ -8,7 +8,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.db.models import BenchmarkResult, BenchmarkRun, FindingOutcome, InstallationUser, Review, User
+from app.db.models import (
+    BenchmarkResult,
+    BenchmarkRun,
+    FindingOutcome,
+    InstallationUser,
+    Review,
+    ReviewShadowBenchmark,
+    User,
+)
 from app.db.session import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -300,4 +308,92 @@ async def cost_per_finding(
             "reviews_analyzed": len(results),
         },
         "reviews": results,
+    }
+
+
+@telemetry_router.get("/review-shadow-benchmarks")
+async def review_shadow_benchmarks(
+    installation_id: int | None = Query(default=None),
+    status_filter: str | None = Query(default="done"),
+    limit: int = Query(default=100, ge=1, le=1000),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
+) -> dict[str, Any]:
+    allowed_installation_ids = await _allowed_installation_ids(current_user)
+    if installation_id is not None and installation_id not in allowed_installation_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Installation not found")
+    if installation_id is None and not allowed_installation_ids:
+        return {
+            "summary": {
+                "runs": 0,
+                "avg_overlap": None,
+                "avg_control_findings": None,
+                "avg_candidate_findings": None,
+            },
+            "runs": [],
+        }
+
+    async with AsyncSessionLocal() as session:
+        q = (
+            select(ReviewShadowBenchmark)
+            .order_by(ReviewShadowBenchmark.created_at.desc())
+            .limit(limit)
+        )
+        if installation_id is not None:
+            q = q.where(ReviewShadowBenchmark.installation_id == installation_id)
+        else:
+            q = q.where(ReviewShadowBenchmark.installation_id.in_(allowed_installation_ids))
+        if status_filter:
+            q = q.where(ReviewShadowBenchmark.status == status_filter)
+        rows = (await session.execute(q)).scalars().all()
+
+    if not rows:
+        return {
+            "summary": {
+                "runs": 0,
+                "avg_overlap": None,
+                "avg_control_findings": None,
+                "avg_candidate_findings": None,
+            },
+            "runs": [],
+        }
+
+    overlaps = [float(row.finding_overlap) for row in rows if row.finding_overlap is not None]
+    control_counts = [int(row.control_findings) for row in rows if row.control_findings is not None]
+    candidate_counts = [
+        int(row.candidate_findings) for row in rows if row.candidate_findings is not None
+    ]
+
+    def _avg(values: list[float]) -> float | None:
+        if not values:
+            return None
+        return sum(values) / len(values)
+
+    return {
+        "summary": {
+            "runs": len(rows),
+            "avg_overlap": _avg(overlaps),
+            "avg_control_findings": _avg([float(v) for v in control_counts]),
+            "avg_candidate_findings": _avg([float(v) for v in candidate_counts]),
+        },
+        "runs": [
+            {
+                "id": row.id,
+                "review_id": row.review_id,
+                "installation_id": row.installation_id,
+                "control_run_id": row.control_run_id,
+                "candidate_run_id": row.candidate_run_id,
+                "status": row.status,
+                "candidate_provider": row.candidate_provider,
+                "candidate_model": row.candidate_model,
+                "control_findings": row.control_findings,
+                "candidate_findings": row.candidate_findings,
+                "finding_overlap": float(row.finding_overlap)
+                if row.finding_overlap is not None
+                else None,
+                "started_at": row.started_at.isoformat() if row.started_at else None,
+                "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                "details": row.details_json,
+            }
+            for row in rows
+        ],
     }
