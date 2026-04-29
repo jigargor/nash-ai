@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from app.agent.threshold_tuner import decide_next_threshold
 
 
