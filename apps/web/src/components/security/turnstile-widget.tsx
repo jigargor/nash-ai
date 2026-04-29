@@ -36,7 +36,7 @@ export function TurnstileWidget({ onError, onToken, siteKey }: TurnstileWidgetPr
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (window.turnstile) {
-      setIsScriptReady(true);
+      queueMicrotask(() => setIsScriptReady(true));
       return;
     }
 

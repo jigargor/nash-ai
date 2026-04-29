@@ -29,6 +29,7 @@ regexes = [
 description = "Intentional placeholder values in .env.example files"
 paths = [
   '''(^|/)\.env\.example$''',
+  '''^\.cursor/environment\.json\.example$''',
 ]
 regexes = [
   # Placeholder OAuth client-ID pattern in root .env.example
@@ -40,6 +41,12 @@ regexes = [
   '''your_github_oauth_client_id''',
   '''your_github_oauth_client_secret''',
   '''replace_with_32_byte_random_secret''',
+]
+
+[[allowlists]]
+description = "Revoked APR-2026: real keys were committed under .cursor/environment.json; rotate keys; file removed from VCS and gitignored — suppress historical findings for this path"
+paths = [
+  '''^\.cursor/environment\.json$''',
 ]
 
 [[allowlists]]

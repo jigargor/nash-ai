@@ -763,7 +763,10 @@ def _five_gram_hashes(text: str) -> set[str]:
     if len(tokens) < 5:
         return set()
     return {
-        hashlib.sha1(" ".join(tokens[index : index + 5]).encode("utf-8")).hexdigest()
+        hashlib.sha1(
+            " ".join(tokens[index : index + 5]).encode("utf-8"),
+            usedforsecurity=False,
+        ).hexdigest()
         for index in range(len(tokens) - 4)
     }
 

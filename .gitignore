@@ -59,6 +59,9 @@ private_docs/
 # Cursor plans
 .cursor/plans/
 
+# Local Cursor env (never commit secrets — use .cursor/environment.json.example)
+.cursor/environment.json
+
 coverage.json
 
 # Artiforge
