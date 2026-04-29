@@ -19,6 +19,8 @@ from app.mcp.context import MCPToolContext, build_default_context
 from app.mcp.tools import (
     AnalyzeFileRequest,
     AnalyzeFileResult,
+    EstimateReviewRequest,
+    EstimateReviewResult,
     FetchFileSampleRequest,
     FetchFileSampleResult,
     ListRepoFilesRequest,
@@ -34,6 +36,7 @@ from app.mcp.tools import (
     SynthesizeFindingsRequest,
     SynthesizeFindingsResult,
     analyze_file_tool,
+    estimate_review_tool,
     fetch_file_sample_tool,
     list_repo_files_tool,
     plan_shards_tool,
@@ -66,7 +69,7 @@ def build_mcp_app(
         instructions=(
             "Tools for reviewing public GitHub repositories with a staged,"
             " audit-friendly pipeline. Start with resolve_repo + list_repo_files,"
-            " then run_prepass, plan_shards, fetch_file_sample, analyze_file, and"
+            " then estimate_review, run_prepass, plan_shards, fetch_file_sample, analyze_file, and"
             " synthesize_findings. Use review_repository for an autonomous"
             " end-to-end review."
         ),
@@ -92,6 +95,17 @@ def build_mcp_app(
     )
     async def _list_repo_files(request: ListRepoFilesRequest) -> ListRepoFilesResult:
         return await list_repo_files_tool(request, ctx=ctx)
+
+    @app.tool(
+        name="estimate_review",
+        description=(
+            "Estimate file count, projected token/cost usage, and whether explicit"
+            " acknowledgment is required before full review."
+        ),
+        structured_output=True,
+    )
+    async def _estimate_review(request: EstimateReviewRequest) -> EstimateReviewResult:
+        return await estimate_review_tool(request, ctx=ctx)
 
     @app.tool(
         name="run_prepass",

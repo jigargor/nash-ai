@@ -29,6 +29,7 @@ from app.review.external.models import (
     ServiceTier,
     Shard,
     ShardResult,
+    StageTelemetry,
 )
 from app.review.external.sources.base import RepoSource
 from app.review.external.sources.github import GitHubRepoSource
@@ -56,4 +57,5 @@ __all__ = [
     "Shard",
     "ShardResult",
     "SourceError",
+    "StageTelemetry",
 ]

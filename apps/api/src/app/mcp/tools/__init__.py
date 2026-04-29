@@ -9,6 +9,11 @@ new tools a purely additive change.
 from __future__ import annotations
 
 from app.mcp.tools.analyze_file import AnalyzeFileRequest, AnalyzeFileResult, analyze_file_tool
+from app.mcp.tools.estimate_review import (
+    EstimateReviewRequest,
+    EstimateReviewResult,
+    estimate_review_tool,
+)
 from app.mcp.tools.fetch_file_sample import (
     FetchFileSampleRequest,
     FetchFileSampleResult,
@@ -48,6 +53,8 @@ from app.mcp.tools.synthesize_findings import (
 __all__ = [
     "AnalyzeFileRequest",
     "AnalyzeFileResult",
+    "EstimateReviewRequest",
+    "EstimateReviewResult",
     "FetchFileSampleRequest",
     "FetchFileSampleResult",
     "ListRepoFilesRequest",
@@ -63,6 +70,7 @@ __all__ = [
     "SynthesizeFindingsRequest",
     "SynthesizeFindingsResult",
     "analyze_file_tool",
+    "estimate_review_tool",
     "fetch_file_sample_tool",
     "list_repo_files_tool",
     "plan_shards_tool",

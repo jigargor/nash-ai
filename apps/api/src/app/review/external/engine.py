@@ -18,6 +18,8 @@ instance; neither owns bespoke wiring for the review logic itself.
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections.abc import Callable, Iterable
 from decimal import Decimal
 
@@ -34,13 +36,16 @@ from app.review.external.models import (
     ReviewReport,
     Shard,
     ShardResult,
+    StageTelemetry,
 )
 from app.review.external.prepass import run_prepass
 from app.review.external.sharding import build_shards
 from app.review.external.sources.base import RepoSource
 from app.review.external.synthesis import synthesize
+from app.review.external.validation import validate_findings_against_samples
 
 CheapPassModelResolver = Callable[[], str]
+_LOGGER = logging.getLogger(__name__)
 
 
 class ReviewEngine:
@@ -115,27 +120,35 @@ class ReviewEngine:
 
     async def analyze_shard(self, repo_ref: RepoRef, shard: Shard) -> ShardResult:
         """Analyze every file in ``shard`` and return a ``ShardResult``."""
+        result, _ = await self._analyze_shard_with_samples(repo_ref, shard)
+        return result
 
+    async def _analyze_shard_with_samples(
+        self, repo_ref: RepoRef, shard: Shard
+    ) -> tuple[ShardResult, dict[str, str]]:
         semaphore = asyncio.Semaphore(max(1, self._config.request_concurrency))
 
-        async def _analyze_one(path: str) -> list[Finding]:
+        async def _analyze_one(path: str) -> tuple[str, str, list[Finding]]:
             async with semaphore:
                 sample = await self._source.fetch_file(
                     repo_ref, path, max_bytes=self._config.analyze_sample_bytes
                 )
             if not sample:
-                return []
+                return path, "", []
             rule_matches = analyze_file(path, sample, registry=self._rules)
-            return [Finding.from_rule_match(match) for match in rule_matches]
+            findings = [Finding.from_rule_match(match) for match in rule_matches]
+            return path, sample, findings
 
         paths = list(shard.paths)[: self._config.max_analyze_files_per_shard]
         results = await asyncio.gather(*[_analyze_one(path) for path in paths])
+        sample_by_path: dict[str, str] = {}
         findings: list[Finding] = []
-        for batch in results:
+        for path, sample, batch in results:
+            sample_by_path[path] = sample
             findings.extend(batch)
 
         tokens_used, cost_usd = self._estimate_shard_usage(file_count=len(paths))
-        return ShardResult(
+        result = ShardResult(
             shard_key=shard.shard_key,
             status="done",
             file_count=len(paths),
@@ -143,9 +156,27 @@ class ReviewEngine:
             tokens_used=tokens_used,
             cost_usd=cost_usd,
         )
+        return result, sample_by_path
 
     def synthesize(self, findings: Iterable[Finding]) -> list[Finding]:
         return synthesize(findings)
+
+    async def estimate_review(
+        self,
+        *,
+        repo_url: str,
+        ref: str | None = None,
+    ) -> tuple[RepoRef, int, int, float, bool]:
+        repo_ref = await self.resolve_repo(repo_url, ref)
+        files = await self.list_files(repo_ref)
+        projected_tokens, projected_cost = self._estimate_total_usage(
+            file_count=len(files)
+        )
+        ack_required = (
+            projected_tokens >= self._config.ack_required_token_threshold
+            or projected_cost >= self._config.ack_required_cost_threshold_usd
+        )
+        return repo_ref, len(files), projected_tokens, projected_cost, ack_required
 
     async def review(
         self,
@@ -161,7 +192,16 @@ class ReviewEngine:
         """
 
         try:
+            telemetry: list[StageTelemetry] = []
+            stage_started = time.perf_counter()
             repo_ref = await self.resolve_repo(repo_url, ref)
+            telemetry.append(
+                StageTelemetry(
+                    stage="resolve_repo",
+                    duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                    details={"owner": repo_ref.owner, "repo": repo_ref.repo},
+                )
+            )
         except (RepoAccessError, ValueError) as exc:
             return _failed_report(
                 repo_ref=None,
@@ -170,8 +210,28 @@ class ReviewEngine:
                 ref=ref or "",
             )
 
+        stage_started = time.perf_counter()
         files = await self.list_files(repo_ref)
+        telemetry.append(
+            StageTelemetry(
+                stage="list_files",
+                duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                details={"file_count": len(files)},
+            )
+        )
+        stage_started = time.perf_counter()
         signals, plan = await self.prepass(repo_ref, files)
+        telemetry.append(
+            StageTelemetry(
+                stage="prepass",
+                duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                details={
+                    "inspected_file_count": signals.inspected_file_count,
+                    "injection_paths": len(signals.prompt_injection_paths),
+                    "filler_paths": len(signals.filler_paths),
+                },
+            )
+        )
         excluded = set(signals.prompt_injection_paths) | set(signals.filler_paths)
         shards = self.plan_shards(files, plan, excluded_paths=excluded)
 
@@ -180,9 +240,11 @@ class ReviewEngine:
         )
 
         shard_results: list[ShardResult] = []
+        sample_by_path: dict[str, str] = {}
         used_tokens = 0
         used_cost = Decimal("0")
         truncated = False
+        stage_started = time.perf_counter()
         for shard in shards:
             shard_tokens, shard_cost = self._estimate_shard_usage(
                 file_count=shard.file_count
@@ -205,24 +267,80 @@ class ReviewEngine:
                 )
                 truncated = True
                 continue
-            result = await self.analyze_shard(repo_ref, shard)
+            result, shard_samples = await self._analyze_shard_with_samples(repo_ref, shard)
             shard_results.append(result)
+            sample_by_path.update(shard_samples)
             used_tokens += result.tokens_used
             used_cost += Decimal(str(result.cost_usd))
+        telemetry.append(
+            StageTelemetry(
+                stage="analyze_shards",
+                duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                details={
+                    "shard_count": len(shards),
+                    "completed_shards": len(
+                        [item for item in shard_results if item.status == "done"]
+                    ),
+                    "skipped_shards": len(
+                        [item for item in shard_results if item.status == "skipped"]
+                    ),
+                },
+            )
+        )
 
+        stage_started = time.perf_counter()
         raw_findings: list[Finding] = []
         for result in shard_results:
             raw_findings.extend(result.findings)
         synthesized = synthesize(raw_findings)
+        telemetry.append(
+            StageTelemetry(
+                stage="synthesize",
+                duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                details={
+                    "raw_findings": len(raw_findings),
+                    "synthesized_findings": len(synthesized),
+                },
+            )
+        )
+        stage_started = time.perf_counter()
+        validated_findings, dropped_findings = validate_findings_against_samples(
+            synthesized, sample_by_path
+        )
+        telemetry.append(
+            StageTelemetry(
+                stage="validate_findings",
+                duration_ms=int((time.perf_counter() - stage_started) * 1000),
+                details={
+                    "input_findings": len(synthesized),
+                    "dropped_findings": dropped_findings,
+                },
+            )
+        )
 
         status: EvaluationStatus = "partial" if truncated else "complete"
         summary = (
-            f"Completed external evaluation with {len(synthesized)} critical findings."
-            if synthesized
+            f"Completed external evaluation with {len(validated_findings)} critical findings."
+            if validated_findings
             else "Completed external evaluation with no critical findings."
         )
         if truncated:
             summary += " Some shards were skipped after hitting the configured budget cap."
+        if dropped_findings:
+            summary += (
+                f" Validation dropped {dropped_findings} findings that were not reproducible."
+            )
+
+        _LOGGER.info(
+            "external_review_completed repo=%s/%s status=%s files=%s findings=%s tokens=%s cost_usd=%.4f",
+            repo_ref.owner,
+            repo_ref.repo,
+            status,
+            len(files),
+            len(validated_findings),
+            int(used_tokens),
+            float(used_cost),
+        )
 
         return ReviewReport(
             repo_ref=repo_ref,
@@ -232,13 +350,14 @@ class ReviewEngine:
             signals=signals,
             plan=plan,
             shards=shard_results,
-            findings=synthesized,
+            findings=validated_findings,
             tokens_used=int(used_tokens),
             cost_usd=float(used_cost),
             estimated_tokens=estimated_tokens,
             estimated_cost_usd=estimated_cost,
             summary=summary,
             truncated=truncated,
+            telemetry=telemetry,
         )
 
     def _estimate_shard_usage(self, *, file_count: int) -> tuple[int, float]:

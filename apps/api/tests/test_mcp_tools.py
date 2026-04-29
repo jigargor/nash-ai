@@ -8,6 +8,7 @@ from app.mcp.context import MCPToolContext
 from app.mcp.server import build_mcp_app
 from app.mcp.tools import (
     AnalyzeFileRequest,
+    EstimateReviewRequest,
     FetchFileSampleRequest,
     ListRepoFilesRequest,
     PlanShardsRequest,
@@ -16,6 +17,7 @@ from app.mcp.tools import (
     RunPrepassRequest,
     SynthesizeFindingsRequest,
     analyze_file_tool,
+    estimate_review_tool,
     fetch_file_sample_tool,
     list_repo_files_tool,
     plan_shards_tool,
@@ -59,6 +61,7 @@ def test_build_mcp_app_registers_every_tool() -> None:
         assert tool_names == {
             "resolve_repo",
             "list_repo_files",
+            "estimate_review",
             "run_prepass",
             "plan_shards",
             "fetch_file_sample",
@@ -195,8 +198,16 @@ async def test_synthesize_findings_filters_weak_evidence() -> None:
 async def test_review_repository_end_to_end() -> None:
     ctx = _build_ctx()
     try:
+        estimate = await estimate_review_tool(
+            EstimateReviewRequest(repo_url="https://github.com/octocat/repo"),
+            ctx=ctx,
+        )
+        assert estimate.ok
         result = await review_repository_tool(
-            ReviewRepositoryRequest(repo_url="https://github.com/octocat/repo"),
+            ReviewRepositoryRequest(
+                repo_url="https://github.com/octocat/repo",
+                ack_token=estimate.ack_token,
+            ),
             ctx=ctx,
         )
         assert result.ok
@@ -206,5 +217,33 @@ async def test_review_repository_end_to_end() -> None:
             finding.severity in {"critical", "high"}
             for finding in result.report.findings
         )
+    finally:
+        await ctx.aclose()
+
+
+@pytest.mark.anyio
+async def test_review_repository_requires_ack_when_threshold_exceeded() -> None:
+    source = InMemoryRepoSource(
+        owner="octocat",
+        repo="repo",
+        default_branch="main",
+        refs={"main": _SOURCE_FILES},
+    )
+    ctx = MCPToolContext(
+        source=source,
+        config=EngineConfig(
+            prepass_sample_limit=10,
+            ack_required_token_threshold=1_000,
+            ack_required_cost_threshold_usd=0.00001,
+        ),
+    )
+    try:
+        result = await review_repository_tool(
+            ReviewRepositoryRequest(repo_url="https://github.com/octocat/repo"),
+            ctx=ctx,
+        )
+        assert result.ok is False
+        assert result.ack_required is True
+        assert result.error == "ack_required"
     finally:
         await ctx.aclose()

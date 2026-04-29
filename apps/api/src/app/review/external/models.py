@@ -209,8 +209,18 @@ class EngineConfig(BaseModel):
     http_timeout_seconds: float = Field(default=20.0, ge=1.0, le=120.0)
     token_budget_cap: int = Field(default=2_000_000, ge=10_000, le=50_000_000)
     cost_budget_cap_usd: float = Field(default=25.0, ge=0.5, le=1000.0)
+    ack_required_token_threshold: int = Field(default=250_000, ge=1_000, le=50_000_000)
+    ack_required_cost_threshold_usd: float = Field(default=3.0, ge=0.0, le=1000.0)
     price_per_1m_tokens_usd: float = Field(default=0.15, ge=0.0, le=500.0)
     github_token: str | None = Field(default=None, repr=False)
+
+
+class StageTelemetry(_FrozenModel):
+    """Structured per-stage telemetry for observability."""
+
+    stage: str = Field(..., min_length=1, max_length=64)
+    duration_ms: int = Field(..., ge=0)
+    details: dict[str, int | float | str | bool] = Field(default_factory=dict)
 
 
 class ReviewReport(BaseModel):
@@ -232,3 +242,4 @@ class ReviewReport(BaseModel):
     estimated_cost_usd: float = Field(default=0.0, ge=0.0)
     summary: str = Field(default="", max_length=2000)
     truncated: bool = False
+    telemetry: list[StageTelemetry] = Field(default_factory=list)

@@ -176,6 +176,7 @@ async def test_engine_review_against_in_memory_source() -> None:
     assert report.file_count > 0
     assert report.status in {"complete", "partial"}
     assert all(finding.severity in {"critical", "high"} for finding in report.findings)
+    assert report.telemetry
     critical_findings = [
         finding
         for finding in report.findings
@@ -209,6 +210,25 @@ async def test_engine_budget_cap_skips_shards() -> None:
     result = await engine.analyze_shard(repo_ref, shards[0])
     assert result.status == "done"
     assert result.file_count > 0
+
+
+@pytest.mark.anyio
+async def test_engine_estimate_review_ack_flag() -> None:
+    source = _build_source()
+    engine = ReviewEngine(
+        source=source,
+        config=EngineConfig(
+            ack_required_token_threshold=1_000,
+            ack_required_cost_threshold_usd=0.00001,
+        ),
+    )
+    _, file_count, projected_tokens, projected_cost_usd, ack_required = (
+        await engine.estimate_review(repo_url="https://github.com/octocat/repo")
+    )
+    assert file_count > 0
+    assert projected_tokens > 0
+    assert projected_cost_usd >= 0.0
+    assert ack_required is True
 
 
 @pytest.mark.anyio
