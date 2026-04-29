@@ -11,6 +11,7 @@ updates:
     labels:
       - "dependencies"
       - "python"
+    target-branch: "develop"
 
 
   - package-ecosystem: "npm"
@@ -24,7 +25,7 @@ updates:
     labels:
       - "dependencies"
       - "javascript"
-
+    target-branch: "develop"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -36,3 +37,4 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    target-branch: "develop"
