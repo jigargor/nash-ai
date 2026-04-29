@@ -44,12 +44,6 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "Revoked APR-2026: real keys were committed under .cursor/environment.json; rotate keys; file removed from VCS and gitignored — suppress historical findings for this path"
-paths = [
-  '''^\.cursor/environment\.json$''',
-]
-
-[[allowlists]]
 description = "Documentation files that cite example / redacted credential shapes"
 paths = [
   '''^docs/''',
