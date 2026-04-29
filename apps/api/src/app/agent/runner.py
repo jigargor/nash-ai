@@ -601,7 +601,7 @@ async def run_review(
                 )
                 if not editor_attempts:
                     raise RuntimeError("No provider candidates available for editor stage")
-                last_editor_error: Exception | None = None
+                last_chunk_editor_error: Exception | None = None
                 for attempt in editor_attempts:
                     try:
                         edited_result = await run_editor(
@@ -623,7 +623,7 @@ async def run_review(
                         editor_resolution = attempt
                         break
                     except LLMQuotaOrRateLimitError as exc:
-                        last_editor_error = exc
+                        last_chunk_editor_error = exc
                         logger.warning(
                             "Chunk editor quota/rate-limit fallback review_id=%s provider=%s model=%s err=%s",
                             review_id,
@@ -634,7 +634,7 @@ async def run_review(
                         continue
                 if editor_resolution is None:
                     raise RuntimeError(
-                        f"All chunk-editor provider attempts failed due to quota/rate-limit: {last_editor_error}"
+                        f"All chunk-editor provider attempts failed due to quota/rate-limit: {last_chunk_editor_error}"
                     )
             else:
                 edited_result = EditedReview(
@@ -1052,7 +1052,6 @@ async def run_review(
                 summary=draft_result.summary,
                 decisions=[],
             )
-            _editor_actions = Counter[str]()
             await _record_model_audit(
                 context=context,
                 stage="editor",
