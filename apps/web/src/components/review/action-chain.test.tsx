@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { ActionChain } from "@/components/review/action-chain";
+import { ReviewPipeline } from "@/components/review/action-chain";
 import type { ReviewModelAudit } from "@/lib/api/reviews";
 
 function makeAudit(overrides?: Partial<ReviewModelAudit>): ReviewModelAudit {
@@ -27,10 +27,10 @@ function makeAudit(overrides?: Partial<ReviewModelAudit>): ReviewModelAudit {
   };
 }
 
-describe("ActionChain", () => {
+describe("ReviewPipeline", () => {
   it("shows reset bottom-panel values while a rerun is in progress", () => {
     render(
-      <ActionChain
+      <ReviewPipeline
         audits={[]}
         debugArtifacts={null}
         isInFlight
@@ -47,7 +47,7 @@ describe("ActionChain", () => {
 
   it("resets bottom fields when run audits clear", () => {
     const { rerender } = render(
-      <ActionChain
+      <ReviewPipeline
         audits={[makeAudit()]}
         debugArtifacts={null}
         isInFlight={false}
@@ -60,7 +60,7 @@ describe("ActionChain", () => {
     expect(screen.getAllByText((_, node) => node?.textContent?.includes("Nodes: 1") ?? false).length).toBeGreaterThan(0);
 
     rerender(
-      <ActionChain
+      <ReviewPipeline
         audits={[]}
         debugArtifacts={null}
         isInFlight

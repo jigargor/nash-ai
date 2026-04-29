@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { ReviewModelAudit } from "@/lib/api/reviews";
 
@@ -975,10 +975,10 @@ function BottomPanelSummary({
 }
 
 // ---------------------------------------------------------------------------
-// Main ActionChain component
+// Main ReviewPipeline component
 // ---------------------------------------------------------------------------
 
-interface ActionChainProps {
+interface ReviewPipelineProps {
   audits: ReviewModelAudit[];
   debugArtifacts: Record<string, unknown> | null;
   costUsd?: string | null;
@@ -1008,7 +1008,7 @@ function nextStageLabel(currentStage: string | null, hasChunking: boolean): { la
   return { label: meta.label, icon: meta.icon };
 }
 
-export function ActionChain({
+export function ReviewPipeline({
   audits,
   debugArtifacts,
   costUsd,
@@ -1017,51 +1017,20 @@ export function ActionChain({
   pipelineStagedFindingsPeak,
   pipelineEmptyHint,
   getDebugExportPayload,
-}: ActionChainProps) {
+}: ReviewPipelineProps) {
   const chunkingPlan = debugArtifacts?.chunking_plan as Record<string, unknown> | undefined;
   const hasChunking = chunkingPlan && Array.isArray(chunkingPlan.chunks) && (chunkingPlan.chunks as unknown[]).length > 1;
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const lastRunIdRef = useRef<string | null>(null);
-  const lastAuditCountRef = useRef(0);
-  const [showCompletedUntilMs, setShowCompletedUntilMs] = useState<number | null>(null);
-
-  const currentRunId = audits[audits.length - 1]?.run_id ?? null;
   const totalTokens = useMemo(() => audits.reduce((sum, audit) => sum + audit.total_tokens, 0), [audits]);
   const totalCostNumber = parseUsd(costUsd ?? null);
   const latestAudit = audits[audits.length - 1] ?? null;
   const pendingMeta = nextStageLabel(latestAudit?.stage ?? null, Boolean(hasChunking));
-  const latestEstimatedCostUsd =
-    latestAudit && totalCostNumber != null && totalTokens > 0
-      ? (latestAudit.total_tokens / totalTokens) * totalCostNumber
-      : null;
 
   useEffect(() => {
     if (!isInFlight) return;
     const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, [isInFlight]);
-
-  useEffect(() => {
-    if (currentRunId !== lastRunIdRef.current) {
-      lastRunIdRef.current = currentRunId;
-      lastAuditCountRef.current = audits.length;
-      setShowCompletedUntilMs(null);
-      return;
-    }
-    if (audits.length > lastAuditCountRef.current && isInFlight) {
-      lastAuditCountRef.current = audits.length;
-      setShowCompletedUntilMs(Date.now() + 1800);
-      return;
-    }
-    if (audits.length < lastAuditCountRef.current) {
-      lastAuditCountRef.current = audits.length;
-      setShowCompletedUntilMs(null);
-    }
-  }, [audits.length, currentRunId, isInFlight]);
-
-  const shouldShowLatestCompleted =
-    latestAudit != null &&
-    (!isInFlight || (showCompletedUntilMs != null && nowMs <= showCompletedUntilMs));
 
   return (
     <div
@@ -1082,7 +1051,7 @@ export function ActionChain({
         }}
       >
         <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
-          Action chain
+          Review pipeline
         </p>
         {getDebugExportPayload ? <CopyDebugJsonButton getPayload={getDebugExportPayload} /> : null}
       </div>
@@ -1097,26 +1066,25 @@ export function ActionChain({
         </p>
       ) : null}
       {hasChunking && chunkingPlan ? <ChunkingCallout plan={chunkingPlan} /> : null}
-      {shouldShowLatestCompleted && latestAudit ? (
-        <div
-          style={{
-            marginBottom: "0.75rem",
-            border: "2px dashed var(--border-strong)",
-            borderRadius: "var(--radius-md)",
-            padding: "0.75rem",
-            background: "var(--card-muted)",
-          }}
-        >
-          <p style={{ margin: "0 0 0.55rem", color: "var(--text-muted)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
-            Completed step
-          </p>
-          <StageCard
-            audit={latestAudit}
-            debugArtifacts={debugArtifacts}
-            defaultOpen={AUTO_OPEN_STAGES.has(latestAudit.stage)}
-            isLast
-            estimatedCostUsd={latestEstimatedCostUsd}
-          />
+      {audits.length > 0 ? (
+        <div style={{ marginBottom: "0.75rem", display: "flex", flexDirection: "column" }}>
+          {audits.map((audit, index) => {
+            const estimatedCostUsd =
+              totalCostNumber != null && totalTokens > 0
+                ? (audit.total_tokens / totalTokens) * totalCostNumber
+                : null;
+            return (
+              <StageCard
+                key={audit.id}
+                audit={audit}
+                debugArtifacts={debugArtifacts}
+                defaultOpen={AUTO_OPEN_STAGES.has(audit.stage)}
+                isLast={index === audits.length - 1 && !isInFlight}
+                estimatedCostUsd={estimatedCostUsd}
+              />
+            );
+          })}
+          {isInFlight ? <LiveStageProgress label={pendingMeta.label} icon={pendingMeta.icon} /> : null}
         </div>
       ) : isInFlight ? (
         <LiveStageProgress label={pendingMeta.label} icon={pendingMeta.icon} />
@@ -1146,3 +1114,6 @@ export function ActionChain({
     </div>
   );
 }
+
+// Backward-compatible export while callers migrate to the clearer name.
+export const ActionChain = ReviewPipeline;
