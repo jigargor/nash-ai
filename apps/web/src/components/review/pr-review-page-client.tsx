@@ -8,6 +8,7 @@ import { ReviewPipeline } from "@/components/review/action-chain";
 import { DiffViewer } from "@/components/review/diff-viewer";
 import { FileTree } from "@/components/review/file-tree";
 import { FindingsPanel } from "@/components/review/findings-panel";
+import { TurnstileWidget } from "@/components/security/turnstile-widget";
 import { StreamingStatus } from "@/components/review/streaming-status";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
@@ -302,6 +303,7 @@ function ProviderAvailabilityIndicator({
 }
 
 export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installationId }: PrReviewPageClientProps) {
+  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
   const repoUrl = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const prUrl = `${repoUrl}/pull/${encodeURIComponent(prNumber)}`;
   const reviewQuery = useReview(reviewId, installationId);
@@ -313,6 +315,8 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const { connectionState } = useReviewStream(reviewId, installationId);
   const [userSelectedRunId, setUserSelectedRunId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [showTurnstile, setShowTurnstile] = useState(false);
+  const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
   const reviewStatus = reviewQuery.data?.status ?? "";
   const isInFlight = isReviewInFlightStatus(reviewStatus) || rerunMutation.isPending;
@@ -497,6 +501,20 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     void dismissMutation.mutateAsync({ reviewId, findingIndex: index, installationId });
   }
 
+  function submitRerun(turnstileToken: string | null): void {
+    rerunMutation.mutate(
+      { reviewId, installationId, turnstileToken },
+      {
+        onError: () => {
+          if (turnstileSiteKey) {
+            setTurnstileError("Verification failed. Please complete Turnstile again.");
+            setShowTurnstile(true);
+          }
+        },
+      },
+    );
+  }
+
   return (
     <section className="pr-review-page" style={{ display: "grid", gap: "1rem" }}>
       <div style={{ marginBottom: "-0.35rem" }}>
@@ -640,12 +658,59 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
             onClick={() => {
               setUserSelectedRunId(null);
               setHistoryOpen(false);
-              rerunMutation.mutate({ reviewId, installationId });
+              setTurnstileError(null);
+              if (turnstileSiteKey) {
+                setShowTurnstile(true);
+                return;
+              }
+              submitRerun(null);
             }}
           >
             {isInFlight ? "Review in progress…" : isFailedReview ? "Retry review" : "Re-run review"}
           </Button>
         </div>
+        {showTurnstile && !isInFlight ? (
+          <div
+            style={{
+              marginTop: "0.65rem",
+              border: "1px solid var(--border-strong)",
+              background: "var(--card-muted)",
+              borderRadius: "var(--radius-md)",
+              padding: "0.75rem",
+              display: "grid",
+              gap: "0.45rem",
+            }}
+          >
+            <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)" }}>
+              Complete verification to {isFailedReview ? "retry" : "re-run"} this review.
+            </p>
+            {turnstileSiteKey ? (
+              <TurnstileWidget
+                siteKey={turnstileSiteKey}
+                onToken={(token) => {
+                  setTurnstileError(null);
+                  setShowTurnstile(false);
+                  submitRerun(token);
+                }}
+                onError={() => setTurnstileError("Turnstile did not load. Please try again.")}
+              />
+            ) : null}
+            {turnstileError ? (
+              <p style={{ margin: 0, fontSize: "0.78rem", color: "#f43f5e" }}>{turnstileError}</p>
+            ) : null}
+            <div>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setShowTurnstile(false);
+                  setTurnstileError(null);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </Panel>
 
       <ReviewPipeline

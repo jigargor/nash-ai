@@ -1,6 +1,7 @@
 import asyncio
 import hmac
 import json
+import logging
 import re
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from dataclasses import asdict
 from decimal import Decimal
 from typing import Annotated, TypedDict, cast
 
+import httpx
 import yaml
 from app.agent.profiler import profile_repo
 from app.agent.provider_clients import create_openai_compatible_client, get_provider_api_key
@@ -39,6 +41,7 @@ from app.queue.connection import require_app_redis
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,6 +65,60 @@ router = APIRouter(
     prefix="/api/v1",
     dependencies=[Depends(_verify_api_access), Depends(get_current_dashboard_user)],
 )
+logger = logging.getLogger(__name__)
+
+
+class RerunReviewRequest(BaseModel):
+    turnstile_token: str | None = None
+
+
+async def _verify_turnstile_rerun_token(request: Request, turnstile_token: str | None) -> None:
+    if not settings.turnstile_secret_key:
+        return
+    if not turnstile_token:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Turnstile verification required",
+        )
+
+    form_payload: dict[str, str] = {
+        "secret": settings.turnstile_secret_key,
+        "response": turnstile_token,
+    }
+    if request.client and request.client.host:
+        form_payload["remoteip"] = request.client.host
+
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            response = await client.post(settings.turnstile_siteverify_url, data=form_payload)
+    except httpx.HTTPError:
+        logger.exception("Turnstile verification request failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Turnstile verification unavailable",
+        ) from None
+
+    if response.status_code != status.HTTP_200_OK:
+        logger.warning("Turnstile verify endpoint returned non-200 status=%s", response.status_code)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Turnstile verification unavailable",
+        )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        logger.warning("Turnstile verify endpoint returned invalid JSON")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Turnstile verification unavailable",
+        ) from None
+
+    if not bool(payload.get("success")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Turnstile verification failed",
+        )
 
 
 class RepoAccumulator(TypedDict):
@@ -916,6 +973,7 @@ async def rerun_review(
     request: Request,
     review_id: int,
     installation_id: int | None = Query(default=None, ge=1),
+    payload: RerunReviewRequest | None = None,
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
@@ -941,6 +999,10 @@ async def rerun_review(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="No LLM API key configured (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)",
             )
+        await _verify_turnstile_rerun_token(
+            request,
+            payload.turnstile_token if payload is not None else None,
+        )
 
         owner, repo = _split_repo_full_name(review.repo_full_name)
         redis = require_app_redis(request)

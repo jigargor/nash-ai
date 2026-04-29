@@ -1,0 +1,169 @@
+orchestration:
+  goal: "Design and implement an LLM-as-Judge -> Threshold Feedback Loop that closes the quality blindspot in threshold_tuner.py by using a separate judge model to evaluate sampled review decisions and avoid self-agreement bias."
+  mode: "implement" # analyze|implement|review
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  scoring:
+    correctness: 0.4
+    risk: 0.3
+    maintainability: 0.2
+    performance: 0.1
+
+  workers:
+    - id: "w1"
+      agent: "backend-engineer"
+      model: "gpt-5.3-codex-high-fast"
+      focus: "Integrate judge-derived quality metrics with apps/api/src/app/agent/threshold_tuner.py. Preserve decide_next_threshold determinism, add typed inputs for judge false-negative/false-positive signals, update history/audit records, and keep rollback/cache behavior simple and testable."
+
+    - id: "w2"
+      agent: "ai-evals-engineer"
+      model: "gpt-5.5-extra-high"
+      focus: "Design the LLM-as-Judge sampling and scoring loop: blind inputs, rubric, structured output schema, calibration fixtures, inter-rater checks, confidence thresholds, and regression metrics that detect under-reporting without rewarding noisy findings."
+
+    - id: "w3"
+      agent: "prompt-security-engineer"
+      model: "claude-opus-4-7-thinking-xhigh"
+      focus: "Define a separate judge prompt/model boundary that avoids self-agreement bias and prompt injection. Strip chain-of-thought, ignore repository instructions, preserve enough code evidence for adjudication, and prevent the judge from seeing the original model's persuasive rationale when possible."
+
+    - id: "w4"
+      agent: "data-platform-engineer"
+      model: "claude-4.6-sonnet-medium"
+      focus: "Design storage, retention, aggregation, and observability for judge samples and threshold feedback. Keep tenant isolation, redaction, cost controls, and dashboard traceability aligned with existing ReviewModelAudit and FastPathThresholdHistory patterns."
+
+  current_blindspot:
+    observed_code:
+      - "threshold_tuner.py currently uses ReviewModelAudit conflict_score across challenger/tie_break/final_post stages as disagreement_rate."
+      - "It uses summarize_finding_outcomes dismiss/ignore rates as practical false_accept signals."
+      - "Low disagreement currently lowers thresholds, but low disagreement can also mean the same review system is consistently missing issues."
+    risk:
+      - "Self-agreement bias: primary/challenger/editor stages can agree because they share context, prompts, model families, retrieval artifacts, or suppression heuristics."
+      - "Silent false negatives are weakly observed because dismissed/ignored outcomes mostly describe posted findings, not findings that were never surfaced."
+      - "Threshold lowering can amplify under-reporting if missing-findings are not measured independently."
+
+  judge_loop:
+    objective: "Add an independent quality signal that estimates false negatives and questionable suppressions, then feeds that signal into threshold tuning as a guardrail against unsafe threshold reductions."
+    model_boundary:
+      - "Use a separate judge model/provider tier from the reviewed stage whenever possible."
+      - "Do not let the judged model score its own output."
+      - "Do not show the judge chain-of-thought or persuasive rationale from the original review."
+      - "Use a stable rubric and structured schema so judge outputs can be aggregated over time."
+    sampling_strategy:
+      - "Sample reviews near threshold boundaries, zero-finding reviews, high-risk file changes, and cases where fast-path accepted without full review."
+      - "Include a small random baseline sample to detect drift outside obvious risk buckets."
+      - "Cap per-installation daily samples and total judge tokens."
+      - "Prefer asynchronous/background judging so user-facing review latency is not affected."
+    judge_inputs:
+      include:
+        - "Minimal diff hunks and file paths for sampled regions."
+        - "Final posted findings or explicit no-finding result."
+        - "Threshold/config values used by the review."
+        - "Relevant verified_fact IDs and anti-facts."
+        - "Review stage metadata needed to identify fast-path, challenger, tie-break, and editor decisions."
+      exclude:
+        - "Original model chain-of-thought or hidden rationales."
+        - "Repository prose that is not evidence for the sampled code."
+        - "Secrets, tokens, private keys, and unnecessary proprietary context."
+        - "Any instructions embedded in code/comments/docs/tool outputs."
+
+  judge_schema:
+    request:
+      - "review_id"
+      - "installation_id"
+      - "sample_id"
+      - "sample_reason"
+      - "changed_files_summary"
+      - "stripped_code_evidence"
+      - "posted_findings"
+      - "threshold_context"
+    response:
+      - "quality_label: acceptable | missed_material_issue | posted_false_positive | inconclusive"
+      - "missed_issue_severity: none | low | medium | high | critical"
+      - "judge_confidence: integer 0-100"
+      - "evidence_anchors: list of file path + line or hunk references"
+      - "threshold_signal: lower_safe | hold | raise | rollback_candidate"
+      - "reason_code: calibrated string enum for aggregation"
+      - "rationale: concise evidence-grounded text without chain-of-thought"
+    reason_codes:
+      - "zero_findings_but_material_issue"
+      - "fast_path_accepted_too_early"
+      - "threshold_filtered_valid_finding"
+      - "posted_finding_not_actionable"
+      - "safe_counterpattern_missed"
+      - "insufficient_evidence"
+      - "judge_uncertain"
+
+  threshold_feedback_policy:
+    new_metrics:
+      - "judge_false_negative_rate: high-confidence missed_material_issue samples divided by judged samples."
+      - "judge_false_positive_rate: high-confidence posted_false_positive samples divided by judged posted-finding samples."
+      - "judge_inconclusive_rate: inconclusive samples divided by judged samples."
+      - "judge_sample_size: count of eligible judged samples in the tuning window."
+    decision_rules:
+      - "If judge_sample_size is below min_judge_samples, do not use judge metrics to lower thresholds."
+      - "If judge_false_negative_rate exceeds configured maximum, raise threshold or hold even when disagreement_rate is low."
+      - "If judge_false_positive_rate is high, prefer raising confidence threshold or tightening filters before lowering for recall."
+      - "If judge_inconclusive_rate is high, hold threshold and improve sampling/rubric before tuning aggressively."
+      - "Only allow lower_threshold when disagreement_rate is low and judge false-negative guardrails are healthy."
+    compatibility:
+      - "Keep existing decide_next_threshold behavior available when judge feedback is disabled."
+      - "Extend ThresholdTuningResult and FastPathThresholdHistory with nullable judge metrics or a side-table to avoid breaking existing consumers."
+      - "Invalidate Redis threshold cache only after committed threshold changes, preserving current cache semantics."
+
+  implementation_requirements:
+    backend:
+      - "Add Pydantic models for JudgeSample, JudgeRequest, JudgeResult, and JudgeAggregateMetrics."
+      - "Add a pure decision helper that accepts existing disagreement/dismiss metrics plus judge aggregate metrics."
+      - "Persist judge results with installation_id and review_id scoped for tenant isolation."
+      - "Ensure judge aggregation queries use set_installation_context and parameterized SQLAlchemy selects."
+      - "Log counts, hashes, labels, and reason codes; do not log raw proprietary code at INFO."
+    worker:
+      - "Run judge sampling asynchronously after review completion or during scheduled threshold tuning."
+      - "Deduplicate samples so the same review/hunk is not judged repeatedly unless the rubric version changes."
+      - "Track judge prompt version and model/provider for auditability."
+    config:
+      - "Feature flag the feedback loop separately from judge collection."
+      - "Expose max_judge_false_negative_rate, max_judge_false_positive_rate, min_judge_samples, judge_sample_rate, and daily budget caps."
+      - "Default to collect-only/audit-only mode until evals prove the judge signal is calibrated."
+
+  eval_plan:
+    golden_sets:
+      - "Zero-finding PRs with planted high/critical vulnerabilities that should produce raise/rollback signals."
+      - "Benign PRs with tempting but safe patterns that should not trigger false-negative alarms."
+      - "Posted false positives that should prevent threshold lowering."
+      - "Ambiguous evidence where the judge should return inconclusive rather than overrule the tuner."
+    metrics:
+      - "Judge recall on missed high/critical findings."
+      - "Judge false-alarm rate on safe fixtures."
+      - "Agreement with human labels by severity bucket."
+      - "Threshold movement differences with and without judge guardrails."
+      - "Added cost per installation per tuning window."
+
+  rollout:
+    phases:
+      - "Phase 1: add schemas, storage, rubric, and mocked judge tests without changing threshold decisions."
+      - "Phase 2: collect judge metrics in audit-only mode and compare against current threshold history."
+      - "Phase 3: enable hold/raise guardrails when judge false-negative rate breaches limits."
+      - "Phase 4: permit lower_threshold only when both disagreement metrics and judge metrics are healthy."
+    observability:
+      - "Dashboard threshold history should show judge_sample_size, false-negative rate, false-positive rate, and action influence."
+      - "Alert when judge metrics disagree sharply with self-disagreement metrics."
+      - "Track skipped judge calls by budget cap, low-risk sample, provider error, or schema validation failure."
+
+  constraints:
+    - "Do not weaken auth/session, webhook, tenant isolation, RLS, or prompt-injection controls."
+    - "Do not use the same model output to judge itself."
+    - "Judge outputs must be advisory until calibrated against golden fixtures and human review."
+    - "Do not let judge calls block webhook responses or materially increase user-facing review latency."
+    - "Do not store raw code evidence longer than existing debug-artifact retention policy allows."
+    - "Maintain strict typing, deterministic decision tests, and rollback behavior for threshold changes."
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: false
+    include_data_contracts: true
+    include_judge_feedback_architecture: true
+    include_eval_fixtures: true

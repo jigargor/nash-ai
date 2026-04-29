@@ -38,9 +38,16 @@ def test_app() -> FastAPI:
 
 @pytest.fixture(autouse=True)
 def _configure_dashboard_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DASHBOARD_USER_JWT_SECRET", "test-dashboard-user-secret")
     monkeypatch.setattr(settings, "dashboard_user_jwt_secret", "test-dashboard-user-secret")
     monkeypatch.setattr(settings, "dashboard_user_jwt_audience", "dashboard-api")
     monkeypatch.setattr(settings, "dashboard_user_jwt_issuer", "nash-web-dashboard")
+    monkeypatch.setattr(settings, "turnstile_secret_key", None)
+    monkeypatch.setattr(
+        settings,
+        "turnstile_siteverify_url",
+        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+    )
 
 
 @pytest.fixture
@@ -318,6 +325,48 @@ async def test_rerun_review_enqueues_job_and_resets_status(
         assert review is not None
         assert review.status == "queued"
 
+
+@pytest.mark.anyio
+async def test_verify_turnstile_rerun_token_requires_token_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "turnstile_secret_key", "required-secret")
+
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+    with pytest.raises(api_router.HTTPException) as exc_info:
+        await api_router._verify_turnstile_rerun_token(request, None)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_verify_turnstile_rerun_token_rejects_unsuccessful_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "turnstile_secret_key", "required-secret")
+
+    class _FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"success": False}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self) -> "_FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, _url: str, data: dict[str, str]) -> _FakeResponse:
+            assert data["response"] == "bad-token"
+            return _FakeResponse()
+
+    monkeypatch.setattr(api_router.httpx, "AsyncClient", lambda timeout: _FakeAsyncClient())
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+    with pytest.raises(api_router.HTTPException) as exc_info:
+        await api_router._verify_turnstile_rerun_token(request, "bad-token")
+    assert exc_info.value.status_code == 403
 
 @pytest.mark.anyio
 async def test_rerun_review_duplicate_submission_lock_returns_409(
@@ -1457,3 +1506,27 @@ async def test_stream_review_sse_when_installation_forbidden_returns_not_found(
     assert '"message": "Review not found"' in resp.text
 
 
+@pytest.mark.anyio
+async def test_telemetry_outcomes_summary_optional_installation_delegates_to_summarize(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+
+    async def fake_summarize(
+        *, installation_id: int | None = None, repo_full_name: str | None = None
+    ) -> dict[str, object]:
+        return {"ok": True, "installation_seen": installation_id, "repo": repo_full_name}
+
+    monkeypatch.setattr(api_router, "summarize_finding_outcomes", fake_summarize)
+
+    resp = await client.get(
+        "/api/v1/telemetry/outcomes/summary",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["installation_seen"] is None
+    assert body["repo"] is None
+    assert body["ok"] is True
+    assert body["installation_id"] is None
+    assert body["repo_full_name"] is None
