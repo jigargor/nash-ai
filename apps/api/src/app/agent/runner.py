@@ -1366,6 +1366,28 @@ async def _mark_review_done(
         incoming_artifacts = context.get("debug_artifacts")
         if isinstance(incoming_artifacts, dict):
             current_artifacts.update(incoming_artifacts)
+        run_id = str(context.get("run_id") or "")
+        run_outputs = current_artifacts.get("run_outputs")
+        run_outputs_list = (
+            list(run_outputs) if isinstance(run_outputs, list) else []
+        )
+        if run_id:
+            run_snapshot = {
+                "run_id": run_id,
+                "captured_at": datetime.now(timezone.utc).isoformat(),
+                "status": status,
+                "summary": session_data.summary,
+                "findings": [finding.model_dump(mode="json") for finding in session_data.findings],
+                "tokens_used": int(context.get("tokens_used", 0)),
+                "cost_usd": str(cost),
+            }
+            run_outputs_list = [
+                row
+                for row in run_outputs_list
+                if not isinstance(row, dict) or str(row.get("run_id")) != run_id
+            ]
+            run_outputs_list.insert(0, run_snapshot)
+            current_artifacts["run_outputs"] = run_outputs_list[:20]
         review.debug_artifacts = current_artifacts or None
         review.tokens_used = int(context.get("tokens_used", 0))
         review.cost_usd = float(cost)

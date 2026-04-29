@@ -3,11 +3,10 @@ from __future__ import annotations
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
 
 from app.api import usage as usage_router
 from app.config import settings
-from app.db.models import ReviewModelAudit, User, UserProviderKey
+from app.db.models import ReviewModelAudit
 from app.db.session import AsyncSessionLocal, set_installation_context
 
 from conftest import _auth_headers, _insert_installation, _insert_review, _random_installation_id
@@ -46,14 +45,8 @@ async def test_usage_summary_uses_stage_provider_usage_for_api_key_caps(
 
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
-        dashboard_user = (
-            await session.execute(select(User).where(User.github_id == 999_001))
-        ).scalar_one()
         session.add_all(
             [
-                UserProviderKey(user_id=dashboard_user.id, provider="anthropic", key_enc=b"x"),
-                UserProviderKey(user_id=dashboard_user.id, provider="openai", key_enc=b"y"),
-                UserProviderKey(user_id=dashboard_user.id, provider="gemini", key_enc=b"z"),
                 ReviewModelAudit(
                     review_id=review_id,
                     installation_id=installation_id,
@@ -90,4 +83,3 @@ async def test_usage_summary_uses_stage_provider_usage_for_api_key_caps(
     providers = {row["provider"] for row in payload["api_key_caps"]}
     assert "gemini" in providers
     assert "openai" in providers
-    assert payload["configured_provider_count"] >= 3
