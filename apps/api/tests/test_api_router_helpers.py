@@ -9,6 +9,7 @@ Endpoint integration tests live in test_api_router.py.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -129,6 +130,51 @@ def test_diff_stats_non_dict_fast_path() -> None:
     review = SimpleNamespace(debug_artifacts={"fast_path_decision": "bad"})
     files, lines = api_router._diff_stats_from_debug_artifacts(review)  # type: ignore[attr-defined]
     assert files is None and lines is None
+
+
+# ---------------------------------------------------------------------------
+# _ensure_utc / _review_list_item
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_utc_sets_timezone_for_naive_datetime() -> None:
+    naive = datetime(2026, 4, 1, 12, 0, 0)
+    normalized = api_router._ensure_utc(naive)  # type: ignore[attr-defined]
+    assert normalized.tzinfo == timezone.utc
+
+
+def test_ensure_utc_keeps_aware_datetime() -> None:
+    aware = datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
+    normalized = api_router._ensure_utc(aware)  # type: ignore[attr-defined]
+    assert normalized is aware
+
+
+def test_review_list_item_serializes_expected_fields() -> None:
+    review = SimpleNamespace(
+        id=77,
+        installation_id=321,
+        repo_full_name="acme/repo",
+        pr_number=14,
+        status="skipped",
+        model_provider="openai",
+        model="gpt-5.5",
+        tokens_used=1234,
+        cost_usd=Decimal("0.123456"),
+        findings={"findings": [{"severity": "low"}]},
+        debug_artifacts={"fast_path_decision": {"changed_file_count": 2, "changed_line_count": 40}},
+        created_at=datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc),
+        completed_at=None,
+    )
+
+    item = api_router._review_list_item(review)  # type: ignore[attr-defined]
+
+    assert item["id"] == 77
+    assert item["status"] == "skipped"
+    assert item["findings_count"] == 1
+    assert item["files_changed"] == 2
+    assert item["lines_changed"] == 40
+    assert item["cost_usd"] == "0.123456"
+    assert item["completed_at"] is None
 
 
 # ---------------------------------------------------------------------------
