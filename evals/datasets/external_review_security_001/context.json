@@ -1,0 +1,7 @@
+{
+  "repo": "acme/external-security-demo",
+  "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "files": {
+    "src/auth/run.py": "def run(user_input: str) -> dict:\n    # insecure: executes untrusted input\n    eval(user_input)\n    return {\"ok\": True}\n"
+  }
+}

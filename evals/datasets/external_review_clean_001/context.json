@@ -1,0 +1,8 @@
+{
+  "repo": "acme/external-clean-demo",
+  "head_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "files": {
+    "src/math.py": "def add(a: int, b: int) -> int:\n    return a + b\n",
+    "README.md": "Simple clean project.\n"
+  }
+}
