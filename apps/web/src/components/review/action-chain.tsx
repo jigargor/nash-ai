@@ -37,6 +37,45 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+function CopyDebugJsonButton({ getPayload }: { getPayload: () => Record<string, unknown> }) {
+  const [copied, setCopied] = useState(false);
+  async function handleClick(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(getPayload(), null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void handleClick()}
+      title={copied ? "Copied" : "Copy debug JSON (action chain, artifacts, findings)"}
+      aria-label={copied ? "Copied JSON to clipboard" : "Copy debug JSON to clipboard"}
+      style={{
+        flexShrink: 0,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "2.25rem",
+        height: "2.25rem",
+        borderRadius: "var(--radius-md)",
+        border: "1px solid var(--border-strong)",
+        background: copied ? "var(--accent-muted)" : "var(--card-muted)",
+        color: "var(--text-muted)",
+        cursor: "pointer",
+      }}
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+      </svg>
+    </button>
+  );
+}
+
 function getRaw(meta: Record<string, unknown> | null, key: string): unknown {
   return meta?.[key] ?? undefined;
 }
@@ -670,10 +709,12 @@ function TokenSummary({
   audits,
   costUsd,
   postedFindingsCount,
+  pipelineStagedFindingsPeak,
 }: {
   audits: ReviewModelAudit[];
   costUsd: string | null;
   postedFindingsCount: number;
+  pipelineStagedFindingsPeak: number;
 }) {
   let totalInput = 0,
     totalOutput = 0,
@@ -711,7 +752,14 @@ function TokenSummary({
             </span>
           ) : null}
           <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-            Findings: <strong style={{ color: "var(--text-primary)" }}>{postedFindingsCount}</strong>
+            Posted: <strong style={{ color: "var(--text-primary)" }}>{postedFindingsCount}</strong>
+            {pipelineStagedFindingsPeak > postedFindingsCount ? (
+              <>
+                {" "}
+                · pipeline max:{" "}
+                <strong style={{ color: "var(--text-primary)" }}>{pipelineStagedFindingsPeak}</strong>
+              </>
+            ) : null}
           </span>
         </span>
       </div>
@@ -729,8 +777,12 @@ interface ActionChainProps {
   costUsd?: string | null;
   /** Final posted findings count (matches PR review summary). */
   postedFindingsCount: number;
+  /** Largest `findings_count` from any pipeline stage (may exceed posted when a later stage failed). */
+  pipelineStagedFindingsPeak: number;
   /** Shown when there are no model-audit rows (e.g. still running or audits not persisted). */
   pipelineEmptyHint?: string | null;
+  /** When set, header shows a copy control for JSON export. */
+  getDebugExportPayload?: () => Record<string, unknown>;
 }
 
 const AUTO_OPEN_STAGES = new Set(["primary", "challenger", "tie_break"]);
@@ -740,7 +792,9 @@ export function ActionChain({
   debugArtifacts,
   costUsd,
   postedFindingsCount,
+  pipelineStagedFindingsPeak,
   pipelineEmptyHint,
+  getDebugExportPayload,
 }: ActionChainProps) {
   const chunkingPlan = debugArtifacts?.chunking_plan as Record<string, unknown> | undefined;
   const hasChunking = chunkingPlan && Array.isArray(chunkingPlan.chunks) && (chunkingPlan.chunks as unknown[]).length > 1;
@@ -757,9 +811,20 @@ export function ActionChain({
         padding: "1rem",
       }}
     >
-      <p style={{ margin: "0 0 0.75rem", fontSize: "0.8rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
-        Action chain
-      </p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          marginBottom: "0.65rem",
+        }}
+      >
+        <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
+          Action chain
+        </p>
+        {getDebugExportPayload ? <CopyDebugJsonButton getPayload={getDebugExportPayload} /> : null}
+      </div>
       <p style={{ margin: "0 0 0.65rem", fontSize: "0.78rem", color: "var(--text-muted)", lineHeight: 1.5 }}>
         LLM pipeline stages (provider calls). This is not the GitHub HTTP trace—those requests happen inside each
         stage when the agent reads the repo or posts comments.
@@ -783,7 +848,12 @@ export function ActionChain({
           </div>
         ))}
       </div>
-      <TokenSummary audits={audits} costUsd={costUsd ?? null} postedFindingsCount={postedFindingsCount} />
+      <TokenSummary
+        audits={audits}
+        costUsd={costUsd ?? null}
+        postedFindingsCount={postedFindingsCount}
+        pipelineStagedFindingsPeak={pipelineStagedFindingsPeak}
+      />
     </div>
   );
 }

@@ -2,7 +2,7 @@
 
 import type { Finding } from "@ai-code-review/shared-types";
 import Link from "next/link";
-import { useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { ActionChain } from "@/components/review/action-chain";
 import { DiffViewer } from "@/components/review/diff-viewer";
@@ -17,6 +17,7 @@ import { useReviewModelAudits } from "@/hooks/use-review-model-audits";
 import { useDismissFinding, useRerunReview } from "@/hooks/use-review-actions";
 import { useReview } from "@/hooks/use-review";
 import { useReviewStream } from "@/hooks/use-review-stream";
+import { buildPrReviewDebugExport } from "@/lib/pr-review-debug-export";
 import { isReviewInFlightStatus } from "@/lib/review-status";
 import { useReviewUiStore } from "@/stores/review-ui-store";
 
@@ -86,7 +87,6 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const reviewStatus = reviewQuery.data?.status ?? "";
   const isInFlight = isReviewInFlightStatus(reviewStatus) || rerunMutation.isPending;
   const findings = reviewQuery.data?.findings?.findings?.filter(isFindingVisible) ?? [];
-  const summary = reviewQuery.data?.findings?.summary ?? "";
   const findingOutcomes = reviewQuery.data?.finding_outcomes ?? [];
   const isFailedReview = reviewQuery.data?.status === "failed";
 
@@ -102,6 +102,72 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [findings.length, selectedFindingIndex, setSelectedFindingIndex]);
+
+  const audits = useMemo(() => modelAudits.data?.model_audits ?? [], [modelAudits.data]);
+  const pipelineStagedFindingsPeak = useMemo(
+    () =>
+      audits.reduce((max, a) => (typeof a.findings_count === "number" ? Math.max(max, a.findings_count) : max), 0),
+    [audits],
+  );
+  const postedFindingsCount = findings.length;
+  const findingsStatusLabel =
+    pipelineStagedFindingsPeak > postedFindingsCount
+      ? `${postedFindingsCount} posted · ${pipelineStagedFindingsPeak} pipeline`
+      : `${postedFindingsCount} findings`;
+
+  const summaryParagraph = useMemo(() => {
+    const row = reviewQuery.data;
+    if (!row) return "";
+    const visible = row.findings?.findings?.filter(isFindingVisible) ?? [];
+    const sum = row.findings?.summary ?? "";
+    if (visible.length) return sum;
+    return noFindingsBodyText(
+      sum,
+      row.debug_artifacts,
+      row.status === "failed",
+      isReviewInFlightStatus(row.status) || rerunMutation.isPending,
+    );
+  }, [reviewQuery.data, rerunMutation.isPending]);
+
+  const getDebugExportPayload = useCallback(() => {
+    const row = reviewQuery.data;
+    if (!row) {
+      return { exported_at: new Date().toISOString(), error: "review_not_loaded" } as Record<string, unknown>;
+    }
+    const postedFindings = row.findings?.findings?.filter(isFindingVisible) ?? [];
+    const modelAuditsList = modelAudits.data?.model_audits ?? [];
+    const peak = modelAuditsList.reduce(
+      (max, a) => (typeof a.findings_count === "number" ? Math.max(max, a.findings_count) : max),
+      0,
+    );
+    return buildPrReviewDebugExport({
+      exportedAtIso: new Date().toISOString(),
+      reviewId,
+      owner,
+      repo,
+      prNumber,
+      status: row.status,
+      summaryParagraph,
+      model: row.model,
+      modelProvider: row.model_provider ?? undefined,
+      tokensUsed: row.tokens_used,
+      costUsd: row.cost_usd,
+      postedFindingsCount: postedFindings.length,
+      pipelineStagedFindingsPeak: peak,
+      postedFindings,
+      findingOutcomes: row.finding_outcomes ?? [],
+      modelAudits: modelAuditsList,
+      debugArtifacts: row.debug_artifacts ?? null,
+    });
+  }, [
+    reviewId,
+    owner,
+    repo,
+    prNumber,
+    reviewQuery.data,
+    modelAudits.data,
+    summaryParagraph,
+  ]);
 
   if (reviewQuery.isLoading) {
     return <StateBlock title="Loading review details" description="Preparing findings, stream status, and timeline." />;
@@ -120,8 +186,6 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   }
 
   const data = reviewQuery.data;
-  const postedFindingsCount = findings.length;
-  const audits = modelAudits.data?.model_audits ?? [];
   const pipelineEmptyHint = modelAudits.isLoading
     ? "Loading pipeline stages…"
     : modelAudits.isError
@@ -137,10 +201,6 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   function handleDismiss(index: number): void {
     void dismissMutation.mutateAsync({ reviewId, findingIndex: index, installationId });
   }
-
-  const summaryParagraph = findings.length
-    ? summary
-    : noFindingsBodyText(summary, data.debug_artifacts, isFailedReview, isInFlight);
 
   return (
     <section className="pr-review-page" style={{ display: "grid", gap: "1rem" }}>
@@ -169,7 +229,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
           <StreamingStatus state={connectionState} />
           <div style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
-            {data.tokens_used ?? 0} tokens · ${data.cost_usd ?? "0.000000"} · {postedFindingsCount} findings
+            {data.tokens_used ?? 0} tokens · ${data.cost_usd ?? "0.000000"} · {findingsStatusLabel}
           </div>
         </div>
         <p style={{ color: "var(--text-muted)", marginBottom: 0, marginTop: "0.45rem", fontSize: "0.85rem" }}>
@@ -190,7 +250,9 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         debugArtifacts={data.debug_artifacts ?? null}
         costUsd={data.cost_usd}
         postedFindingsCount={postedFindingsCount}
+        pipelineStagedFindingsPeak={pipelineStagedFindingsPeak}
         pipelineEmptyHint={pipelineEmptyHint}
+        getDebugExportPayload={getDebugExportPayload}
       />
 
       {postedFindingsCount > 0 ? (
