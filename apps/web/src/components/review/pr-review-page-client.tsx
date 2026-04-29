@@ -4,7 +4,7 @@ import type { Finding } from "@ai-code-review/shared-types";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ActionChain } from "@/components/review/action-chain";
+import { ReviewPipeline } from "@/components/review/action-chain";
 import { DiffViewer } from "@/components/review/diff-viewer";
 import { FileTree } from "@/components/review/file-tree";
 import { FindingsPanel } from "@/components/review/findings-panel";
@@ -567,7 +567,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         </div>
       </Panel>
 
-      <ActionChain
+      <ReviewPipeline
         audits={currentRunAudits}
         debugArtifacts={data.debug_artifacts ?? null}
         isInFlight={isInFlight}
@@ -594,7 +594,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
       ) : (
         <Panel>
           <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.9rem" }}>
-            No inline findings to show in the diff panels. Use the action chain above for pipeline detail and token cost.
+            No inline findings to show in the diff panels. Use the review pipeline above for pipeline detail and token cost.
           </p>
         </Panel>
       )}
