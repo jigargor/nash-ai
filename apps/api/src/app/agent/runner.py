@@ -218,6 +218,7 @@ def _resolve_runtime_model(
         role,
         context_tokens=context_tokens,
         previous_provider=previous_provider,
+        available_providers=_available_provider_ids(context),
     )
     context.setdefault("llm_model_resolutions", {})
     resolutions = context.get("llm_model_resolutions")

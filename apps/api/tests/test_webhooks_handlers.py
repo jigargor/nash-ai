@@ -5,8 +5,9 @@ from sqlalchemy import func, select
 from uuid import uuid4
 
 from app.config import settings
-from app.db.models import Installation, Review
-from app.db.session import AsyncSessionLocal, engine, set_installation_context
+from app.crypto import encrypt_secret
+from app.db.models import Installation, InstallationUser, Review, User, UserProviderKey
+from app.db.session import AsyncSessionLocal, engine, set_installation_context, set_user_context
 from app.webhooks.handlers import (
     _primary_provider_for_circuit_breaker,
     queue_pull_request_outcome_classification,
@@ -24,14 +25,16 @@ class _FakeJob:
 class _FakeRedis:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
+        self.kwargs_calls: list[dict[str, object]] = []
         self.locks: set[str] = set()
 
     async def exists(self, *keys: object) -> int:
         """Redis EXISTS shim: no keys stored in this fake, so circuit is never open."""
         return 0
 
-    async def enqueue_job(self, *args: object) -> _FakeJob:
+    async def enqueue_job(self, *args: object, **kwargs: object) -> _FakeJob:
         self.calls.append(args)
+        self.kwargs_calls.append(dict(kwargs))
         return _FakeJob(job_id=f"job-{len(self.calls)}")
 
     async def set(
@@ -509,10 +512,77 @@ async def test_queue_pull_request_review_skips_without_llm_api_key(
     monkeypatch.setattr("app.webhooks.handlers.settings.openai_api_key", "")
     monkeypatch.setattr("app.webhooks.handlers.settings.anthropic_api_key", "")
     monkeypatch.setattr("app.webhooks.handlers.settings.gemini_api_key", "")
+    async def _no_byok_user(_installation_id: int) -> None:
+        return None
+
+    monkeypatch.setattr("app.webhooks.handlers._resolve_byok_user_for_installation", _no_byok_user)
 
     await queue_pull_request_review(redis, payload)
 
     assert redis.calls == []
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_enqueues_with_linked_byok_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _FakeRedis()
+    payload = _payload()
+
+    monkeypatch.setattr("app.webhooks.handlers.settings.enable_reviews", True)
+    monkeypatch.setattr("app.webhooks.handlers.settings.openai_api_key", "")
+    monkeypatch.setattr("app.webhooks.handlers.settings.anthropic_api_key", "")
+    monkeypatch.setattr("app.webhooks.handlers.settings.gemini_api_key", "")
+
+    async def _allow(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def _daily_usage(*_args: object, **_kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    github_id = randint(100_000_000, 999_999_999)
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, payload.installation.id)
+        installation = await session.scalar(
+            select(Installation).where(Installation.installation_id == payload.installation.id)
+        )
+        if installation is None:
+            session.add(
+                Installation(
+                    installation_id=payload.installation.id,
+                    account_login="acme",
+                    account_type="Organization",
+                )
+            )
+            await session.flush()
+        await set_user_context(session, github_id)
+        user = User(github_id=github_id, login=f"user-{github_id}", token_enc=None)
+        session.add(user)
+        await session.flush()
+        session.add(
+            InstallationUser(
+                installation_id=payload.installation.id,
+                user_id=int(user.id),
+                role="member",
+            )
+        )
+        session.add(
+            UserProviderKey(
+                user_id=int(user.id),
+                provider="anthropic",
+                key_enc=encrypt_secret("sk-ant-test-key-that-is-at-least-20-chars"),
+            )
+        )
+        await session.commit()
+
+    await queue_pull_request_review(redis, payload)
+
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0] == "review_pr"
+    assert redis.kwargs_calls[0]["user_github_id"] == github_id
 
 
 @pytest.mark.anyio

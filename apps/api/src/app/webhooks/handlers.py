@@ -2,11 +2,11 @@ import logging
 from datetime import UTC, datetime
 
 from arq.connections import ArqRedis
-from sqlalchemy import select
+from sqlalchemy import case, select
 
 from app.agent.review_config import DEFAULT_MODEL_NAME, DEFAULT_MODEL_PROVIDER
 from app.config import settings
-from app.db.models import Installation, Review
+from app.db.models import Installation, InstallationUser, Review, User, UserProviderKey
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.llm.circuit_breaker import is_circuit_open
 from app.queue.idempotency import acquire_review_submission_lock
@@ -17,6 +17,29 @@ logger = logging.getLogger(__name__)
 
 SKIP_REVIEW_TAG = "[skip-nash-review]"
 FORCE_REVIEW_TAG = "[force-nash-review]"
+
+
+async def _resolve_byok_user_for_installation(installation_id: int) -> int | None:
+    """Pick a linked user with provider keys for webhook-triggered BYOK runs."""
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        user_github_id = await session.scalar(
+            select(User.github_id)
+            .join(InstallationUser, InstallationUser.user_id == User.id)
+            .join(UserProviderKey, UserProviderKey.user_id == User.id)
+            .where(InstallationUser.installation_id == installation_id)
+            .where(User.deleted_at.is_(None))
+            .order_by(
+                case((InstallationUser.role == "admin", 0), else_=1),
+                UserProviderKey.last_used_at.desc().nullslast(),
+                UserProviderKey.updated_at.desc(),
+                User.github_id.asc(),
+            )
+            .limit(1)
+        )
+    if user_github_id is None:
+        return None
+    return int(user_github_id)
 
 
 async def _primary_provider_for_circuit_breaker(installation_id: int) -> str:
@@ -84,17 +107,19 @@ async def sync_installation_from_webhook(payload: GitHubInstallationWebhookPaylo
 async def queue_pull_request_review(
     redis: ArqRedis, payload: GitHubPullRequestWebhookPayload
 ) -> None:
+    installation_id = payload.installation.id
     if not settings.enable_reviews:
         logger.warning("Skipping review enqueue because ENABLE_REVIEWS is false")
         return
-    if not settings.has_llm_api_key_configured():
+    byok_user_github_id = await _resolve_byok_user_for_installation(installation_id)
+    if not settings.has_llm_api_key_configured() and byok_user_github_id is None:
         logger.warning(
-            "Skipping review enqueue: ENABLE_REVIEWS is true but no LLM API key is set "
-            "(configure ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)"
+            "Skipping review enqueue: no base LLM API key is configured and no linked BYOK user key found "
+            "installation_id=%s",
+            installation_id,
         )
         return
 
-    installation_id = payload.installation.id
     repo_full_name = payload.repository.full_name
     owner, repo_name = repo_full_name.split("/")
     pr_number = payload.pull_request.number
@@ -258,6 +283,7 @@ async def queue_pull_request_review(
         repo_name,
         pr_number,
         head_sha,
+        user_github_id=byok_user_github_id,
     )
     logger.warning(
         "Queued review job review_id=%s job_id=%s repo=%s pr_number=%s",

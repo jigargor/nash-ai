@@ -12,10 +12,12 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import delete, select
 
 from app.api import router as api_router
 from app.config import settings
-from app.db.models import RepoConfig, Review, ReviewModelAudit
+from app.crypto import encrypt_secret
+from app.db.models import InstallationUser, RepoConfig, Review, ReviewModelAudit, UserProviderKey
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
 
 # Shared helpers from conftest (conftest dir is on sys.path during pytest)
@@ -1232,12 +1234,74 @@ async def test_rerun_review_without_llm_keys_returns_503(
     installation_id = _random_installation_id()
     await _insert_installation(installation_id)
     review_id = await _insert_review(installation_id, status="failed")
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        linked_user_id = await session.scalar(
+            select(InstallationUser.user_id)
+            .where(InstallationUser.installation_id == installation_id)
+            .limit(1)
+        )
+        if linked_user_id is not None:
+            await session.execute(
+                delete(UserProviderKey).where(UserProviderKey.user_id == int(linked_user_id))
+            )
+            await session.commit()
 
     resp = await client.post(
         f"/api/v1/reviews/{review_id}/rerun?installation_id={installation_id}",
         headers=_auth_headers(),
     )
     assert resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_rerun_review_allows_byok_without_base_keys(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", None)
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    monkeypatch.setattr(settings, "gemini_api_key", None)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="failed")
+
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        linked_user_id = await session.scalar(
+            select(InstallationUser.user_id)
+            .where(InstallationUser.installation_id == installation_id)
+            .limit(1)
+        )
+        assert linked_user_id is not None
+        existing = await session.scalar(
+            select(UserProviderKey)
+            .where(UserProviderKey.user_id == int(linked_user_id))
+            .where(UserProviderKey.provider == "openai")
+            .limit(1)
+        )
+        encrypted = encrypt_secret("sk-openai-test-key-that-is-at-least-20-chars")
+        if existing is None:
+            session.add(
+                UserProviderKey(
+                    user_id=int(linked_user_id),
+                    provider="openai",
+                    key_enc=encrypted,
+                )
+            )
+        else:
+            existing.key_enc = encrypted
+        await session.commit()
+
+    resp = await client.post(
+        f"/api/v1/reviews/{review_id}/rerun?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["ok"] is True
+    assert payload["review_id"] == review_id
 
 
 @pytest.mark.anyio
