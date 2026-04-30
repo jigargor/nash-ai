@@ -1,0 +1,54 @@
+---
+description: Multi-agent worktree, branch, ownership, and recovery safety rules
+alwaysApply: true
+---
+
+# Multi-Agent Worktree Safety
+
+When multiple agents work in this repo, Artiforge is the source of truth for agent state, ownership, and handoffs. Agents must preserve work first, coordinate second, and clean up last.
+
+## Isolation
+
+- Each agent must use one dedicated git worktree and one unique branch.
+- Branch format: `agent/<agent-id>/<task-slug>/<run-id>`.
+- Worktree format: `.worktrees/<agent-id>/<task-slug>-<run-id>`.
+- Do not edit directly on `main`, `develop`, shared integration branches, the repo root, or another agent's worktree.
+
+## Artiforge Ledger
+
+- Before editing, record `run_id`, `agent_id`, `task_id`, branch, worktree path, base branch, base SHA, claimed files, latest commit SHA, dirty state, and lifecycle state.
+- Ledger writes must be treated as atomic coordination points.
+- Release file ownership only after commit, handoff, merge, or explicit abandonment.
+
+## Single-Writer Rule
+
+- A file may have many readers but only one active writer.
+- Before editing, claim files in the Artiforge ledger.
+- If another active agent owns a file, do not edit it. Ask Artiforge to serialize the work or perform an explicit ownership handoff.
+
+## Preflight
+
+Every agent must verify before changing files:
+
+```sh
+git status --short
+git branch --show-current
+git rev-parse HEAD
+git worktree list
+```
+
+Abort and report if the branch/worktree is wrong, unowned dirty changes exist, the base SHA is unknown, or any intended file is already claimed.
+
+## Checkpoints And Handoffs
+
+- Commit each coherent checkpoint before pausing, switching tasks, or handing off.
+- Do not leave important work only in the working tree.
+- Handoffs must include branch, worktree path, latest commit SHA, dirty status, modified files, owned files, tests/checks run, remaining work, and known conflicts.
+- The receiving agent must run preflight again before editing.
+
+## Conflict And Recovery Rules
+
+- Do not resolve conflicts in files owned by another active agent.
+- If ownership overlaps, stop both agents and preserve both branches before synthesis.
+- Do not run `git reset --hard`, `git clean -fd`, `git checkout -- <path>`, `git branch -D`, `git worktree remove`, `git push --force`, or rebase shared/handoff branches without explicit approval.
+- If work appears lost, inspect worktrees, branches, reflog, stashes, and dangling commits. Recover to a new branch before cleanup.

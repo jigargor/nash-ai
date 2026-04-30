@@ -133,6 +133,7 @@ src/app/review/external/sources/__init__.py
 src/app/review/external/sources/base.py
 src/app/review/external/sources/github.py
 src/app/review/external/sources/memory.py
+src/app/storage/r2_rotation.py
 src/app/storage/r2_snapshots.py
 src/app/telemetry/finding_outcomes.py
 src/app/webhooks/__init__.py
@@ -157,7 +158,9 @@ tests/test_agent_schema.py
 tests/test_agent_tools.py
 tests/test_agent_validator.py
 tests/test_agent_vendor_detect.py
+tests/test_api_auth.py
 tests/test_api_benchmarks.py
+tests/test_api_models_catalog.py
 tests/test_api_router.py
 tests/test_api_router_helpers.py
 tests/test_api_usage.py
@@ -169,6 +172,8 @@ tests/test_database_url_tls.py
 tests/test_db_url.py
 tests/test_diff_parser.py
 tests/test_external_eval_modules.py
+tests/test_external_evals_api.py
+tests/test_external_evals_helpers.py
 tests/test_finding_outcomes.py
 tests/test_github_auth.py
 tests/test_github_client.py
