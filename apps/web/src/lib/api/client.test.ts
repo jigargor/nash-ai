@@ -9,11 +9,32 @@ describe("apiFetch", () => {
 
   it("throws ApiError with response body on non-2xx", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fetchSpy.mockResolvedValueOnce(new Response("boom", { status: 500, headers: { "Content-Type": "text/plain" } }));
-    fetchSpy.mockResolvedValueOnce(new Response("boom", { status: 500, headers: { "Content-Type": "text/plain" } }));
+    fetchSpy.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "DEPENDENCY_REDIS_UNAVAILABLE",
+            family: "dependency",
+            message: "Redis unavailable",
+            retryable: true,
+            action: "retry",
+            request_id: "req-123",
+          },
+          detail: "Redis unavailable",
+        }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      ),
+    );
 
-    await expect(apiFetch("/api/v1/reviews")).rejects.toBeInstanceOf(ApiError);
-    await expect(apiFetch("/api/v1/reviews")).rejects.toMatchObject({ status: 500 });
+    await expect(apiFetch("/api/v1/reviews")).rejects.toMatchObject({
+      status: 503,
+      code: "DEPENDENCY_REDIS_UNAVAILABLE",
+      family: "dependency",
+      retryable: true,
+      action: "retry",
+      requestId: "req-123",
+      message: "Redis unavailable",
+    });
   });
 
   it("throws ApiError when payload is empty", async () => {

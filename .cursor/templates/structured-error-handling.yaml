@@ -1,0 +1,103 @@
+orchestration:
+  goal: "Design a practical, security-safe, and incremental plan for structured error handling and graceful fallbacks across this monorepo (FastAPI API, ARQ workers, and Next.js dashboard/BFF) with clear rollout and verification criteria."
+  mode: "analyze" # analyze|implement|review
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  mindset:
+    principles:
+      - "Open-minded: evaluate multiple error-contract patterns before converging."
+      - "Thorough: map every major failure boundary (HTTP, queue, DB, external APIs, UI)."
+      - "Discerning: prioritize high-impact paths and avoid noisy abstraction churn."
+      - "Patient: sequence into low-risk phases with explicit stop/go checkpoints."
+
+  scoring:
+    correctness: 0.35
+    maintainability: 0.25
+    risk: 0.3
+    performance: 0.1
+
+  workers:
+    - id: "w1"
+      agent: "backend-engineer"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Audit FastAPI route, service, and integration error shapes; propose a typed canonical error envelope with safe HTTP mappings, correlation IDs, and redaction-safe logging."
+
+    - id: "w2"
+      agent: "reliability-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Design fallback and degradation matrix for Redis, DB, GitHub API, LLM providers, R2 storage, and Turnstile verify flows; define retry/idempotency, timeout budgets, and circuit-breaker rules."
+
+    - id: "w3"
+      agent: "frontend-engineer"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Plan dashboard/BFF error UX for recoverable vs terminal failures, optimistic update rollback, and user-facing guidance while preserving security boundaries and avoiding secret leakage."
+
+    - id: "w4"
+      agent: "security-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Validate that structured errors do not disclose secrets or sensitive internals; ensure auth/webhook/tenant-isolation paths retain strict behavior (401/403/404 semantics and signature checks)."
+
+  repository_focus:
+    backend:
+      - "apps/api/src/app/main.py"
+      - "apps/api/src/app/api/"
+      - "apps/api/src/app/webhooks/"
+      - "apps/api/src/app/queue/"
+      - "apps/api/src/app/github/"
+      - "apps/api/src/app/storage/"
+    frontend:
+      - "apps/web/src/app/"
+      - "apps/web/src/hooks/"
+      - "apps/web/src/lib/api/"
+      - "apps/web/src/components/"
+    shared_policy:
+      - "Do not change authentication/session guarantees."
+      - "Do not weaken webhook signature verification."
+      - "Do not break tenant/user isolation behavior."
+
+  planning_requirements:
+    discovery:
+      - "Inventory existing exception types, HTTPException usage, and ad-hoc error payloads."
+      - "Map every external call boundary (GitHub, LLM providers, Redis, DB, R2, Turnstile)."
+      - "Identify current fallback behavior and missing fallback behavior."
+      - "Highlight top 10 user-visible failure modes by frequency x impact."
+    target_contract:
+      - "Define canonical API error schema (code, message, category, retryable, correlation_id, details?)."
+      - "Define frontend-facing error normalization strategy (BFF + client hooks)."
+      - "Define worker/job failure taxonomy (retryable/transient/permanent)."
+      - "Define logging/telemetry fields for alerting and triage."
+    graceful_fallbacks:
+      - "Specify default fallback for each critical dependency outage."
+      - "Specify behavior under partial unavailability (degraded but functional modes)."
+      - "Specify user messaging and operator messaging for each fallback mode."
+      - "Specify hard-fail conditions where fail-closed is required for security."
+    rollout:
+      - "Phase 1: add schemas/adapters without behavior change."
+      - "Phase 2: migrate high-risk endpoints and worker entrypoints."
+      - "Phase 3: migrate remaining paths and remove legacy error variants."
+      - "Phase 4: enforce lint/tests/contracts to prevent regression."
+
+  constraints:
+    - "No API break for existing consumers unless versioned and documented."
+    - "Preserve webhook response-time envelope and queue-first architecture."
+    - "Preserve Turnstile and auth verification behavior (no bypass on error)."
+    - "Preserve strict typing standards and avoid untyped catch-all patterns."
+    - "Never leak secrets/tokens/internal stack traces to clients."
+    - "Keep plan incremental, reversible, and migration-safe."
+
+  acceptance_criteria:
+    - "Every major endpoint family mapped to a canonical error code set."
+    - "Fallback matrix covers Redis, DB, GitHub API, LLM, R2, and Turnstile."
+    - "Clear distinction between retryable, user-actionable, and operator-actionable failures."
+    - "Test strategy includes unit, integration, and failure-injection scenarios."
+    - "Observability plan defines metrics, structured logs, and alert thresholds."
+    - "Rollout plan includes backward compatibility and rollback triggers."
+
+  output:
+    include_patch: false
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_error_taxonomy: true
+    include_fallback_matrix: true
+    include_observability_spec: true

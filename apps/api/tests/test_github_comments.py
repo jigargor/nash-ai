@@ -1,5 +1,7 @@
-from app.agent.schema import Finding
-from app.github.comments import build_review_comment_payload, format_finding
+import pytest
+
+from app.agent.schema import Finding, ReviewResult
+from app.github.comments import build_review_comment_payload, format_finding, post_review
 
 
 def test_build_review_comment_payload_adds_start_line_for_multiline() -> None:
@@ -60,3 +62,53 @@ def test_format_finding_sanitizes_message_tail() -> None:
     body = format_finding(finding)
     assert "Details\n-" not in body
     assert "Details" in body
+
+
+class _FakeGitHubClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    async def post_json(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+        self.calls.append((path, payload))
+        return {"id": 123}
+
+
+@pytest.mark.anyio
+async def test_post_review_skips_non_actionable_empty_chunk_summary() -> None:
+    gh = _FakeGitHubClient()
+    result = ReviewResult(
+        findings=[],
+        summary="Chunked review coverage: 57/57 review-surface files; 5 files skipped by pre-pass. No chunk summaries were available for synthesis.",
+    )
+
+    response = await post_review(gh, "acme", "repo", 7, "a" * 40, result)
+
+    assert response == {}
+    assert gh.calls == []
+
+
+@pytest.mark.anyio
+async def test_post_review_posts_when_findings_present() -> None:
+    gh = _FakeGitHubClient()
+    result = ReviewResult(
+        findings=[
+            Finding.model_validate(
+                {
+                    "severity": "medium",
+                    "category": "correctness",
+                    "message": "Potential issue.",
+                    "file_path": "x.ts",
+                    "line_start": 1,
+                    "target_line_content": "x",
+                    "confidence": 90,
+                    "evidence": "diff_visible",
+                }
+            )
+        ],
+        summary="Actionable review.",
+    )
+
+    response = await post_review(gh, "acme", "repo", 8, "b" * 40, result)
+
+    assert response == {"id": 123}
+    assert len(gh.calls) == 1

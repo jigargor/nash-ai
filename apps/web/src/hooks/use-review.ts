@@ -5,11 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import { actionFetchReview } from "@/app/actions/dashboard-api";
 import { isReviewInFlightStatus } from "@/lib/review-status";
 
-export function useReview(reviewId: number, installationId?: number) {
+interface UseReviewOptions {
+  enabled?: boolean;
+}
+
+export function useReview(reviewId: number, installationId?: number, options?: UseReviewOptions) {
   return useQuery({
     queryKey: ["review", reviewId, installationId ?? null],
     queryFn: () => actionFetchReview(reviewId, installationId),
-    enabled: Number.isFinite(reviewId),
+    enabled: Number.isFinite(reviewId) && (options?.enabled ?? true),
     refetchInterval: (query) => (isReviewInFlightStatus(query.state.data?.status) ? 3000 : false),
   });
 }
