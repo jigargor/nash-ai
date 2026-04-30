@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { Panel } from "@/components/ui/panel";
@@ -70,6 +69,7 @@ function parseRepoFullName(repoFullName: string): { owner: string; repo: string 
 }
 
 export function ReviewsPageClient() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const installations = useInstallations();
   const [selectedInstallationId, setSelectedInstallationId] = useState<number | "all">("all");
@@ -236,7 +236,27 @@ export function ReviewsPageClient() {
         <Panel>
           <div className="reviews-list-grid">
             {filteredReviews.map((review) => (
-              <div key={review.id} className="review-row-link">
+              <div
+                key={review.id}
+                className="review-row-link"
+                role="link"
+                tabIndex={0}
+                style={{ cursor: "pointer" }}
+                onClick={(event) => {
+                  const target = event.target as HTMLElement | null;
+                  if (target?.closest("a,button,input,select,textarea,label")) return;
+                  router.push(
+                    `/repos/${review.repo_full_name}/prs/${review.pr_number}?reviewId=${review.id}&installationId=${review.installation_id}`,
+                  );
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  router.push(
+                    `/repos/${review.repo_full_name}/prs/${review.pr_number}?reviewId=${review.id}&installationId=${review.installation_id}`,
+                  );
+                }}
+              >
                 <span className="review-row-left">
                   <span
                     className={statusVisualClass(review.status)}
@@ -269,12 +289,6 @@ export function ReviewsPageClient() {
                   </span>
                   <span className="review-findings-pill">{review.findings_count ?? 0} findings</span>
                   <span className="review-cost-text">${review.cost_usd ?? "0.000000"}</span>
-                  <Link
-                    href={`/repos/${review.repo_full_name}/prs/${review.pr_number}?reviewId=${review.id}&installationId=${review.installation_id}`}
-                    className="review-open-link"
-                  >
-                    Open review
-                  </Link>
                 </span>
                 <span className="review-hover-card" aria-hidden>
                   <span className="review-hover-row">
