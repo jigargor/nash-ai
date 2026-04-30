@@ -3,10 +3,11 @@ import hmac
 import logging
 from time import monotonic
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import ValidationError
 
 from app.config import settings
+from app.errors.exceptions import AppError, SecurityError
 from app.queue.connection import require_app_redis
 from app.webhooks.handlers import (
     queue_pull_request_outcome_classification,
@@ -68,7 +69,7 @@ async def github_webhook(request: Request) -> dict[str, bool]:
             event,
             delivery_id,
         )
-        raise HTTPException(status_code=401, detail="Invalid signature")
+        raise SecurityError(code="SECURITY_WEBHOOK_SIGNATURE_INVALID", message="Invalid signature")
 
     if event == "installation":
         if await _is_duplicate_delivery(request, delivery_id):
@@ -83,7 +84,14 @@ async def github_webhook(request: Request) -> dict[str, bool]:
                 delivery_id,
                 exc.errors(),
             )
-            raise HTTPException(status_code=400, detail="Invalid payload")
+            raise AppError(
+                code="VALIDATION_WEBHOOK_PAYLOAD",
+                message="Invalid payload",
+                status_code=400,
+                family="validation",
+                retryable=False,
+                action="none",
+            )
 
         if installation_payload.action in {
             "created",
@@ -117,7 +125,14 @@ async def github_webhook(request: Request) -> dict[str, bool]:
             delivery_id,
             exc.errors(),
         )
-        raise HTTPException(status_code=400, detail="Invalid payload")
+        raise AppError(
+            code="VALIDATION_WEBHOOK_PAYLOAD",
+            message="Invalid payload",
+            status_code=400,
+            family="validation",
+            retryable=False,
+            action="none",
+        )
 
     if settings.log_webhook_payloads and settings.environment != "production":
         logger.debug(

@@ -1,3 +1,5 @@
+import { normalizeApiErrorPayload, type NormalizedApiError } from "@/lib/api/error-normalize";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") ?? "";
 
 /** Enforces dashboard data flow through Next.js `/api/v1/*` BFF in the browser (same-origin fetch). */
@@ -17,10 +19,26 @@ export function assertBrowserDashboardApiPath(path: string): void {
 
 export class ApiError extends Error {
   status: number;
+  code: string;
+  family: NormalizedApiError["family"];
+  retryable: boolean;
+  action: NormalizedApiError["action"];
+  requestId?: string;
+  details?: Record<string, unknown>;
 
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
+  constructor(status: number, messageOrError: string | NormalizedApiError) {
+    const normalized =
+      typeof messageOrError === "string"
+        ? normalizeApiErrorPayload(messageOrError, status)
+        : messageOrError;
+    super(normalized.message);
+    this.status = normalized.status;
+    this.code = normalized.code;
+    this.family = normalized.family;
+    this.retryable = normalized.retryable;
+    this.action = normalized.action;
+    this.requestId = normalized.requestId;
+    this.details = normalized.details;
   }
 }
 
@@ -45,7 +63,10 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   });
   if (!response.ok) {
     const maybeError = await response.text();
-    throw new ApiError(response.status, maybeError || `API request failed: ${response.status}`);
+    throw new ApiError(
+      response.status,
+      normalizeApiErrorPayload(maybeError || `API request failed: ${response.status}`, response.status),
+    );
   }
   const payload: unknown = await response.json();
   if (payload === null || payload === undefined) {

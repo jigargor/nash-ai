@@ -40,7 +40,12 @@ describe("api v1 proxy route", () => {
     });
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ detail: "Unauthorized" });
+    const body = await response.json();
+    expect(body.detail).toBe("Unauthorized");
+    expect(body.error).toMatchObject({
+      code: "AUTH_UNAUTHORIZED",
+      action: "reauth",
+    });
   });
 
   it("forwards api key and server-minted user token", async () => {
@@ -106,7 +111,12 @@ describe("api v1 proxy route", () => {
     });
 
     expect(response.status).toBe(413);
-    expect(await response.json()).toEqual({ detail: "Request body exceeds 1048576 byte limit." });
+    const body = await response.json();
+    expect(body.detail).toBe("Request body exceeds 1048576 byte limit.");
+    expect(body.error).toMatchObject({
+      code: "VALIDATION_BODY_TOO_LARGE",
+      action: "fix_input",
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -139,5 +149,37 @@ describe("api v1 proxy route", () => {
     const fetchCall = fetchSpy.mock.calls[0];
     const options = fetchCall?.[1] as RequestInit | undefined;
     expect(options?.method).toBe("PATCH");
+  });
+
+  it("normalizes legacy upstream errors into the canonical envelope", async () => {
+    parseSessionTokenMock.mockResolvedValue({
+      sub: "12345",
+      user: { id: 12345, login: "octocat" },
+      exp: Math.floor(Date.now() / 1000) + 60,
+    });
+    createDashboardUserTokenMock.mockReturnValue("server-minted-dashboard-token");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Redis unavailable" }), {
+        status: 503,
+        headers: { "content-type": "application/json", "X-Request-ID": "api-req-1" },
+      }),
+    );
+
+    const routeModule = await import("./route");
+    const request = new Request("http://localhost:3000/api/v1/reviews", { method: "GET" });
+    const response = await routeModule.GET(request, {
+      params: Promise.resolve({ path: ["reviews"] }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("X-Request-ID")).toBe("api-req-1");
+    const body = await response.json();
+    expect(body.detail).toBe("Redis unavailable");
+    expect(body.error).toMatchObject({
+      code: "DEPENDENCY_UNAVAILABLE",
+      family: "dependency",
+      action: "retry",
+      request_id: "api-req-1",
+    });
   });
 });

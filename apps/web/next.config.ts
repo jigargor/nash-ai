@@ -102,8 +102,8 @@ function buildFormActionDirective(): string {
 // React + Next dev tooling (e.g. Turbopack, stack reconstruction) uses eval(); never in production bundles.
 const isDev = process.env.NODE_ENV !== "production";
 const scriptSrc = isDev
-  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-  : "script-src 'self' 'unsafe-inline'";
+  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://static.cloudflareinsights.com"
+  : "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://static.cloudflareinsights.com";
 
 const csp = [
   "default-src 'self'",
@@ -114,6 +114,8 @@ const csp = [
   "font-src 'self' data:",
   // Allow HTTPS APIs when NEXT_PUBLIC_* points at Railway (or OAuth); prefer same-origin /api/* via BFF.
   "connect-src 'self' https:",
+  // Cloudflare Turnstile renders inside an iframe hosted under challenges.cloudflare.com.
+  "frame-src 'self' https://challenges.cloudflare.com",
   scriptSrc,
   "style-src 'self' 'unsafe-inline'",
 ].join("; ");
