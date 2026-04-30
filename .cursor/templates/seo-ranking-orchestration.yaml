@@ -1,0 +1,89 @@
+orchestration:
+  goal: "Design and, where appropriate, implement a practical SEO improvement plan that aligns site pages with search intent, technical quality, trustworthy topical authority, and Google Search Essentials."
+  mode: "implement" # analyze|implement|review
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  scoring:
+    search_intent_fit: 0.3
+    technical_seo: 0.25
+    content_quality: 0.25
+    measurement_and_risk: 0.2
+
+  workers:
+    - id: "w1"
+      agent: "seo-strategist"
+      model: "claude-opus-4-7-thinking-xhigh"
+      focus: "Define the ranking strategy: target topics and queries, search intent mapping, one clear topic per URL, title and heading direction, topical authority gaps, internal linking opportunities, and realistic prioritization from fastest wins to longer-term bets."
+
+    - id: "w2"
+      agent: "technical-seo-engineer"
+      model: "gpt-5.3-codex-high-fast"
+      focus: "Audit and plan technical implementation for a Next.js site: crawlability, indexability, metadata, canonical URLs, clean URL structure, sitemap/robots behavior, HTTPS assumptions, Core Web Vitals, mobile behavior, structured data, and safe rollout checks."
+
+    - id: "w3"
+      agent: "content-and-analytics-lead"
+      model: "claude-4.6-sonnet-medium"
+      focus: "Turn keyword and Search Console signals into content briefs, improvement targets, GA4/Search Console measurement plans, link-worthy resource ideas, and quality guardrails that avoid thin, copied, cloaked, bought-link, or auto-generated spam tactics."
+
+  seo_requirements:
+    ranking_principles:
+      - "Match real search intent before optimizing surface-level metadata."
+      - "Improve page experience: fast, mobile-friendly, accessible, and stable pages."
+      - "Build trust and topical authority with accurate, useful, original content."
+      - "Stay within Google Search Essentials; avoid manipulative tactics."
+    keyword_research:
+      - "Use Google Search Console queries, impressions, and click-through rates as the first source of opportunity."
+      - "Supplement with People Also Ask, SERP review, and reputable keyword tools when needed."
+      - "Prioritize pages that already earn impressions but underperform on clicks or ranking position."
+    page_strategy:
+      - "Assign one primary intent and topic to each important URL."
+      - "Use unique, descriptive titles and meta descriptions for important pages."
+      - "Align headings and body copy with the query intent without keyword stuffing."
+      - "Strengthen sensible internal links between related pages and resource hubs."
+    technical_basics:
+      - "Ensure HTTPS and no obvious crawl-blocking mistakes."
+      - "Validate fast loading and mobile-friendly behavior."
+      - "Use clean URLs, canonical tags where needed, and consistent metadata."
+      - "Check for major crawl errors, broken important links, duplicate titles, and missing descriptions."
+    structured_data:
+      - "Use only Google-supported schema types that accurately match visible page content."
+      - "Prefer schemas such as Article, FAQ, Product, Organization, BreadcrumbList, or LocalBusiness only when applicable."
+      - "Avoid markup spam, hidden content markup, or schema that overstates the page."
+    content_authority:
+      - "Create content that deserves links: original research, useful guides, comparison resources, calculators, tools, or clear reference material."
+      - "Refresh thin pages with concrete answers, examples, evidence, and author/source credibility where relevant."
+      - "Do not create copied, doorway, spun, or low-value AI-generated pages."
+    measurement:
+      - "Use Google Search Console for queries, clicks, impressions, indexing, and coverage issues."
+      - "Use GA4 or equivalent analytics for behavior after the click, conversions, and engagement quality."
+      - "Track before/after baselines for affected pages and monitor changes over weeks, not days."
+
+  prioritization:
+    fastest_wins:
+      - "Improve pages with existing impressions and weak CTR or average position."
+      - "Fix missing or duplicated metadata on important pages."
+      - "Resolve crawl/indexing issues that block valuable URLs."
+      - "Tighten internal links to high-intent pages."
+    sustained_investments:
+      - "Publish and maintain link-worthy guides, tools, and original resources."
+      - "Build topical clusters around proven audience queries."
+      - "Earn mentions and backlinks through legitimate product, content, and brand visibility."
+      - "Continuously monitor Core Web Vitals and mobile usability."
+
+  constraints:
+    - "Do not recommend buying links, cloaking, doorway pages, hidden text, keyword stuffing, or auto-generated junk pages."
+    - "Do not add structured data unless visible content truly supports the schema."
+    - "Do not promise immediate ranking gains; SEO results should be framed as iterative and measurable over time."
+    - "For Next.js changes, prefer App Router metadata APIs, server-rendered content, semantic HTML, and minimal client-side JavaScript for SEO-critical pages."
+    - "Preserve accessibility, performance, and existing route behavior while making SEO improvements."
+    - "All recommendations must include a verification path using Search Console, analytics, crawl checks, or page-speed tooling."
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_keyword_map: true
+    include_content_briefs: true
+    include_structured_data_plan: true
+    include_measurement_plan: true

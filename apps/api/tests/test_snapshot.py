@@ -149,6 +149,7 @@ async def test_archive_expired_snapshots_moves_blob_and_load_reads_archived(
     monkeypatch.setattr(settings, "r2_bucket", "snapshot-bucket")
     monkeypatch.setattr(settings, "r2_access_key_id", "key-id")
     monkeypatch.setattr(settings, "r2_secret_access_key", "key-secret")
+    monkeypatch.setattr(settings, "r2_credentials_rotated_at", datetime.now(timezone.utc))
     monkeypatch.setattr(snapshot_module, "upload_snapshot_to_r2", _fake_upload_snapshot_to_r2)
     monkeypatch.setattr(snapshot_module, "download_snapshot_from_r2", _fake_download_snapshot_from_r2)
 

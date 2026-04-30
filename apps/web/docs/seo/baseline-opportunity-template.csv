@@ -1,0 +1,4 @@
+url_path,primary_intent,target_query_cluster,gsc_clicks_28d,gsc_impressions_28d,gsc_ctr_28d,gsc_avg_position_28d,ga4_sessions_28d,ga4_engagement_rate_28d,ga4_key_events_28d,priority_owner,planned_change,baseline_date,review_2w_date,review_4w_date,review_8w_date,notes
+/about,informational,agentic-pr-review-overview,0,0,0,0,0,0,0,frontend,metadata+content,, , , ,
+/privacy,navigational,privacy-policy-for-ai-code-review,0,0,0,0,0,0,0,frontend,metadata+structure,, , , ,
+/terms,navigational,terms-for-ai-code-review-tool,0,0,0,0,0,0,0,frontend,metadata+structure,, , , ,

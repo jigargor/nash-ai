@@ -2,7 +2,6 @@ from collections.abc import AsyncIterator
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
 from app.db.url import normalize_asyncpg_database_url
@@ -24,10 +23,6 @@ engine = create_async_engine(
     connect_args=connect_args,
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-
-
-class Base(DeclarativeBase):
-    pass
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

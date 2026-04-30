@@ -70,6 +70,14 @@ def test_parse_adaptive_threshold_reads_guardrails() -> None:
             "max_false_accept_rate": 4,
             "max_dismiss_rate": 20,
             "min_samples": 200,
+            "judge_feedback_enabled": True,
+            "judge_collect_only": False,
+            "judge_provider_family_must_differ": True,
+            "min_judge_samples": 55,
+            "max_judge_false_negative_rate": 12,
+            "max_judge_false_positive_rate": 18,
+            "max_judge_inconclusive_rate": 25,
+            "min_judge_reliability_for_lowering": 87,
         }
     )
     assert adaptive.enabled is True
@@ -81,6 +89,14 @@ def test_parse_adaptive_threshold_reads_guardrails() -> None:
     assert adaptive.max_false_accept_rate == 4
     assert adaptive.max_dismiss_rate == 20
     assert adaptive.min_samples == 200
+    assert adaptive.judge_feedback_enabled is True
+    assert adaptive.judge_collect_only is False
+    assert adaptive.judge_provider_family_must_differ is True
+    assert adaptive.min_judge_samples == 55
+    assert adaptive.max_judge_false_negative_rate == 12
+    assert adaptive.max_judge_false_positive_rate == 18
+    assert adaptive.max_judge_inconclusive_rate == 25
+    assert adaptive.min_judge_reliability_for_lowering == 87
 
 
 def test_parse_model_config_accepts_legacy_direct_pricing_keys() -> None:

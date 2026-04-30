@@ -1,11 +1,20 @@
 import Image from "next/image";
 import Link from "next/link";
+import type { Metadata } from "next";
 
 import { logoPngSrc } from "@/lib/branding";
+import { buildSeoMetadata } from "@/lib/seo";
 
 interface LoginPageProps {
   searchParams: Promise<{ error?: string }>;
 }
+
+export const metadata: Metadata = buildSeoMetadata({
+  title: "Login",
+  description: "Sign in to Nash AI with GitHub to access your review dashboard.",
+  path: "/login",
+  noindex: true,
+});
 
 function errorMessage(code: string | undefined): string | null {
   if (!code) return null;

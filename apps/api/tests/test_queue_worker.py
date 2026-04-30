@@ -2,11 +2,35 @@ from __future__ import annotations
 
 import pytest
 
-from app.queue import worker as worker_module
+from app.queue import worker
 
+
+def test_tune_fast_path_thresholds_refreshes_judge_windows_first(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    async def _fake_refresh(_config):
+        calls.append("refresh")
+        return {"enabled": True, "updated": 1, "installation_ids": [1]}
+
+    async def _fake_tune(_config):
+        calls.append("tune")
+        return []
+
+    monkeypatch.setattr(worker, "refresh_judge_gate_windows", _fake_refresh)
+    monkeypatch.setattr(worker, "tune_all_installations", _fake_tune)
+
+    ctx: dict[str, object] = {}
+    import asyncio
+
+    asyncio.run(worker.tune_fast_path_thresholds(ctx))
+    assert calls == ["refresh", "tune"]
+    assert "judge_gate_window_refresh" in ctx
+    assert "threshold_tuning_results" in ctx
 
 def test_worker_settings_disable_retries_for_review_jobs() -> None:
-    assert worker_module.WorkerSettings.max_tries == 1
+    assert worker.WorkerSettings.max_tries == 1
 
 
 @pytest.mark.anyio
@@ -33,10 +57,10 @@ async def test_review_pr_forwards_redis_context_and_user(monkeypatch: pytest.Mon
         captured["user_github_id"] = user_github_id
         captured["redis"] = redis
 
-    monkeypatch.setattr(worker_module, "run_review", _fake_run_review)
+    monkeypatch.setattr(worker, "run_review", _fake_run_review)
 
     redis_client = object()
-    await worker_module.review_pr(
+    await worker.review_pr(
         {"redis": redis_client},
         123,
         456,

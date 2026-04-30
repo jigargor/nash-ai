@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -38,8 +39,10 @@ class Settings(BaseSettings):
     github_webhook_secret: str
     APP_PRIVATE_KEY_PEM: str | None = None
     APP_PRIVATE_KEY_PEM_path: Path = Path("private-key.pem")
-    github_client_id: str
-    github_client_secret: str
+    # Dashboard OAuth (used by Next.js BFF). Optional on the API/worker: workers do not
+    # exchange user OAuth codes; omit on Railway worker services if unset.
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
     database_url: str
     db_pool_size: int = 10
     db_max_overflow: int = 20
@@ -83,6 +86,19 @@ class Settings(BaseSettings):
     r2_snapshot_prefix: str = "review-snapshots"
     turnstile_secret_key: str | None = None
     turnstile_siteverify_url: str = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    # When R2 archive is enabled: UTC instant you last rotated R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY.
+    r2_credentials_rotated_at: datetime | None = None
+    # Max age for those keys before startup fails (production vs non-production).
+    r2_access_key_max_age_days_production: int = 30
+    r2_access_key_max_age_days_development: int = 90
+
+    @field_validator("github_client_id", "github_client_secret", mode="before")
+    @classmethod
+    def strip_optional_github_oauth(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
 
     @field_validator("github_app_id", mode="before")
     @classmethod
@@ -111,6 +127,13 @@ class Settings(BaseSettings):
             return None
         text = str(v).strip()
         return text or None
+
+    @field_validator("r2_credentials_rotated_at", mode="before")
+    @classmethod
+    def parse_r2_credentials_rotated_at(cls, v: object) -> datetime | None:
+        from app.storage.r2_rotation import parse_r2_credentials_rotated_at
+
+        return parse_r2_credentials_rotated_at(v)
 
     @field_validator("web_app_url", mode="before")
     @classmethod

@@ -13,6 +13,11 @@ import httpx
 import yaml
 from app.agent.profiler import profile_repo
 from app.agent.provider_clients import create_openai_compatible_client, get_provider_api_key
+from app.agent.telemetry_audit import (
+    summarize_target_line_mismatch_telemetry,
+    summarize_verified_fact_cap_telemetry,
+    summarize_verified_fact_retrieval_telemetry,
+)
 from app.agent.review_config import (
     DEFAULT_MAX_FINDINGS_PER_PR,
     ModelProvider,
@@ -30,7 +35,15 @@ from app.agent.review_config import (
 )
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.config import settings
-from app.db.models import Installation, InstallationUser, RepoConfig, Review, ReviewModelAudit, User
+from app.db.models import (
+    Installation,
+    InstallationUser,
+    RepoConfig,
+    Review,
+    ReviewModelAudit,
+    User,
+    UserProviderKey,
+)
 from app.db.session import AsyncSessionLocal, set_installation_context
 from app.github.client import GitHubClient
 from app.github.utils import safe_fetch_file, split_repo_full_name as _split_repo_full_name
@@ -304,6 +317,17 @@ async def _allowed_installation_ids(
         )
     ).scalars()
     return {int(installation_id) for installation_id in rows}
+
+
+async def _user_has_provider_key(session: AsyncSession, github_id: int) -> bool:
+    row = await session.scalar(
+        select(UserProviderKey.id)
+        .join(User, User.id == UserProviderKey.user_id)
+        .where(User.github_id == github_id)
+        .where(User.deleted_at.is_(None))
+        .limit(1)
+    )
+    return row is not None
 
 
 def _require_installation_access(allowed_installation_ids: set[int], installation_id: int) -> None:
@@ -961,10 +985,28 @@ async def get_outcome_summary(
         installation_id=installation_id,
         repo_full_name=repo_full_name,
     )
+    mismatch_summary = await summarize_target_line_mismatch_telemetry(
+        limit=200,
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
+    )
+    retrieval_summary = await summarize_verified_fact_retrieval_telemetry(
+        limit=200,
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
+    )
+    cap_summary = await summarize_verified_fact_cap_telemetry(
+        limit=200,
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
+    )
     return {
         "installation_id": installation_id,
         "repo_full_name": repo_full_name,
         **summary,
+        "target_line_mismatch_telemetry": mismatch_summary,
+        "verified_fact_retrieval_telemetry": retrieval_summary,
+        "verified_fact_cap_telemetry": cap_summary,
     }
 
 
@@ -994,10 +1036,13 @@ async def rerun_review(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
             )
 
-        if not settings.has_llm_api_key_configured():
+        if (
+            not settings.has_llm_api_key_configured()
+            and not await _user_has_provider_key(session, current_user.github_id)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="No LLM API key configured (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY)",
+                detail="No LLM API key configured and no BYOK provider key found for this user",
             )
         await _verify_turnstile_rerun_token(
             request,

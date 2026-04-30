@@ -58,7 +58,12 @@ from app.agent.threshold_tuner import get_effective_fast_path_threshold
 from app.agent.loop import run_agent
 from app.agent.normalization import normalize_for_match
 from app.agent.profiler import profile_repo
-from app.agent.prompts import build_initial_user_prompt, build_system_prompt, load_verified_fact_ids
+from app.agent.prompts import (
+    build_initial_user_prompt,
+    build_system_prompt,
+    load_verified_fact_ids,
+    select_verified_fact_telemetry,
+)
 from app.agent.review_config import ReviewConfig, load_review_config
 from app.agent.schema import (
     DropReason,
@@ -192,6 +197,10 @@ async def _assemble_context(
     system_prompt = build_system_prompt(
         repo_profile.frameworks, diff_text, review_config.prompt_additions
     )
+    context.setdefault("debug_artifacts", {})
+    debug_artifacts = context.get("debug_artifacts")
+    if isinstance(debug_artifacts, dict):
+        debug_artifacts["verified_fact_retrieval"] = select_verified_fact_telemetry(diff_text)
     user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
     return files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt
 
@@ -209,6 +218,7 @@ def _resolve_runtime_model(
         role,
         context_tokens=context_tokens,
         previous_provider=previous_provider,
+        available_providers=_available_provider_ids(context),
     )
     context.setdefault("llm_model_resolutions", {})
     resolutions = context.get("llm_model_resolutions")

@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 from app.config import settings
 from app.observability import init_observability
+from app.storage.r2_rotation import assert_r2_credentials_within_rotation_policy
 from app.queue.connection import format_redis_target
 from app.queue.recovery import recover_stale_running_reviews
 from arq.connections import RedisSettings
@@ -37,7 +38,7 @@ _logger.warning(
 from app.agent.runner import run_review  # noqa: E402
 from app.agent.review_config import ReviewConfig  # noqa: E402
 from app.agent.snapshot import archive_expired_snapshots  # noqa: E402
-from app.agent.threshold_tuner import tune_all_installations  # noqa: E402
+from app.agent.threshold_tuner import refresh_judge_gate_windows, tune_all_installations  # noqa: E402
 from app.agent.external.orchestrator import (  # noqa: E402
     run_external_eval_prepass,
     run_external_eval_shard,
@@ -93,6 +94,8 @@ async def archive_review_snapshots(ctx: dict[str, Any]) -> None:
 
 async def tune_fast_path_thresholds(ctx: dict[str, Any]) -> None:
     config = ReviewConfig().adaptive_threshold
+    judge_windows = await refresh_judge_gate_windows(config)
+    ctx["judge_gate_window_refresh"] = judge_windows
     results = await tune_all_installations(config)
     ctx["threshold_tuning_results"] = [dataclasses.asdict(result) for result in results]
 
@@ -111,6 +114,7 @@ async def external_eval_synthesize(ctx: dict[str, Any], external_eval_id: int) -
 
 async def worker_startup(ctx: dict[str, Any]) -> None:
     init_observability("worker")
+    assert_r2_credentials_within_rotation_policy(settings)
     recovered = await recover_stale_running_reviews()
     ctx["recovered_stale_reviews"] = recovered
 

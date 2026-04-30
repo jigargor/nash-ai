@@ -14,7 +14,7 @@ This document lists **where secrets live** for this monorepo, how to **rotate** 
 | **GitHub App + OAuth App** (GitHub **Settings UI**) | Webhook HMAC, installation JWT signing, user login | Not the same as Actions secrets—you edit the **app** in GitHub, then mirror values into Railway/Vercel/Actions. |
 | **Railway** | API service + **separate** ARQ worker: DB, Redis, GitHub App PEM, Fernet, LLM keys, CORS, admin keys, optional R2/Sentry/Langfuse | **API and worker must stay in sync** for anything the worker uses (GitHub PEM, `DATABASE_URL`, `REDIS_URL`, `FERNET_KEY`, LLM keys, R2, etc.). |
 | **Vercel** | Next.js **server** env: OAuth, session signing, BFF `API_URL` + `API_ACCESS_KEY`, optional Upstash, JWT signing if set on web | See `apps/web/.env.example`. Prefer **Environment** scoping (Production / Preview). |
-| **Cloudflare R2** (optional) | S3-compatible credentials for snapshot archive | `R2_*` vars on Railway only today (see repo-root `.env.example`). Rotate via Cloudflare **API Tokens** or **R2 S3 API** keys. |
+| **Cloudflare R2** (optional) | S3-compatible credentials for snapshot archive | `R2_*` vars on Railway (API + worker). See repo-root `.env.example`. The API enforces **credential max age** when archive is enabled: set `R2_CREDENTIALS_ROTATED_AT` to the UTC date you last rotated `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` (defaults: **30 days** in `ENVIRONMENT=production`, **90 days** otherwise). Override with `R2_ACCESS_KEY_MAX_AGE_DAYS_PRODUCTION` / `R2_ACCESS_KEY_MAX_AGE_DAYS_DEVELOPMENT`; set either max-age to `0` to disable the check (not recommended for prod). |
 | **Provider dashboards** | Anthropic / OpenAI / Google AI, Sentry, Langfuse, Upstash | Keys created and revoked in each vendor’s console. |
 
 Local development: copy `.env.example` and `apps/web/.env.example` into ignored `.env` / `.env.local` files—**not** a rotation surface for production.
@@ -41,7 +41,7 @@ Scope vars by service (least privilege). The authoritative matrix lives in `docs
 - **Both API + worker (required):** `DATABASE_URL`, `REDIS_URL`, `FERNET_KEY`, `ENVIRONMENT`, `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `APP_PRIVATE_KEY_PEM`.
 - **API-only (required):** `API_ACCESS_KEY`, `DASHBOARD_USER_JWT_SECRET`, `DASHBOARD_USER_JWT_AUDIENCE`, `DASHBOARD_USER_JWT_ISSUER`, `ADMIN_RETRY_API_KEY`, `WEB_APP_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`.
 - **Worker optional (only if used by worker code paths):** `ADMIN_RETRY_API_KEY`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`.
-- **Optional on both when enabled:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `SENTRY_DSN`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `R2_ENDPOINT_URL`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_REGION`, `R2_SNAPSHOT_PREFIX`, `ENABLE_REVIEWS`, rate/budget knobs.
+- **Optional on both when enabled:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `SENTRY_DSN`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `R2_ENDPOINT_URL`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_REGION`, `R2_SNAPSHOT_PREFIX`, `R2_CREDENTIALS_ROTATED_AT`, `R2_ACCESS_KEY_MAX_AGE_DAYS_PRODUCTION`, `R2_ACCESS_KEY_MAX_AGE_DAYS_DEVELOPMENT`, `ENABLE_REVIEWS`, rate/budget knobs.
 
 **`API_ACCESS_KEY`:** must match Vercel `API_ACCESS_KEY` (BFF sends `X-Api-Key`). Rotate both in the same change window.
 
@@ -126,7 +126,7 @@ After any production rotation:
 | **Cost / ops** | Generally **simpler and cheaper** for write-heavy archive + **no egress fees** to the Internet from R2’s pricing model (confirm current Cloudflare pricing). AWS S3 charges storage + requests + **egress**, and IAM is broader attack surface. | More features (VPC endpoints, Object Lock, cross-region replication)—worth it if you are already all-in on AWS compliance/networking. |
 | **Recommendation** | **Prefer R2** for this project’s optional snapshot archive unless you have a hard requirement (existing AWS org, compliance boundary, unified AWS logging). | Choose AWS if those requirements dominate; expect a small code/config addition to treat `AWS_*` or a custom endpoint explicitly. |
 
-**Rotation (R2):** in Cloudflare, rotate **S3 API credentials** (access key + secret) used for `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`; update Railway API + worker; run a quick read/write test path if you have archive jobs enabled; revoke old keys.
+**Rotation (R2):** in Cloudflare, rotate **S3 API credentials** (access key + secret) used for `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`; update Railway **API and worker**; set **`R2_CREDENTIALS_ROTATED_AT`** to the rotation date (UTC, ISO-8601); deploy so startup passes the max-age check; then revoke old keys. If archive is enabled and `R2_CREDENTIALS_ROTATED_AT` is missing or older than the configured max age, **the API and ARQ worker exit at startup** with an explicit error (fail closed).
 
 ---
 
@@ -297,3 +297,4 @@ Automation limitations:
 - `.github/workflows/secret-env-audit.yml` — matrix drift audit for env variable names.
 - `.github/workflows/secret-rotate.yml` — manual distribution automation for allowed secret groups.
 - `.github/workflows/quality-gates.yml`, `api-db-security.yml`, `deepeval.yml` — Actions secret names.
+- `apps/api/src/app/storage/r2_rotation.py` — R2 credential max-age enforcement at API/worker startup.

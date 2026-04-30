@@ -107,6 +107,22 @@ async def test_usage_scorecard_reports_disagreement_and_rates(
         return {installation_id}
 
     monkeypatch.setattr(usage_metrics, "_allowed_installation_ids", _fake_allowed_installation_ids)
+    async def _fake_judge_window(_installation_id: int) -> dict[str, object] | None:
+        return {
+            "judge_gate_metrics": {
+                "is_available": True,
+                "provider_independent": True,
+                "sample_size": 42,
+                "false_negative_rate": 0.1,
+                "false_positive_rate": 0.2,
+                "inconclusive_rate": 0.05,
+                "reliability_score": 0.9,
+            },
+            "tuner_action": "lower_threshold",
+            "recorded_at": "2026-04-29T00:00:00Z",
+        }
+
+    monkeypatch.setattr(usage_metrics, "get_cached_judge_gate_window", _fake_judge_window)
 
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
@@ -159,6 +175,9 @@ async def test_usage_scorecard_reports_disagreement_and_rates(
     assert payload["total_fast_path_calls"] >= 1
     assert payload["disagreement_rate"] > 0
     assert payload["dismiss_rate"] == pytest.approx(0.1)
+    assert payload["threshold_lowering_authorized"] is True
+    assert payload["judge_gate_window"]["sample_size"] == 42
+    assert payload["judge_gate_window"]["tuner_action"] == "lower_threshold"
 
 
 @pytest.mark.anyio
@@ -252,6 +271,10 @@ async def test_usage_scorecard_handles_zero_fast_path_rows(
 
     monkeypatch.setattr(usage_metrics, "_allowed_installation_ids", _fake_allowed_installation_ids)
     monkeypatch.setattr(usage_metrics, "summarize_finding_outcomes", _fake_summary)
+    async def _fake_judge_window(_installation_id: int) -> dict[str, object] | None:
+        return None
+
+    monkeypatch.setattr(usage_metrics, "get_cached_judge_gate_window", _fake_judge_window)
 
     response = await client.get(
         f"/api/v1/usage/scorecard?installation_id={installation_id}",
@@ -261,6 +284,8 @@ async def test_usage_scorecard_handles_zero_fast_path_rows(
     payload = response.json()
     assert payload["total_fast_path_calls"] == 0
     assert payload["fast_path_accept_rate"] == 0.0
+    assert payload["threshold_lowering_authorized"] is False
+    assert payload["judge_gate_window"]["is_available"] is False
 
 
 @pytest.mark.anyio

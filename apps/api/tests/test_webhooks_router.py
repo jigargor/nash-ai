@@ -116,7 +116,7 @@ async def test_github_webhook_with_valid_signature_and_opened_action_enqueues(
     async def fake_queue(_redis: object, _payload: object) -> None:
         calls.append("queued")
 
-    test_app.state.redis = object()
+    test_app.state.redis = _FakeRedis()
     monkeypatch.setattr(webhook_router, "queue_pull_request_review", fake_queue)
 
     payload = _payload_bytes(action="opened")
@@ -145,7 +145,7 @@ async def test_github_webhook_with_valid_signature_and_synchronize_action_enqueu
     async def fake_queue(_redis: object, _payload: object) -> None:
         calls.append("queued")
 
-    test_app.state.redis = object()
+    test_app.state.redis = _FakeRedis()
     monkeypatch.setattr(webhook_router, "queue_pull_request_review", fake_queue)
 
     payload = _payload_bytes(action="synchronize")
@@ -305,3 +305,68 @@ async def test_github_webhook_with_malformed_payload_returns_400(client: httpx.A
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Invalid payload"
+
+
+@pytest.mark.anyio
+async def test_github_webhook_skips_duplicate_pull_request_delivery(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_queue(_redis: object, _payload: object) -> None:
+        calls.append("queued")
+
+    test_app.state.redis = _FakeRedis()
+    monkeypatch.setattr(webhook_router, "queue_pull_request_review", fake_queue)
+
+    payload = _payload_bytes(action="opened")
+    headers = {
+        "X-Hub-Signature-256": _signature(payload),
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "delivery-pr-1",
+    }
+    first = await client.post("/webhooks/github", content=payload, headers=headers)
+    second = await client.post("/webhooks/github", content=payload, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls == ["queued"]
+
+
+@pytest.mark.anyio
+async def test_github_webhook_closed_action_enqueues_outcome_classification(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_queue_outcomes(_redis: object, _payload: object) -> None:
+        calls.append("classified")
+
+    async def fake_queue_review(_redis: object, _payload: object) -> None:
+        raise AssertionError("closed action should not queue review job")
+
+    test_app.state.redis = object()
+    monkeypatch.setattr(
+        webhook_router,
+        "queue_pull_request_outcome_classification",
+        fake_queue_outcomes,
+    )
+    monkeypatch.setattr(webhook_router, "queue_pull_request_review", fake_queue_review)
+
+    payload = _payload_bytes(action="closed")
+    response = await client.post(
+        "/webhooks/github",
+        content=payload,
+        headers={
+            "X-Hub-Signature-256": _signature(payload),
+            "X-GitHub-Event": "pull_request",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls == ["classified"]

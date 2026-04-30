@@ -93,3 +93,22 @@ fast_path:
   skip_min_confidence: 90
   light_review_min_confidence: 80
   force_economy_on_light_review: false
+
+adaptive_threshold:
+  enabled: true
+  initial_threshold: 90
+  minimum_threshold: 60
+  step_down: 2
+  target_disagreement_low: 5
+  target_disagreement_high: 15
+  max_false_accept_rate: 5
+  max_dismiss_rate: 25
+  min_samples: 100
+  judge_feedback_enabled: false
+  judge_collect_only: true
+  judge_provider_family_must_differ: true
+  min_judge_samples: 40
+  max_judge_false_negative_rate: 15
+  max_judge_false_positive_rate: 25
+  max_judge_inconclusive_rate: 20
+  min_judge_reliability_for_lowering: 82
