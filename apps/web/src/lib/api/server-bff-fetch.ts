@@ -3,6 +3,7 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 
 import { ApiError } from "@/lib/api/client";
+import { normalizeApiErrorPayload } from "@/lib/api/error-normalize";
 
 /**
  * Server-only JSON fetch to the Next.js `/api/v1/*` BFF with the caller's cookies.
@@ -35,7 +36,10 @@ export async function serverBffFetch<T>(path: string, init?: RequestInit): Promi
 
   if (!response.ok) {
     const maybeError = await response.text();
-    throw new ApiError(response.status, maybeError || `API request failed: ${response.status}`);
+    throw new ApiError(
+      response.status,
+      normalizeApiErrorPayload(maybeError || `API request failed: ${response.status}`, response.status),
+    );
   }
   const payload: unknown = await response.json();
   if (payload === null || payload === undefined) {

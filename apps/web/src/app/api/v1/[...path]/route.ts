@@ -4,6 +4,12 @@ import { cookies } from "next/headers";
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
 import { createDashboardUserToken } from "@/lib/auth/dashboard-token";
 import { parseSessionToken } from "@/lib/auth/session";
+import {
+  apiErrorBody,
+  makeApiError,
+  normalizeApiErrorPayload,
+  type NormalizedApiError,
+} from "@/lib/api/error-normalize";
 
 const DEFAULT_DEV_API = "http://localhost:8000";
 
@@ -17,6 +23,7 @@ export const maxDuration = 30;
 /** Upstream fetch timeout — must stay below `maxDuration` (leave headroom for cookie/session work). */
 const UPSTREAM_TIMEOUT_MS = 25_000;
 const MAX_PROXY_BODY_BYTES = 1024 * 1024; // 1 MiB
+const REQUEST_ID_HEADER = "X-Request-ID";
 
 /**
  * Railway (and most hosts) speak HTTPS on the public URL. If `API_URL` uses `http://`,
@@ -39,35 +46,53 @@ interface ApiProxyRouteContext {
   }>;
 }
 
+function errorResponse(error: NormalizedApiError): NextResponse {
+  const headers = error.requestId ? { [REQUEST_ID_HEADER]: error.requestId } : undefined;
+  return NextResponse.json(apiErrorBody(error), { status: error.status, headers });
+}
+
+async function normalizedUpstreamError(response: Response): Promise<NextResponse> {
+  const text = await response.text();
+  const normalized = normalizeApiErrorPayload(text, response.status);
+  const requestId = response.headers.get(REQUEST_ID_HEADER) ?? normalized.requestId;
+  return errorResponse({ ...normalized, requestId: requestId ?? undefined });
+}
+
 async function proxyApiRequest(request: Request, context: ApiProxyRouteContext): Promise<Response> {
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE_NAME)?.value;
   const session = await parseSessionToken(token);
-  if (!session) return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
+  if (!session) return errorResponse(makeApiError(401, "Unauthorized"));
 
   const apiAccessKey = process.env.API_ACCESS_KEY;
   if (!apiAccessKey) {
-    return NextResponse.json({ detail: "API access key is not configured for the web proxy." }, { status: 503 });
+    return errorResponse(
+      makeApiError(503, "API access key is not configured for the web proxy.", {
+        code: "DEPENDENCY_WEB_PROXY_API_KEY_MISSING",
+        family: "dependency",
+        action: "contact_support",
+      }),
+    );
   }
 
   const apiBase =
     process.env.API_URL?.trim() || (process.env.NODE_ENV !== "production" ? DEFAULT_DEV_API : "");
   if (!apiBase) {
-    return NextResponse.json(
-      {
-        detail:
-          "API_URL is not set. Add your Railway API origin (e.g. https://nash-ai-api-production.up.railway.app) to Vercel env vars.",
-      },
-      { status: 503 },
+    return errorResponse(
+      makeApiError(
+        503,
+        "API_URL is not set. Add your Railway API origin (e.g. https://nash-ai-api-production.up.railway.app) to Vercel env vars.",
+        { code: "DEPENDENCY_WEB_PROXY_API_URL_MISSING", family: "dependency", action: "contact_support" },
+      ),
     );
   }
   if (process.env.NODE_ENV === "production" && apiBase.includes("localhost")) {
-    return NextResponse.json(
-      {
-        detail:
-          "API_URL points at localhost in production. Set API_URL to your public Railway API URL in Vercel.",
-      },
-      { status: 503 },
+    return errorResponse(
+      makeApiError(
+        503,
+        "API_URL points at localhost in production. Set API_URL to your public Railway API URL in Vercel.",
+        { code: "DEPENDENCY_WEB_PROXY_API_URL_INVALID", family: "dependency", action: "contact_support" },
+      ),
     );
   }
 
@@ -84,7 +109,13 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   try {
     dashboardUserToken = createDashboardUserToken(session.user);
   } catch {
-    return NextResponse.json({ detail: "Dashboard user token auth is not configured." }, { status: 503 });
+    return errorResponse(
+      makeApiError(503, "Dashboard user token auth is not configured.", {
+        code: "DEPENDENCY_DASHBOARD_TOKEN_UNAVAILABLE",
+        family: "dependency",
+        action: "contact_support",
+      }),
+    );
   }
   headers.set("X-Api-Key", apiAccessKey);
   headers.set("X-Dashboard-User-Token", dashboardUserToken);
@@ -96,24 +127,18 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
     if (contentLengthHeader !== null) {
       const declaredLength = Number(contentLengthHeader);
       if (Number.isFinite(declaredLength) && declaredLength > MAX_PROXY_BODY_BYTES) {
-        return NextResponse.json(
-          { detail: `Request body exceeds ${MAX_PROXY_BODY_BYTES} byte limit.` },
-          { status: 413 },
-        );
+        return errorResponse(makeApiError(413, `Request body exceeds ${MAX_PROXY_BODY_BYTES} byte limit.`));
       }
     }
 
     requestBody = await request.arrayBuffer();
     if (requestBody.byteLength > MAX_PROXY_BODY_BYTES) {
-      return NextResponse.json(
-        { detail: `Request body exceeds ${MAX_PROXY_BODY_BYTES} byte limit.` },
-        { status: 413 },
-      );
+      return errorResponse(makeApiError(413, `Request body exceeds ${MAX_PROXY_BODY_BYTES} byte limit.`));
     }
   }
 
   try {
-    return await fetch(targetUrl, {
+    const response = await fetch(targetUrl, {
       method: request.method,
       headers,
       body: requestBody,
@@ -121,11 +146,17 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
       redirect: "follow",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
+    if (!response.ok) return await normalizedUpstreamError(response);
+    return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upstream request failed";
-    return NextResponse.json(
-      { detail: `Backend request failed (${message}). Check API_URL and that the Railway API is running.` },
-      { status: 504 },
+    return errorResponse(
+      makeApiError(504, `Backend request failed (${message}). Check API_URL and that the Railway API is running.`, {
+        code: "UPSTREAM_API_TIMEOUT",
+        family: "upstream",
+        retryable: true,
+        action: "retry",
+      }),
     );
   }
 }

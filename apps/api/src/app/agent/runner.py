@@ -78,6 +78,7 @@ from app.config import settings
 from app.crypto import decrypt_secret
 from app.db.models import Review, ReviewModelAudit, User, UserProviderKey
 from app.db.session import AsyncSessionLocal, set_installation_context, set_user_context
+from app.errors.classification import failure_class_for_exception
 from app.github.client import GitHubClient
 from app.github.comments import post_review
 from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
@@ -1422,6 +1423,14 @@ async def run_review(
         )
     except Exception as exc:
         logger.exception("Review job failed review_id=%s", review_id)
+        debug_artifacts = context.get("debug_artifacts")
+        context["debug_artifacts"] = {
+            **(debug_artifacts if isinstance(debug_artifacts, dict) else {}),
+            "terminal_error": {
+                "failure_class": failure_class_for_exception(exc),
+                "exception_type": exc.__class__.__name__,
+            },
+        }
         await _mark_review_done(
             session_data=ReviewResult(findings=[], summary=f"Review failed: {exc}"),
             context=context,
@@ -1844,6 +1853,7 @@ async def _run_chunked_review(
             )
         except Exception as exc:
             set_chunk_state(chunk_state, chunk.chunk_id, status="failed", error=str(exc))
+            chunk_state[chunk.chunk_id]["failure_class"] = failure_class_for_exception(exc)
             await persist_chunk_state(context, chunk_state)
             logger.warning(
                 "Chunk review failed and will be skipped chunk_id=%s owner=%s repo=%s pr=%s err=%s",

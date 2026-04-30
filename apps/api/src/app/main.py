@@ -24,6 +24,7 @@ from app.config import settings
 from app.db.models import ApiUsageEvent
 from app.db.session import engine
 from app.db.session import AsyncSessionLocal, set_installation_context
+from app.errors.handlers import register_error_handlers, request_id_middleware
 from app.observability import init_observability
 from app.queue.connection import create_redis_pool, format_redis_target, require_app_redis
 from app.storage.r2_rotation import assert_r2_credentials_within_rotation_policy
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="AI Code Review API", lifespan=lifespan)
+register_error_handlers(app)
 _cors_origins = (
     [settings.web_app_url]
     if settings.web_app_url
@@ -121,6 +123,11 @@ async def _record_usage_event(
             )
         )
         await session.commit()
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next: Any) -> Response:
+    return await request_id_middleware(request, call_next)
 
 
 @app.middleware("http")

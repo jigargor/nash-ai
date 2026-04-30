@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.config import settings
+from app.errors.handlers import register_error_handlers
 from app.webhooks import router as webhook_router
 
 
@@ -65,6 +66,7 @@ def _signature(payload: bytes) -> str:
 @pytest.fixture
 def test_app() -> FastAPI:
     application = FastAPI()
+    register_error_handlers(application)
     application.include_router(webhook_router.router, prefix="/webhooks")
     application.state.redis = _FakeRedis()
     return application

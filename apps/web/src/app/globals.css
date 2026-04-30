@@ -432,12 +432,26 @@ select {
   align-items: center;
   gap: 0.75rem;
   text-decoration: none;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
 
 .review-row-link:hover {
   border-color: var(--border-strong);
-  background: rgba(245, 158, 11, 0.04);
+  background: rgba(245, 158, 11, 0.08);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
   text-decoration: none;
+}
+
+.review-row-link:focus-visible {
+  border-color: var(--accent);
+  background: rgba(245, 158, 11, 0.1);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.25);
+  outline: none;
 }
 
 .review-row-left {
