@@ -5,11 +5,13 @@ from app.agent import finalize as finalize_module
 from app.agent.finalize import (
     _build_schema_feedback,
     _repair_review_input,
+    parse_edited_review,
     repair_edited_review_payload,
 )
 from app.agent.schema import EditedReview
 from app.agent.review_config import ModelProvider
 from app.agent.schema import ReviewResult
+from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.providers import StructuredOutputResult
 
 
@@ -178,6 +180,66 @@ def test_build_schema_feedback_includes_error_locations() -> None:
     assert "at most 800 characters" in feedback
 
 
+def test_parse_edited_review_non_object_returns_safe_defaults() -> None:
+    edited = parse_edited_review("not-a-json-object")
+    assert edited.findings == []
+    assert edited.decisions == []
+    assert "not a json object" in edited.summary.lower()
+
+
+def test_repair_review_input_applies_verified_fact_cap_and_records_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        finalize_module,
+        "load_verified_fact_by_id",
+        lambda _fact_id: {
+            "severity_ceiling_without_tool": "medium",
+            "confidence_ceiling_without_tool": 60,
+        },
+    )
+    repaired = _repair_review_input(
+        {
+            "summary": "ok",
+            "findings": [
+                _minimal_finding(
+                    severity="high",
+                    confidence=92,
+                    evidence="verified_fact",
+                    evidence_fact_id="vf-123",
+                )
+            ],
+        }
+    )
+    assert isinstance(repaired, dict)
+    context: dict[str, object] = {}
+    finalize_module._record_verified_fact_cap_debug_artifacts(context, repaired)
+
+    finding = repaired["findings"][0]
+    assert finding["severity"] == "medium"
+    assert finding["confidence"] == 60
+    assert "_verified_fact_cap" not in finding
+    assert context["debug_artifacts"]["verified_fact_caps"][0]["fact_id"] == "vf-123"
+
+
+def test_safe_partial_review_result_recovers_valid_and_drops_invalid_findings() -> None:
+    result = finalize_module._safe_partial_review_result(
+        {
+            "summary": "Partial output summary.",
+            "findings": [
+                _minimal_finding(),
+                {"severity": "high"},
+                "not-a-finding",
+            ],
+        },
+        reason="unit-test",
+        validation_error=None,
+    )
+    assert len(result.findings) == 1
+    assert result.findings[0].file_path == "apps/api/src/x.py"
+    assert "dropped 2 invalid finding(s)" in result.summary
+
+
 @pytest.mark.anyio
 async def test_finalize_anthropic_recovers_after_retry_exhaustion(
     monkeypatch: pytest.MonkeyPatch,
@@ -271,3 +333,28 @@ async def test_finalize_review_same_payload_all_providers(
     assert isinstance(result, ReviewResult)
     assert len(result.findings) == 1
     assert result.summary == "Looks good."
+
+
+@pytest.mark.anyio
+async def test_finalize_review_re_raises_quota_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _QuotaAdapter:
+        async def structured_output(self, *, request: object) -> StructuredOutputResult:  # noqa: ARG002
+            raise LLMQuotaOrRateLimitError(
+                provider="anthropic",
+                model="claude-sonnet-4-5",
+                detail="rate limit exceeded",
+            )
+
+    monkeypatch.setattr(finalize_module, "get_provider_adapter", lambda _provider: _QuotaAdapter())
+
+    with pytest.raises(LLMQuotaOrRateLimitError):
+        await finalize_module.finalize_review(
+            system_prompt="sys",
+            messages=[],
+            context={},
+            model_name="claude-sonnet-4-5",
+            provider="anthropic",
+            allow_retry=True,
+        )
