@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { StaticDocument } from "@/components/layout/static-document";
+import { buildSeoMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = buildSeoMetadata({
   title: "Privacy Policy",
-  description: "How Nash AI collects, uses, and protects information.",
-};
+  description:
+    "Read the Nash AI privacy policy covering data categories, subprocessors, retention, and security practices for AI-assisted code review workflows.",
+  path: "/privacy",
+});
 
 export default function PrivacyPage() {
   return (
@@ -120,6 +124,10 @@ export default function PrivacyPage() {
             GitHub
           </a>
           .
+        </p>
+        <p>
+          Need overall product context first? Start with the <Link href="/about">About Nash AI</Link> page. Terms
+          governing service use are in <Link href="/terms">Terms and Conditions</Link>.
         </p>
       </StaticDocument>
     </main>

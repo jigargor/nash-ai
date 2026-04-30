@@ -1,23 +1,29 @@
 import type { Metadata } from "next";
 import Image from "next/image";
+import Link from "next/link";
 
 import { StaticDocument } from "@/components/layout/static-document";
+import { buildSeoMetadata } from "@/lib/seo";
 
 const GITHUB_REPO_URL = "https://github.com/jigargor/nash-ai";
 const GITHUB_PROFILE_URL = "https://github.com/jigargor";
 
-export const metadata: Metadata = {
-  title: "About",
-  description: "What Nash AI is and why it exists.",
-};
+export const metadata: Metadata = buildSeoMetadata({
+  title: "About Nash AI",
+  description:
+    "Learn what Nash AI is, how agentic pull request reviews work, and why teams use it to improve code review quality and speed.",
+  path: "/about",
+  keywords: ["AI code review", "agentic pull request review", "GitHub App code review"],
+});
 
 export default function AboutPage() {
   return (
     <main className="static-document-shell">
       <StaticDocument
         title="About Nash AI"
-        description="An agentic, multi-model GitHub pull request review tool—and a sandbox for comparing how different models behave in the wild."
+        description="Nash AI is an agentic GitHub pull request review app focused on actionable findings, practical suggestions, and faster engineering feedback loops."
       >
+        <h2 className="static-document-h2">What Nash AI helps teams do</h2>
         <p>
           Nash AI is a GitHub App that runs tool-augmented agents over your pull requests: it reads diffs and
           repository context, reasons with one or more large language models, and posts inline review comments
@@ -25,17 +31,24 @@ export default function AboutPage() {
           <code className="static-document-code">.codereview.yml</code> so you can experiment with providers,
           budgets, and review policies per repo.
         </p>
+        <h2 className="static-document-h2">How review workflows stay practical</h2>
         <p>
           The project doubled as a way to <strong>compare and contrast models</strong>—how they trade off
           thoroughness, tone, false positives, and tool use—while still aiming to build something genuinely useful
           for day-to-day review workflows, whether for me or for anyone else who finds it helpful.
         </p>
+        <h2 className="static-document-h2">Source and policy links</h2>
         <p>
           Source code and issue tracking live on GitHub:{" "}
           <a href={GITHUB_REPO_URL} target="_blank" rel="noopener noreferrer">
             {GITHUB_REPO_URL}
           </a>{" "}
           (MIT License).
+        </p>
+        <p>
+          For governance and legal details, review our{" "}
+          <Link href="/privacy">Privacy Policy</Link> and{" "}
+          <Link href="/terms">Terms and Conditions</Link>.
         </p>
 
         <hr className="static-document-rule" />

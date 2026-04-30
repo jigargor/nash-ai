@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { StaticDocument } from "@/components/layout/static-document";
+import { buildSeoMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Terms & Conditions",
-  description: "Terms of use for Nash AI.",
-};
+export const metadata: Metadata = buildSeoMetadata({
+  title: "Terms and Conditions",
+  description:
+    "Review Nash AI terms and conditions, including acceptable use, AI output disclaimers, and responsibility boundaries.",
+  path: "/terms",
+});
 
 export default function TermsPage() {
   return (
@@ -119,6 +123,10 @@ export default function TermsPage() {
             GitHub repository
           </a>
           .
+        </p>
+        <p>
+          For data processing details, review the <Link href="/privacy">Privacy Policy</Link>. For project overview
+          and product intent, see <Link href="/about">About Nash AI</Link>.
         </p>
       </StaticDocument>
     </main>
