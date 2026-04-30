@@ -325,14 +325,12 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const [showTurnstile, setShowTurnstile] = useState(false);
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setHasPassedPageVerification(!requiresPageVerification);
-    setPageTurnstileError(null);
-  }, [requiresPageVerification]);
-
   const reviewStatus = reviewQuery.data?.status ?? "";
   const isInFlight = isReviewInFlightStatus(reviewStatus) || rerunMutation.isPending;
-  const findings = reviewQuery.data?.findings?.findings?.filter(isFindingVisible) ?? [];
+  const findings = useMemo(
+    () => reviewQuery.data?.findings?.findings?.filter(isFindingVisible) ?? [],
+    [reviewQuery.data?.findings?.findings],
+  );
   const findingOutcomes = reviewQuery.data?.finding_outcomes ?? [];
   const isFailedReview = reviewQuery.data?.status === "failed";
 
