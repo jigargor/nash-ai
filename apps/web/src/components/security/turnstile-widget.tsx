@@ -43,8 +43,13 @@ export function TurnstileWidget({ onError, onToken, siteKey }: TurnstileWidgetPr
     const existing = document.getElementById(TURNSTILE_SCRIPT_ID) as HTMLScriptElement | null;
     if (existing) {
       const handleLoad = () => setIsScriptReady(true);
+      const handleError = () => onError?.();
       existing.addEventListener("load", handleLoad);
-      return () => existing.removeEventListener("load", handleLoad);
+      existing.addEventListener("error", handleError);
+      return () => {
+        existing.removeEventListener("load", handleLoad);
+        existing.removeEventListener("error", handleError);
+      };
     }
 
     const script = document.createElement("script");
@@ -53,8 +58,9 @@ export function TurnstileWidget({ onError, onToken, siteKey }: TurnstileWidgetPr
     script.async = true;
     script.defer = true;
     script.onload = () => setIsScriptReady(true);
+    script.onerror = () => onError?.();
     document.head.appendChild(script);
-  }, []);
+  }, [onError]);
 
   useEffect(() => {
     if (!isScriptReady || !containerRef.current || !window.turnstile) return;
@@ -73,6 +79,10 @@ export function TurnstileWidget({ onError, onToken, siteKey }: TurnstileWidgetPr
     };
   }, [isScriptReady, onError, onToken, siteKey]);
 
-  return <div ref={containerRef} />;
+  return (
+    <div style={{ minHeight: "72px" }}>
+      <div ref={containerRef} />
+    </div>
+  );
 }
 

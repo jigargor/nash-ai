@@ -35,7 +35,14 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_observability("api")
-    assert_r2_credentials_within_rotation_policy(settings)
+    try:
+        assert_r2_credentials_within_rotation_policy(settings)
+    except RuntimeError:
+        logger.critical(
+            "Startup blocked by R2 credential rotation policy. "
+            "Set R2_CREDENTIALS_ROTATED_AT to the latest UTC rotation date and redeploy."
+        )
+        raise
     # Database schema is managed by Alembic migrations.
     db = urlparse(settings.database_url)
     logger.info(

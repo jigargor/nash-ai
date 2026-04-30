@@ -11,7 +11,11 @@ export interface ReviewStreamEvent {
   message?: string;
 }
 
-export function useReviewStream(reviewId: number, installationId: number) {
+interface UseReviewStreamOptions {
+  enabled?: boolean;
+}
+
+export function useReviewStream(reviewId: number, installationId: number, options?: UseReviewStreamOptions) {
   const queryClient = useQueryClient();
   const [events, setEvents] = useState<ReviewStreamEvent[]>([]);
   const [connectionState, setConnectionState] = useState<"connected" | "reconnecting" | "disconnected">(
@@ -19,7 +23,7 @@ export function useReviewStream(reviewId: number, installationId: number) {
   );
 
   useEffect(() => {
-    if (!reviewId || !installationId) return undefined;
+    if (!reviewId || !installationId || !(options?.enabled ?? true)) return undefined;
 
     const eventSource = new EventSource(`/api/v1/reviews/${reviewId}/stream?installation_id=${installationId}`);
     eventSource.onopen = () => {
@@ -48,7 +52,7 @@ export function useReviewStream(reviewId: number, installationId: number) {
       setConnectionState("disconnected");
       eventSource.close();
     };
-  }, [installationId, queryClient, reviewId]);
+  }, [installationId, options?.enabled, queryClient, reviewId]);
 
   return { events, connectionState };
 }
