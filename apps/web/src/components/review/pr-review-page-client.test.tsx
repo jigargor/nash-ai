@@ -9,7 +9,8 @@ const rerunState = {
   isPending: false,
 };
 
-const useReviewMock = vi.fn(() => ({
+const useReviewMock = vi.fn(
+  (_reviewId: number, _installationId: number, _options: { enabled: boolean }) => ({
   isLoading: false,
   isError: false,
   data: {
@@ -47,7 +48,8 @@ const useReviewMock = vi.fn(() => ({
     finding_outcomes: [],
   },
 }));
-const useReviewModelAuditsMock = vi.fn(() => ({
+const useReviewModelAuditsMock = vi.fn(
+  (_reviewId: number, _installationId: number, _options: { enabled: boolean }) => ({
   data: {
     model_audits: [],
   },
@@ -67,7 +69,8 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("@/hooks/use-review", () => ({
-  useReview: (...args: unknown[]) => useReviewMock(...args),
+  useReview: (reviewId: number, installationId: number, options: { enabled: boolean }) =>
+    useReviewMock(reviewId, installationId, options),
 }));
 
 vi.mock("@/hooks/use-review-stream", () => ({
@@ -78,7 +81,8 @@ vi.mock("@/hooks/use-review-stream", () => ({
 }));
 
 vi.mock("@/hooks/use-review-model-audits", () => ({
-  useReviewModelAudits: (...args: unknown[]) => useReviewModelAuditsMock(...args),
+  useReviewModelAudits: (reviewId: number, installationId: number, options: { enabled: boolean }) =>
+    useReviewModelAuditsMock(reviewId, installationId, options),
 }));
 
 vi.mock("@/hooks/use-review-actions", () => ({
