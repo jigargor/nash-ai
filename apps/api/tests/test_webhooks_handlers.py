@@ -4,10 +4,12 @@ import pytest
 from sqlalchemy import func, select
 from uuid import uuid4
 
+from app.config import settings
 from app.db.models import Installation, Review
 from app.db.session import AsyncSessionLocal, engine, set_installation_context
 from app.webhooks.handlers import (
     _primary_provider_for_circuit_breaker,
+    queue_pull_request_outcome_classification,
     queue_pull_request_review,
     sync_installation_from_webhook,
 )
@@ -410,3 +412,125 @@ async def test_primary_provider_for_circuit_breaker_falls_back_to_first_configur
         )
         await session.commit()
     assert await _primary_provider_for_circuit_breaker(installation_id) == "openai"
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_outcome_classification_enqueues_expected_job() -> None:
+    redis = _FakeRedis()
+    payload = _payload(action="closed")
+
+    await queue_pull_request_outcome_classification(redis, payload)
+
+    assert len(redis.calls) == 1
+    assert redis.calls[0][0] == "classify_pr_outcomes"
+    assert redis.calls[0][1] == payload.installation.id
+    assert redis.calls[0][2] == "acme"
+    assert redis.calls[0][3] == "repo"
+    assert redis.calls[0][4] == payload.pull_request.number
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_when_provider_circuit_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CircuitOpenRedis(_FakeRedis):
+        async def exists(self, *keys: object) -> int:
+            if any(str(key) == "circuit:open:anthropic" for key in keys):
+                return 1
+            return 0
+
+    class _FakeGitHubClient:
+        def __init__(self) -> None:
+            self.comments: list[tuple[str, str, int, str]] = []
+
+        async def post_issue_comment(
+            self,
+            owner: str,
+            repo: str,
+            pr_number: int,
+            body: str,
+        ) -> None:
+            self.comments.append((owner, repo, pr_number, body))
+
+    redis = _CircuitOpenRedis()
+    payload = _payload()
+    fake_gh = _FakeGitHubClient()
+
+    async def _allow(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def _daily_usage(*_args: object, **_kwargs: object) -> int:
+        return 0
+
+    async def _for_installation(_installation_id: int) -> _FakeGitHubClient:
+        return fake_gh
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+    async def _primary_provider(_installation_id: int) -> str:
+        return "anthropic"
+
+    monkeypatch.setattr("app.webhooks.handlers._primary_provider_for_circuit_breaker", _primary_provider)
+    monkeypatch.setattr("app.github.client.GitHubClient.for_installation", _for_installation)
+
+    await queue_pull_request_review(redis, payload)
+
+    assert redis.calls == []
+    assert len(fake_gh.comments) == 1
+    owner, repo, pr_number, body = fake_gh.comments[0]
+    assert owner == "acme"
+    assert repo == "repo"
+    assert pr_number == payload.pull_request.number
+    assert "Automated review delayed" in body
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_when_reviews_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _FakeRedis()
+    payload = _payload()
+
+    monkeypatch.setattr("app.webhooks.handlers.settings.enable_reviews", False)
+
+    await queue_pull_request_review(redis, payload)
+
+    assert redis.calls == []
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_without_llm_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _FakeRedis()
+    payload = _payload()
+
+    monkeypatch.setattr("app.webhooks.handlers.settings.enable_reviews", True)
+    monkeypatch.setattr("app.webhooks.handlers.settings.openai_api_key", "")
+    monkeypatch.setattr("app.webhooks.handlers.settings.anthropic_api_key", "")
+    monkeypatch.setattr("app.webhooks.handlers.settings.gemini_api_key", "")
+
+    await queue_pull_request_review(redis, payload)
+
+    assert redis.calls == []
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_skips_when_daily_budget_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _FakeRedis()
+    payload = _payload()
+
+    async def _allow(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def _daily_usage(*_args: object, **_kwargs: object) -> int:
+        return settings.daily_token_budget_per_installation
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, payload)
+
+    assert redis.calls == []
