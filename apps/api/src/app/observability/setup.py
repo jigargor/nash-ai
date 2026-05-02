@@ -1,7 +1,9 @@
+"""Sentry and Langfuse initialisation, extracted from the legacy observability module."""
+
+from __future__ import annotations
+
 import logging
 from typing import Any
-
-from anthropic import AsyncAnthropic
 
 from app.config import settings
 
@@ -23,6 +25,7 @@ _SENTRY_READY = False
 
 
 def init_observability(service_name: str) -> None:
+    """Initialise Sentry and Langfuse.  Safe to call multiple times."""
     _init_sentry(service_name)
     _init_langfuse()
 
@@ -55,20 +58,16 @@ def _init_langfuse() -> None:
 
 
 def record_review_trace(metadata: dict[str, Any]) -> None:
+    """Emit a coarse Langfuse trace for an entire review run."""
     if _LANGFUSE_CLIENT is None:
         return
     try:
         trace_fn = getattr(_LANGFUSE_CLIENT, "trace", None)
         if callable(trace_fn):
-            trace_fn(name="review_pr", metadata=metadata, tags=["review", settings.environment])
+            trace_fn(
+                name="review_pr",
+                metadata=metadata,
+                tags=["review", settings.environment],
+            )
     except Exception:
         logger.exception("Failed to emit Langfuse trace")
-
-
-def create_async_anthropic_client(api_key: str) -> AsyncAnthropic:
-    """Return the official Anthropic async client.
-
-    Langfuse v4 removed ``langfuse.anthropic``; LLM calls are not wrapped here.
-    Use ``record_review_trace`` / Langfuse SDK for observability when keys are set.
-    """
-    return AsyncAnthropic(api_key=api_key)

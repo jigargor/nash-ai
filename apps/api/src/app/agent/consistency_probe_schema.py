@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.categories import CanonicalCategory
+
 ProbeAction = Literal[
     "none",
     "audit_only",
@@ -29,7 +31,7 @@ class ProbeCandidate(BaseModel):
     candidate_id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1, max_length=500)
     severity: Literal["critical", "high", "medium", "low"]
-    category: Literal["security", "performance", "correctness", "style", "maintainability"]
+    category: CanonicalCategory
     path: str = Field(..., min_length=1)
     line_start: int = Field(..., ge=1)
     line_end: int | None = Field(default=None, ge=1)

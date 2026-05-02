@@ -1,0 +1,167 @@
+orchestration:
+  goal: "Design a step-by-step, worker-ready implementation plan for Phase 1: add a provider-neutral LLMObserver abstraction that centralizes LLM, tool, validation, context, and error events."
+  mode: "analyze" # analyze|implement|review; analyze means plan/design only, no production patch
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  planning_engine:
+    name: "artiforge"
+    posture: "plan_mode"
+    delegate_agent: "multi-agent-premium-orchestrator-heavy"
+    purpose: "Resolve observer design decisions, event schemas, sink strategy, safety constraints, and worker handoff packets before implementation."
+
+  scoring:
+    correctness: 0.35
+    risk: 0.30
+    maintainability: 0.20
+    performance: 0.10
+    cost_control: 0.05
+
+  workers:
+    - id: "w1"
+      agent: "multi-agent-premium-orchestrator-heavy"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Own the Phase 1 design plan, event model, repo touchpoints, integration order, and worker handoffs. Ensure the observer is small, reversible, and compatible with existing observability.py."
+
+    - id: "w2"
+      agent: "backend-engineer"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Plan the LLMObserver interface, no-op/debug sink, provider-adapter hooks, FastAPI/worker behavior, unit tests, and optional DB audit integration."
+
+    - id: "w3"
+      agent: "eval-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Define how observer events become useful for eval replay, scorecards, prompt/model comparison, and later Langfuse/DeepEval integration without requiring live LLM calls in tests."
+
+    - id: "w4"
+      agent: "security-reviewer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Review telemetry boundaries for data leakage, secret exposure, raw code retention, tenant isolation, prompt injection risk, and third-party telemetry defaults."
+
+  phase:
+    id: "p1_llm_observer_abstraction"
+    objective: "Create one internal event-capture boundary for LLM generations, tool calls, validation events, context-building events, and errors."
+    dependencies:
+      - "Phase 0 quality model should define labels, metrics, and telemetry safety expectations."
+    desired_outputs:
+      - "Design for an internal LLMObserver interface."
+      - "Event schemas for review_trace, stage_span, generation, tool_call, validation, context_build, and error."
+      - "Initial sink strategy using no-op/debug artifacts first."
+      - "Later sink plan for DB audit rows, Langfuse generations/spans, Sentry breadcrumbs, and structured logs."
+      - "Unit-test plan that avoids live provider calls."
+
+  preferred_repo_touchpoints:
+    safe_default_module_location: "apps/api/src/app/llm/observer.py"
+    caution: "Do not blindly create apps/api/src/app/observability/ because apps/api/src/app/observability.py already exists."
+    likely_files:
+      - "apps/api/src/app/llm/observer.py"
+      - "apps/api/src/app/agent/loop.py"
+      - "apps/api/src/app/agent/finalize.py"
+      - "apps/api/src/app/agent/editor.py"
+      - "apps/api/src/app/agent/consistency_probe.py"
+      - "apps/api/src/app/llm/providers/base.py"
+      - "apps/api/src/app/llm/providers/anthropic.py"
+      - "apps/api/src/app/llm/providers/openai.py"
+      - "apps/api/src/app/llm/providers/gemini.py"
+      - "apps/api/tests/"
+
+  observer_requirements:
+    interface_methods:
+      - "start_review_trace"
+      - "finish_review_trace"
+      - "start_stage"
+      - "finish_stage"
+      - "record_generation"
+      - "record_tool_call"
+      - "record_validation"
+      - "record_context_build"
+      - "record_error"
+    required_generation_fields:
+      - "review_id"
+      - "run_id"
+      - "stage"
+      - "provider"
+      - "model"
+      - "prompt_version"
+      - "input_tokens"
+      - "output_tokens"
+      - "total_tokens"
+      - "cached_input_tokens"
+      - "cache_creation_input_tokens"
+      - "latency_ms"
+      - "temperature"
+      - "max_tokens"
+      - "schema_name"
+      - "stop_reason"
+      - "fallback_reason"
+      - "error_class"
+      - "metadata"
+    required_safety_defaults:
+      - "No raw prompts, diffs, source code, file contents, secrets, tokens, or private keys emitted by default."
+      - "Allow hashes, counts, model/provider metadata, token usage, cost estimates, validation outcomes, and safe stage metadata."
+      - "Observer must be no-op capable and must never break review execution if a sink fails."
+
+  design_decisions_required:
+    - id: "d1_observer_location"
+      decision: "Choose the LLMObserver module location."
+      default_recommendation: "Use apps/api/src/app/llm/observer.py first to avoid a package/file collision with apps/api/src/app/observability.py."
+    - id: "d2_initial_sink"
+      decision: "Choose the first observer sink."
+      default_recommendation: "Start with no-op/debug-artifact sink; add DB audit and Langfuse sink only after schemas stabilize."
+    - id: "d3_event_schema_style"
+      decision: "Choose dataclasses versus Pydantic models for observer events."
+      default_recommendation: "Use lightweight frozen dataclasses internally and convert to JSON-safe dicts at sink boundaries."
+    - id: "d4_failure_behavior"
+      decision: "Choose sink failure semantics."
+      default_recommendation: "Fail closed for secrets/safety validation; fail open for sink delivery errors, logging only sanitized diagnostics."
+    - id: "d5_provider_wrapping_boundary"
+      decision: "Choose whether model calls are wrapped in providers, agent loop, or both."
+      default_recommendation: "Record provider-normalized generation events near provider calls and stage spans in agent orchestration code."
+
+  constraints:
+    - "Plan mode only: do not include production code patches in the orchestration output."
+    - "Do not introduce a hard dependency on a new observability vendor."
+    - "Do not send raw prompts, diffs, source code, repository contents, or tool results to third-party telemetry by default."
+    - "Do not log secrets, provider API keys, GitHub tokens, private keys, or user secrets."
+    - "Observer sink failures must not fail reviews unless explicitly configured for tests."
+    - "Default tests must not require live LLM provider calls."
+    - "Keep DeepEval and Langfuse optional."
+    - "Maintain existing imports from app.observability unless a deliberate safe refactor is planned."
+    - "Each worker task must include acceptance criteria, validation commands, and rollback notes."
+
+  worker_handoff_requirements:
+    task_packet_fields:
+      - "task_id"
+      - "phase_id"
+      - "worker_agent"
+      - "objective"
+      - "affected_paths"
+      - "dependencies"
+      - "step_by_step_plan"
+      - "acceptance_criteria"
+      - "validation_commands"
+      - "rollback_strategy"
+      - "risks"
+    first_assignments_to_plan:
+      - "P1-BE-001: Design LLMObserver event types and no-op/debug sink."
+      - "P1-BE-002: Design safe integration points in provider adapters and agent loop."
+      - "P1-SEC-001: Define telemetry redaction and third-party sink safety defaults."
+      - "P1-TEST-001: Define unit tests with fake provider responses and sink failure cases."
+
+  output:
+    include_patch: false
+    include_step_by_step_plan: true
+    include_worker_handoffs: true
+    include_decision_log: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_data_contracts: true
+    include_ci_plan: true
+    include_artifact_plan: true
+    include_deferred_questions: true
+    output_files:
+      - "artiforge/phase1/final_orchestration_plan.md"
+      - "artiforge/phase1/decision_log.md"
+      - "artiforge/phase1/worker_backlog.yaml"
+      - "artiforge/phase1/verification_matrix.yaml"
+      - "artiforge/phase1/risk_register.md"

@@ -22,6 +22,7 @@ dependencies = [
   "asyncpg>=0.31.0",
   "alembic>=1.18.4",
   "arq>=0.28.0",
+  # redis-py <6 required by arq; 5.x clients work with Redis server 7+
   "redis>=5.0.0,<6",
   "pydantic>=2.13.3",
   "pydantic-settings>=2.14.0",
@@ -30,11 +31,11 @@ dependencies = [
   "anthropic>=0.97.0",
   "unidiff>=0.7.5",
   "pyyaml>=6.0.3",
-  "tree-sitter-language-pack>=1.6.2,<1.6.3",
+  "tree-sitter-language-pack>=1.6.3,<1.6.4",
   "langfuse>=4.5.1",
   "sentry-sdk[fastapi]>=2.58.0",
   "openai>=2.33.0",
-  "boto3>=1.42.97",
+  "boto3>=1.43.1",
   "mcp>=1.27.0",
 ]
 

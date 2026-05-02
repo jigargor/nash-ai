@@ -1,0 +1,147 @@
+orchestration:
+  goal: "Design a step-by-step, worker-ready implementation plan for Phase 0: create a repo-local quality foundation before adding deeper LLM observability, evaluation, or continuous-improvement features."
+  mode: "analyze" # analyze|implement|review; analyze means plan/design only, no production patch
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  planning_engine:
+    name: "artiforge"
+    posture: "plan_mode"
+    delegate_agent: "multi-agent-premium-orchestrator-heavy"
+    purpose: "Resolve design decisions, produce implementation-ready task packets, and define verification gates before worker agents implement Phase 0."
+
+  scoring:
+    correctness: 0.35
+    maintainability: 0.25
+    risk: 0.20
+    repo_alignment: 0.10
+    implementation_readiness: 0.10
+
+  workers:
+    - id: "w1"
+      agent: "multi-agent-premium-orchestrator-heavy"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Own the Phase 0 design plan, dependency ordering, worker handoffs, acceptance criteria, and final decision log. Keep scope limited to repo-local quality definitions and measurement contracts."
+
+    - id: "w2"
+      agent: "eval-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Define the quality taxonomy and metric contracts so they can be used by evals/run_eval.py, DeepEval tests, future generated predictions, and production outcome scorecards."
+
+    - id: "w3"
+      agent: "backend-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Map the quality model to existing backend schemas, especially review findings, evidence, confidence, severity, category, outcome telemetry, and future label tables."
+
+    - id: "w4"
+      agent: "security-reviewer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Review the quality definitions for safety-critical code review behavior, prompt-injection assumptions, tenant isolation implications, and privacy-sensitive telemetry boundaries."
+
+  phase:
+    id: "p0_quality_foundation"
+    objective: "Create one shared definition of review quality that guides evals, labels, observability, and CI gates."
+    desired_outputs:
+      - "docs/quality-model.md"
+      - "A label taxonomy that separates human-confirmed labels, weak/proxy outcome labels, and automated/judge labels."
+      - "Metric definitions for precision, recall, clean-case false-positive rate, anchor validity, schema validity, useful/dismiss/ignore rate, and cost per useful finding."
+      - "A mapping from quality labels and metrics to existing review finding schema rules."
+      - "A short list of metrics that are Phase 0 required versus deferred."
+
+  quality_model_requirements:
+    label_taxonomy:
+      human_confirmed:
+        - "true_positive"
+        - "false_positive"
+        - "false_negative"
+        - "duplicate"
+        - "severity_wrong"
+        - "category_wrong"
+        - "not_actionable"
+        - "correct_but_too_minor"
+        - "accepted_with_modification"
+        - "unknown"
+      weak_or_proxy:
+        - "applied"
+        - "resolved"
+        - "dismissed"
+        - "ignored"
+        - "line_changed"
+        - "reply_negative"
+        - "reply_positive"
+      automated_or_judge:
+        - "judge_true_positive"
+        - "judge_false_positive"
+        - "judge_false_negative"
+        - "judge_inconclusive"
+    core_metrics:
+      - "precision = true positives / posted findings with human-confirmed positive-or-negative labels"
+      - "recall = true positives / expected findings in labeled or golden cases"
+      - "clean_case_fp_rate = clean cases with at least one false positive / clean cases"
+      - "anchor_validity_rate = findings with valid file and target line anchor / posted findings"
+      - "schema_validity_rate = LLM outputs passing schema after allowed repair / attempted outputs"
+      - "useful_rate = useful/applied/resolved/accepted findings / labeled or weak-labeled findings"
+      - "cost_per_useful_finding = review cost / useful findings"
+    repo_mapping:
+      - "Map quality labels to app.agent.schema.Finding fields: severity, category, evidence, confidence, target_line_content, vendor-claim flags, and tool-verification requirements."
+      - "Map weak labels to existing finding_outcomes signals without treating them as equivalent to human labels."
+      - "Map eval metrics to evals/metrics.py and tests/deep_eval/overlap_metric.py conventions."
+
+  design_decisions_required:
+    - id: "d1_quality_label_contract"
+      decision: "Choose the canonical label names and whether any labels are aliases."
+      default_recommendation: "Use the human_confirmed taxonomy exactly as listed, with unknown as the safe default."
+    - id: "d2_metric_priority"
+      decision: "Choose which metrics are required for the first scorecard."
+      default_recommendation: "Start with precision, recall, clean-case FP rate, anchor validity, schema validity, useful rate, and cost per useful finding."
+    - id: "d3_label_source_precedence"
+      decision: "Define precedence among human labels, weak/proxy outcomes, and automated judge labels."
+      default_recommendation: "Human labels override weak/proxy and judge labels; weak/proxy labels remain separate confidence-weighted signals."
+    - id: "d4_false_negative_definition"
+      decision: "Define what evidence is required to call a missed issue a false negative."
+      default_recommendation: "Require a human-labeled expected finding or a deterministic baseline finding reviewed by a human before it counts as a canonical false negative."
+
+  constraints:
+    - "Plan mode only: do not include production code patches in the orchestration output."
+    - "Do not introduce a hard dependency on a new external eval or observability vendor."
+    - "Do not weaken existing finding schema safety rules."
+    - "Do not treat weak/proxy outcome telemetry as ground truth without explicit labeling."
+    - "Do not log raw prompts, diffs, source code, repository contents, secrets, API keys, GitHub tokens, or private keys."
+    - "Keep the quality document small enough to be used by worker agents and CI maintainers."
+    - "Each implementation task must include acceptance criteria, validation commands, and rollback notes."
+
+  worker_handoff_requirements:
+    task_packet_fields:
+      - "task_id"
+      - "phase_id"
+      - "worker_agent"
+      - "objective"
+      - "affected_paths"
+      - "dependencies"
+      - "step_by_step_plan"
+      - "acceptance_criteria"
+      - "validation_commands"
+      - "rollback_strategy"
+      - "risks"
+    first_assignments_to_plan:
+      - "P0-DOC-001: Draft docs/quality-model.md with label taxonomy, metric definitions, and source precedence."
+      - "P0-EVAL-001: Map quality metrics to existing evals/metrics.py and DeepEval overlap metric behavior."
+      - "P0-BE-001: Identify existing schema and telemetry fields that already support the quality model."
+
+  output:
+    include_patch: false
+    include_step_by_step_plan: true
+    include_worker_handoffs: true
+    include_decision_log: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_data_contracts: true
+    include_ci_plan: false
+    include_artifact_plan: true
+    include_deferred_questions: true
+    output_files:
+      - "artiforge/phase0/final_orchestration_plan.md"
+      - "artiforge/phase0/decision_log.md"
+      - "artiforge/phase0/worker_backlog.yaml"
+      - "artiforge/phase0/verification_matrix.yaml"
+      - "artiforge/phase0/risk_register.md"

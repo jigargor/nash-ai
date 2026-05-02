@@ -1,0 +1,154 @@
+orchestration:
+  goal: "Design a step-by-step, worker-ready implementation plan for Phase 2: regenerate eval candidate predictions from the current repo state before scoring so eval gates cannot pass with stale predictions."
+  mode: "analyze" # analyze|implement|review; analyze means plan/design only, no production patch
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  planning_engine:
+    name: "artiforge"
+    posture: "plan_mode"
+    delegate_agent: "multi-agent-premium-orchestrator-heavy"
+    purpose: "Resolve eval generation design decisions, CI behavior, artifact handling, deterministic replay strategy, and worker handoff packets before implementation."
+
+  scoring:
+    correctness: 0.40
+    reproducibility: 0.25
+    maintainability: 0.15
+    risk: 0.10
+    cost_control: 0.10
+
+  workers:
+    - id: "w1"
+      agent: "multi-agent-premium-orchestrator-heavy"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Own the Phase 2 orchestration plan, default CI strategy, live-vs-offline policy, artifact lifecycle, and worker handoffs."
+
+    - id: "w2"
+      agent: "eval-engineer"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Plan evals/generate_predictions.py, deterministic replay, output formats, baseline/candidate comparison, DeepEval optionality, and case-level failure reporting."
+
+    - id: "w3"
+      agent: "backend-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Plan integration with app.agent.offline_eval, provider fakes/mocks, snapshot replay, and test fixtures while avoiding live provider calls in default CI."
+
+    - id: "w4"
+      agent: "devops-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Plan GitHub Actions workflow changes, generated artifact paths, caching, failure summaries, manual live-eval workflows, and secrets handling."
+
+    - id: "w5"
+      agent: "security-reviewer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Review generated eval workflow for secret exposure, raw code artifact leakage, untrusted fixture handling, and safe CI defaults."
+
+  phase:
+    id: "p2_generated_eval_predictions"
+    objective: "Make eval gates regenerate candidate predictions before running evals/run_eval.py and evals/compare.py."
+    dependencies:
+      - "Phase 0 quality model should define metric expectations."
+      - "Phase 1 observer may provide useful event artifacts, but Phase 2 must not depend on external telemetry."
+    desired_outputs:
+      - "evals/generate_predictions.py design."
+      - "CI update design that generates candidate predictions before scoring."
+      - "Deterministic/mock provider strategy for default CI."
+      - "Optional live-LLM eval path for manual workflows only."
+      - "Artifact handling plan for predictions, results, diffs, and failing case summaries."
+
+  preferred_repo_touchpoints:
+    likely_files:
+      - "apps/api/src/app/agent/offline_eval.py"
+      - "evals/generate_predictions.py"
+      - "evals/run_eval.py"
+      - "evals/metrics.py"
+      - "evals/compare.py"
+      - ".github/workflows/quality-gates.yml"
+      - ".github/workflows/deepeval.yml"
+      - ".gitignore"
+      - "apps/api/tests/deep_eval/"
+
+  eval_generation_requirements:
+    default_ci_behavior:
+      - "Must not require live LLM provider API keys."
+      - "Must produce deterministic candidate predictions or deterministic replay outputs."
+      - "Must fail if prompt-change eval gates attempt to score missing or stale candidate predictions."
+      - "Must emit actionable per-case failure details."
+    output_paths:
+      predictions: "evals/predictions/candidate/"
+      results: "evals/results/candidate.json"
+      comparison: "evals/results/comparison.json"
+      artifacts: "ci-artifacts/evals/"
+    supported_modes:
+      - "deterministic_mock"
+      - "offline_snapshot_replay"
+      - "live_llm_manual"
+    metric_requirements:
+      - "precision"
+      - "recall"
+      - "clean-case false-positive rate"
+      - "case-level true-positive, false-positive, and false-negative deltas"
+      - "optional category/severity breakdowns"
+
+  design_decisions_required:
+    - id: "d1_generation_mode"
+      decision: "Choose the default CI-safe generation mode."
+      default_recommendation: "Use deterministic_mock or offline_snapshot_replay for default CI; keep live_llm_manual only for workflow_dispatch or special labels."
+    - id: "d2_artifact_policy"
+      decision: "Choose whether generated predictions are committed, gitignored, or uploaded as CI artifacts."
+      default_recommendation: "Do not commit generated candidate predictions by default; upload as CI artifacts and keep baseline fixtures committed."
+    - id: "d3_staleness_detection"
+      decision: "Choose how to prevent stale predictions."
+      default_recommendation: "Generate into a clean candidate output directory during CI and fail if scoring occurs before generation."
+    - id: "d4_live_eval_policy"
+      decision: "Choose when live provider evals can run."
+      default_recommendation: "Only workflow_dispatch or explicit label with provider secrets configured; never required for normal pull_request CI."
+    - id: "d5_failure_reporting"
+      decision: "Choose failure summary format."
+      default_recommendation: "Emit JSON result plus Markdown summary with metric deltas and worst failing cases."
+
+  constraints:
+    - "Plan mode only: do not include production code patches in the orchestration output."
+    - "Default CI must not require ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, Langfuse, or DeepEval cloud credentials."
+    - "Do not upload raw private repository source, secrets, provider keys, GitHub tokens, or private keys as artifacts."
+    - "Keep DeepEval optional."
+    - "Do not make eval gates depend on nondeterministic live model behavior by default."
+    - "Do not break existing evals/run_eval.py or evals/compare.py behavior without a migration plan."
+    - "Each worker task must include acceptance criteria, validation commands, and rollback notes."
+
+  worker_handoff_requirements:
+    task_packet_fields:
+      - "task_id"
+      - "phase_id"
+      - "worker_agent"
+      - "objective"
+      - "affected_paths"
+      - "dependencies"
+      - "step_by_step_plan"
+      - "acceptance_criteria"
+      - "validation_commands"
+      - "rollback_strategy"
+      - "risks"
+    first_assignments_to_plan:
+      - "P2-EVAL-001: Design evals/generate_predictions.py CLI and modes."
+      - "P2-EVAL-002: Design deterministic provider/mock strategy and fixture expectations."
+      - "P2-CI-001: Design quality-gates.yml changes to generate, score, compare, and upload artifacts."
+      - "P2-SEC-001: Define artifact redaction and live-eval secret boundaries."
+
+  output:
+    include_patch: false
+    include_step_by_step_plan: true
+    include_worker_handoffs: true
+    include_decision_log: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_data_contracts: true
+    include_ci_plan: true
+    include_artifact_plan: true
+    include_deferred_questions: true
+    output_files:
+      - "artiforge/phase2/final_orchestration_plan.md"
+      - "artiforge/phase2/decision_log.md"
+      - "artiforge/phase2/worker_backlog.yaml"
+      - "artiforge/phase2/verification_matrix.yaml"
+      - "artiforge/phase2/risk_register.md"

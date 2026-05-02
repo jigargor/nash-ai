@@ -13,6 +13,7 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - "apps/api/**"
       - "apps/web/**"
@@ -131,8 +132,79 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --extra dev
         working-directory: apps/api
+      - name: Generate eval predictions (snapshot replay)
+        run: |
+          python evals/generate_predictions.py \
+            --prompt-version candidate \
+            --mode snapshot \
+            --datasets-dir evals/datasets \
+            --output-dir evals/predictions/candidate
+      - name: Fail on stale predictions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+
+          repo_root = Path(".")
+          prompts_dir = repo_root / "apps" / "api" / "src" / "app" / "agent" / "prompts"
+          constants_file = repo_root / "apps" / "api" / "src" / "app" / "agent" / "constants.py"
+
+          def _prompt_version_from_constants() -> str:
+              if not constants_file.exists():
+                  return "unknown"
+              for line in constants_file.read_text(encoding="utf-8").splitlines():
+                  if line.strip().startswith("PROMPT_VERSION"):
+                      parts = line.strip().split("=", 1)
+                      if len(parts) == 2:
+                          return parts[1].strip().strip('"').strip("'")
+              return "unknown"
+
+          h = hashlib.sha256()
+          h.update(b"candidate")
+          h.update(_prompt_version_from_constants().encode())
+          if prompts_dir.exists():
+              for f in sorted(prompts_dir.rglob("*")):
+                  if f.is_file():
+                      h.update(f.relative_to(prompts_dir).as_posix().encode())
+                      h.update(f.read_bytes())
+          expected_hash = h.hexdigest()
+
+          stale = []
+          preds_dir = Path("evals/predictions/candidate")
+          if preds_dir.exists():
+              for pred_file in sorted(preds_dir.glob("*.json")):
+                  try:
+                      payload = json.loads(pred_file.read_text(encoding="utf-8"))
+                  except Exception:
+                      stale.append(pred_file.stem + " (unreadable)")
+                      continue
+                  stored = payload.get("code_hash", "")
+                  if stored != expected_hash:
+                      stale.append(pred_file.stem)
+          if stale:
+              print(f"STALE predictions detected (code_hash mismatch): {stale}")
+              print("Re-run `python evals/generate_predictions.py --mode=snapshot --prompt-version candidate` and commit the updated predictions.")
+              sys.exit(1)
+          print(f"All predictions are up-to-date (hash={expected_hash[:16]}…)")
+          PY
       - name: Run eval harness
         run: python evals/run_eval.py --prompt-version candidate --predictions-dir evals/predictions/candidate
+      - name: Compare against baseline
+        run: |
+          if [ -f evals/baseline/manifest.json ]; then
+            baseline_version=$(python -c "import json; m=json.load(open('evals/baseline/manifest.json')); print(m.get('prompt_version','baseline'))")
+            if [ -f "evals/results/${baseline_version}.json" ]; then
+              python evals/compare.py \
+                "evals/results/${baseline_version}.json" \
+                evals/results/candidate.json \
+                --output evals/results/comparison.json
+            else
+              echo "Baseline result file not found for version ${baseline_version}, skipping regression check."
+            fi
+          else
+            echo "No baseline/manifest.json found, skipping regression check."
+          fi
       - name: Enforce eval thresholds
         shell: bash
         run: |

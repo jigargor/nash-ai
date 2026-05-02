@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import TypedDict
 
+from app.categories import CanonicalCategory as Category
+
 if TYPE_CHECKING:
     from app.github.client import GitHubClient
 
@@ -69,7 +71,6 @@ class FastPathAuditMetadata(BaseModel):
 
 
 Severity = Literal["critical", "high", "medium", "low"]
-Category = Literal["security", "performance", "correctness", "style", "maintainability"]
 Evidence = Literal["tool_verified", "diff_visible", "verified_fact", "inference"]
 ContextFidelity = Literal["high", "summary", "reference"]
 DropReason = Literal[

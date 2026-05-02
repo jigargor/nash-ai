@@ -7,21 +7,14 @@ from app.agent.prompts.system import load_verified_fact_by_id
 from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.schema import EditedReview, Finding, ReviewResult
 from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_text
+from app.categories import ALL_CATEGORIES, CATEGORY_ALIASES
 from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.providers import StructuredOutputRequest, get_provider_adapter
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_FINDING_CATEGORIES: Final[frozenset[str]] = frozenset(
-    {"security", "performance", "correctness", "style", "maintainability"}
-)
-_CATEGORY_ALIASES: Final[dict[str, str]] = {
-    "completeness": "maintainability",
-    "documentation": "maintainability",
-    "docs": "maintainability",
-    "reliability": "correctness",
-    "testing": "correctness",
-}
+_ALLOWED_FINDING_CATEGORIES: Final[frozenset[str]] = ALL_CATEGORIES
+_CATEGORY_ALIASES: Final[dict[str, str]] = dict(CATEGORY_ALIASES)
 _SEVERITY_ORDER: Final[dict[str, int]] = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 FINAL_TOOL = {

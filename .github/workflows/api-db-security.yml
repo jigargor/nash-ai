@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - develop
     paths:
       - "apps/api/**"
       - ".github/workflows/api-db-security.yml"

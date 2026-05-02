@@ -1,0 +1,184 @@
+orchestration:
+  goal: "Design a step-by-step, worker-ready implementation plan for Phase 4: capture false negatives and missed issues so they can become future eval cases and quality-improvement inputs."
+  mode: "analyze" # analyze|implement|review; analyze means plan/design only, no production patch
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  planning_engine:
+    name: "artiforge"
+    posture: "plan_mode"
+    delegate_agent: "multi-agent-premium-orchestrator-heavy"
+    purpose: "Resolve missed-issue capture design decisions, data model, authorization, export workflow, deterministic-baseline integration, and worker handoff packets before implementation."
+
+  scoring:
+    correctness: 0.35
+    risk: 0.25
+    maintainability: 0.20
+    eval_value: 0.15
+    performance: 0.05
+
+  workers:
+    - id: "w1"
+      agent: "multi-agent-premium-orchestrator-heavy"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Own the Phase 4 orchestration plan, false-negative definitions, capture workflow, export strategy, deterministic-baseline integration, and worker handoffs."
+
+    - id: "w2"
+      agent: "backend-engineer"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Plan missed-issue data model, Alembic migration, API endpoints, authorization checks, deduplication/fingerprint logic, and tests."
+
+    - id: "w3"
+      agent: "eval-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Plan conversion of missed issues into expected eval findings, dataset generation, false-negative metric handling, and Phase 2 generated-prediction integration."
+
+    - id: "w4"
+      agent: "frontend-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Plan the minimal UI/admin flow for reporting missed issues from a review, PR, or file/line context."
+
+    - id: "w5"
+      agent: "security-reviewer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Review tenant isolation, report tampering, private data leakage, path validation, abuse prevention, and safe eval export."
+
+  phase:
+    id: "p4_false_negative_capture"
+    objective: "Create an explicit path for missed issues to be recorded, reviewed, and converted into future eval cases."
+    dependencies:
+      - "Phase 0 quality model should define false_negative and source precedence."
+      - "Phase 3 human labeling should establish trusted human review and authorization patterns."
+      - "Phase 2 generated predictions should provide the target export/eval flow."
+    desired_outputs:
+      - "Data model plan for missed issues / false-negative candidates."
+      - "Protected create/update/read API plan."
+      - "Minimal UI/admin reporting flow plan."
+      - "Export path from missed issues to eval expected findings."
+      - "Integration plan for deterministic external engine findings as candidate missed issues."
+
+  preferred_repo_touchpoints:
+    likely_files:
+      - "apps/api/src/app/db/models.py"
+      - "apps/api/alembic/versions/"
+      - "apps/api/src/app/api/"
+      - "apps/api/src/app/telemetry/"
+      - "apps/api/src/app/review/external/"
+      - "apps/web/src/"
+      - "evals/datasets/"
+      - "evals/"
+      - "apps/api/tests/"
+      - "apps/web/src/**/*.test.*"
+
+  false_negative_capture_requirements:
+    missed_issue_fields:
+      - "id"
+      - "installation_id"
+      - "review_id"
+      - "repo_full_name"
+      - "pr_number"
+      - "head_sha"
+      - "file_path"
+      - "line_start"
+      - "line_end"
+      - "expected_category"
+      - "expected_severity"
+      - "description"
+      - "evidence"
+      - "how_found"
+      - "status"
+      - "reviewed_by_user_id"
+      - "created_by_user_id"
+      - "created_at"
+      - "updated_at"
+    how_found_values:
+      - "human_review"
+      - "later_bug_fix"
+      - "security_scan"
+      - "static_analyzer"
+      - "test_failure"
+      - "deterministic_rule_engine"
+      - "manual_admin"
+      - "other"
+    status_values:
+      - "candidate"
+      - "confirmed"
+      - "rejected"
+      - "exported_to_eval"
+      - "duplicate"
+    export_requirements:
+      - "Only confirmed missed issues become canonical false negatives."
+      - "Candidate missed issues may be reviewed manually before becoming eval cases."
+      - "Export must produce expected findings compatible with evals/run_eval.py."
+      - "Export must preserve enough metadata to trace back to review_id and source without leaking unnecessary private data."
+    deterministic_baseline_requirements:
+      - "Rule-engine-only findings may become missed-issue candidates, not automatic ground truth."
+      - "External engine overlap reports should distinguish LLM-only, rule-only, and overlap findings."
+
+  design_decisions_required:
+    - id: "d1_missed_issue_identity"
+      decision: "Choose how missed issues are identified and deduplicated."
+      default_recommendation: "Use installation_id + repo_full_name + pr_number/head_sha + file_path + line_start + expected_category + normalized description fingerprint."
+    - id: "d2_confirmation_policy"
+      decision: "Choose when a missed issue becomes a canonical false negative."
+      default_recommendation: "Require human confirmation before a candidate missed issue affects canonical recall metrics."
+    - id: "d3_external_engine_role"
+      decision: "Choose how deterministic external engine findings feed missed-issue capture."
+      default_recommendation: "Treat rule-engine-only findings as candidates for review, not automatic false negatives."
+    - id: "d4_export_policy"
+      decision: "Choose eval export format and timing."
+      default_recommendation: "Export confirmed missed issues into eval dataset expected.json fixtures with a metadata sidecar and source trace."
+    - id: "d5_ui_entrypoint"
+      decision: "Choose first reporting surface."
+      default_recommendation: "Start with protected API/admin tooling, then add dashboard buttons from review/finding context."
+
+  constraints:
+    - "Plan mode only: do not include production code patches in the orchestration output."
+    - "Do not let unconfirmed candidates affect canonical recall or false-negative metrics."
+    - "Do not allow cross-installation reads or writes."
+    - "Do not store raw secrets, provider API keys, GitHub tokens, private keys, or unnecessary source code in missed-issue records."
+    - "Validate file paths and line numbers to avoid path traversal or malformed fixtures."
+    - "Exported eval cases must not leak private data by default."
+    - "Database changes must include migration, model update, tests, and rollback notes."
+    - "Each worker task must include acceptance criteria, validation commands, and rollback notes."
+
+  worker_handoff_requirements:
+    task_packet_fields:
+      - "task_id"
+      - "phase_id"
+      - "worker_agent"
+      - "objective"
+      - "affected_paths"
+      - "dependencies"
+      - "step_by_step_plan"
+      - "acceptance_criteria"
+      - "validation_commands"
+      - "rollback_strategy"
+      - "risks"
+    first_assignments_to_plan:
+      - "P4-BE-001: Design missed-issue SQLAlchemy model and Alembic migration."
+      - "P4-BE-002: Design protected missed-issue create/update/read API."
+      - "P4-EVAL-001: Design export from confirmed missed issues to eval expected fixtures."
+      - "P4-EXT-001: Design deterministic rule-engine overlap and rule-only candidate pipeline."
+      - "P4-FE-001: Design minimal report-missed-issue UI/admin workflow."
+      - "P4-SEC-001: Define validation, tenant isolation, and export redaction checks."
+
+  output:
+    include_patch: false
+    include_step_by_step_plan: true
+    include_worker_handoffs: true
+    include_decision_log: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_data_contracts: true
+    include_api_contracts: true
+    include_ui_plan: true
+    include_ci_plan: true
+    include_artifact_plan: true
+    include_deferred_questions: true
+    output_files:
+      - "artiforge/phase4/final_orchestration_plan.md"
+      - "artiforge/phase4/decision_log.md"
+      - "artiforge/phase4/worker_backlog.yaml"
+      - "artiforge/phase4/verification_matrix.yaml"
+      - "artiforge/phase4/risk_register.md"

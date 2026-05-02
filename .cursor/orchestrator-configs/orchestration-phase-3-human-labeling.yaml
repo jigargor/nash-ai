@@ -1,0 +1,172 @@
+orchestration:
+  goal: "Design a step-by-step, worker-ready implementation plan for Phase 3: add trusted human labeling for review findings while keeping labels separate from weak outcome telemetry."
+  mode: "analyze" # analyze|implement|review; analyze means plan/design only, no production patch
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  planning_engine:
+    name: "artiforge"
+    posture: "plan_mode"
+    delegate_agent: "multi-agent-premium-orchestrator-heavy"
+    purpose: "Resolve human-labeling design decisions, data model, authorization model, export workflow, and worker handoff packets before implementation."
+
+  scoring:
+    correctness: 0.35
+    risk: 0.30
+    maintainability: 0.20
+    UX_operability: 0.10
+    performance: 0.05
+
+  workers:
+    - id: "w1"
+      agent: "multi-agent-premium-orchestrator-heavy"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Own the Phase 3 orchestration plan, data identity decisions, API surface, export pathway, and worker handoffs."
+
+    - id: "w2"
+      agent: "backend-engineer"
+      model: "claude-opus-4-7-thinking-max"
+      focus: "Plan SQLAlchemy models, Alembic migration, FastAPI endpoints, authorization checks, label validation, tests, and rollback strategy."
+
+    - id: "w3"
+      agent: "frontend-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Plan the first minimal labeling surface, admin/dashboard affordances, loading/error states, and low-friction review workflows."
+
+    - id: "w4"
+      agent: "eval-engineer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Plan export from human labels into eval-compatible fixtures, label precedence, and integration with Phase 2 generated prediction outputs."
+
+    - id: "w5"
+      agent: "security-reviewer"
+      model: "claude-4.6-sonnet-max-thinking"
+      focus: "Review tenant isolation, cross-installation access, label tampering risk, auditability, PII exposure, and safe export behavior."
+
+  phase:
+    id: "p3_human_labeling"
+    objective: "Add a trusted ground-truth layer for posted review findings."
+    dependencies:
+      - "Phase 0 quality model should define canonical labels and source precedence."
+      - "Phase 2 generated predictions should define eval export expectations, but Phase 3 can start with API/database planning first."
+    desired_outputs:
+      - "Data model plan for human finding labels."
+      - "Protected create/update/read API plan."
+      - "Minimal dashboard/admin labeling surface plan."
+      - "Export path from human labels to eval-compatible cases."
+      - "Authorization, validation, and migration test plan."
+
+  preferred_repo_touchpoints:
+    likely_files:
+      - "apps/api/src/app/db/models.py"
+      - "apps/api/alembic/versions/"
+      - "apps/api/src/app/api/"
+      - "apps/api/src/app/api/router.py"
+      - "apps/api/src/app/telemetry/"
+      - "apps/web/src/"
+      - "evals/datasets/"
+      - "evals/"
+      - "apps/api/tests/"
+      - "apps/web/src/**/*.test.*"
+
+  labeling_requirements:
+    canonical_labels:
+      - "true_positive"
+      - "false_positive"
+      - "duplicate"
+      - "severity_wrong"
+      - "category_wrong"
+      - "not_actionable"
+      - "correct_but_too_minor"
+      - "accepted_with_modification"
+      - "unknown"
+    label_record_fields:
+      - "id"
+      - "installation_id"
+      - "review_id"
+      - "finding_fingerprint"
+      - "finding_index"
+      - "repo_full_name"
+      - "pr_number"
+      - "provider"
+      - "model"
+      - "prompt_version"
+      - "label"
+      - "notes"
+      - "labeled_by_user_id"
+      - "created_at"
+      - "updated_at"
+    source_separation:
+      - "Human labels must be clearly distinct from heuristic finding_outcomes."
+      - "Human labels must be clearly distinct from automated/judge labels."
+      - "Human labels should not mutate original review output JSON."
+    authorization:
+      - "Only users authorized for the installation can create/read/update labels for that installation."
+      - "Admin-only mode is acceptable for the first implementation slice if documented."
+
+  design_decisions_required:
+    - id: "d1_finding_identity"
+      decision: "Choose how labels attach to findings."
+      default_recommendation: "Use review_id plus stable finding_fingerprint, with finding_index retained as a fallback/debug field."
+    - id: "d2_label_mutability"
+      decision: "Choose whether labels are editable, append-only, or versioned."
+      default_recommendation: "Allow update with updated_at and labeled_by tracking for first slice; add append-only audit history later if needed."
+    - id: "d3_labeling_surface"
+      decision: "Choose first UI/API surface."
+      default_recommendation: "Protected API first; minimal dashboard/admin controls second."
+    - id: "d4_export_format"
+      decision: "Choose export format to eval datasets."
+      default_recommendation: "Export JSON fixtures compatible with evals/run_eval.py expected/predicted finding structures, plus metadata sidecar if needed."
+    - id: "d5_precedence_rule"
+      decision: "Choose how human labels interact with weak/proxy outcomes."
+      default_recommendation: "Human labels override weak/proxy outcomes for canonical scoring; weak/proxy remains supplemental."
+
+  constraints:
+    - "Plan mode only: do not include production code patches in the orchestration output."
+    - "Do not mutate original review findings JSON when adding labels."
+    - "Do not allow cross-installation label reads or writes."
+    - "Do not expose labels for deleted users or unauthorized installations without explicit policy."
+    - "Do not store raw secrets, provider API keys, GitHub tokens, private keys, or unnecessary source code in label records."
+    - "Database changes must include migration, model update, tests, and rollback notes."
+    - "Exported eval cases must not leak private data by default."
+    - "Each worker task must include acceptance criteria, validation commands, and rollback notes."
+
+  worker_handoff_requirements:
+    task_packet_fields:
+      - "task_id"
+      - "phase_id"
+      - "worker_agent"
+      - "objective"
+      - "affected_paths"
+      - "dependencies"
+      - "step_by_step_plan"
+      - "acceptance_criteria"
+      - "validation_commands"
+      - "rollback_strategy"
+      - "risks"
+    first_assignments_to_plan:
+      - "P3-BE-001: Design finding label SQLAlchemy model and Alembic migration."
+      - "P3-BE-002: Design protected label create/update/read API."
+      - "P3-FE-001: Design minimal labeling surface and operator workflow."
+      - "P3-EVAL-001: Design human-label export to eval-compatible fixtures."
+      - "P3-SEC-001: Define installation authorization and data leakage checks."
+
+  output:
+    include_patch: false
+    include_step_by_step_plan: true
+    include_worker_handoffs: true
+    include_decision_log: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_data_contracts: true
+    include_api_contracts: true
+    include_ui_plan: true
+    include_ci_plan: true
+    include_artifact_plan: true
+    include_deferred_questions: true
+    output_files:
+      - "artiforge/phase3/final_orchestration_plan.md"
+      - "artiforge/phase3/decision_log.md"
+      - "artiforge/phase3/worker_backlog.yaml"
+      - "artiforge/phase3/verification_matrix.yaml"
+      - "artiforge/phase3/risk_register.md"
