@@ -112,4 +112,39 @@ describe("ReviewPipeline", () => {
     ).toBeGreaterThan(0);
     expect(scoped.getByText("findings: N/A")).toBeInTheDocument();
   });
+
+  it("does not mark HTTP 200 red when fast-path rationale mentions error handling", () => {
+    render(
+      <ReviewPipeline
+        audits={[
+          makeAudit({
+            stage: "fast_path",
+            decision: "full_review",
+            findings_count: 0,
+            metadata_json: {
+              decision: "full_review",
+              confidence: 90,
+              reason: "PR includes error handling and webhooks.",
+              risk_labels: ["webhooks"],
+              review_surface_paths: [],
+              review_surface_count: 0,
+              file_classes: {},
+              produces_findings: false,
+            },
+          }),
+        ]}
+        debugArtifacts={null}
+        isInFlight={false}
+        costUsd={null}
+        postedFindingsCount={0}
+        pipelineStagedFindingsPeak={0}
+      />,
+    );
+
+    const fastPathButtons = screen.getAllByRole("button", { name: /fast-path scan/i });
+    for (const fastPathButton of fastPathButtons) {
+      const status200 = within(fastPathButton).getByText("200");
+      expect(status200).toHaveAttribute("title", "Successful stage response");
+    }
+  });
 });

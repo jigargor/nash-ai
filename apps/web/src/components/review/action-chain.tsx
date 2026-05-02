@@ -131,7 +131,8 @@ function isFailedStage(audit: ReviewModelAudit): boolean {
   const code = extractStatusCode(audit);
   if (code != null && code >= 400) return true;
   const reason = (audit.metadata_json?.reason as string | undefined)?.toLowerCase() ?? "";
-  return reason.includes("failed") || reason.includes("error");
+  // Rationale text often mentions "error handling" on successful fast-path scans; do not treat "error" as failure.
+  return reason.includes("failed");
 }
 
 function CopyDebugJsonButton({ getPayload }: { getPayload: () => Record<string, unknown> }) {

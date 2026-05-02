@@ -101,7 +101,8 @@ function stageLooksFailed(audit: ReviewModelAudit): boolean {
   const reason = metadata.reason;
   if (typeof reason === "string") {
     const lowered = reason.toLowerCase();
-    if (lowered.includes("failed") || lowered.includes("error")) return true;
+    // Match action-chain: rationale may say "error handling" without any provider failure.
+    if (lowered.includes("failed")) return true;
   }
   return false;
 }
