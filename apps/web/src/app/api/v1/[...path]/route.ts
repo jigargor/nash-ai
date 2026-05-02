@@ -103,9 +103,12 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   const { path } = await context.params;
   const cfClearanceCookie = cookieStore.get("cf_clearance")?.value;
   if (isReviewRerunPath(path) && !cfClearanceCookie) {
-    return NextResponse.json(
-      { detail: "Turnstile clearance cookie required to re-run reviews." },
-      { status: 403 },
+    return errorResponse(
+      makeApiError(403, "Turnstile clearance cookie required to re-run reviews.", {
+        code: "AUTH_CLEARANCE_REQUIRED",
+        family: "auth",
+        action: "none",
+      }),
     );
   }
   const incomingUrl = new URL(request.url);
