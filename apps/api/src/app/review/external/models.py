@@ -14,11 +14,14 @@ instance never crosses a process or cache boundary.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.categories import CanonicalCategory as FindingCategory
+from app.categories import CanonicalCategory
+
+# Public alias for external engine + analyzer; explicit TypeAlias satisfies mypy re-export rules.
+FindingCategory: TypeAlias = CanonicalCategory
 
 FindingSeverity = Literal["critical", "high", "medium", "low"]
 ServiceTier = Literal["economy", "balanced", "high"]

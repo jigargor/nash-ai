@@ -213,20 +213,29 @@ def test_router_no_fallback_when_auto_fallback_disabled() -> None:
 
 
 def test_router_respects_context_token_limit() -> None:
-    # claude-sonnet-4-6 has a large context window; a very large context forces
-    # the router to pick something that fits or fall back to a model without a
-    # hard cap (0 means "no limit enforced").
+    # Baseline catalog caps are finite (<= ~1M). A billion-token context cannot
+    # fit any model, so the router returns the configured default as an unknown
+    # pin (fallback_reason=no_candidate). When a real candidate is chosen, its
+    # advertised cap must be 0 (no enforced limit) or >= requested context.
+    huge = 999_999_999
     resolution = resolve_model_for_role(
         ReviewConfig(),
         "primary_review",
-        context_tokens=999_999_999,
+        context_tokens=huge,
         available_providers={"anthropic", "openai", "gemini"},
     )
 
     catalog = load_baseline_catalog()
     record = catalog.find_model(resolution.provider, resolution.model)
-    if record is not None and record.capabilities.max_context_tokens > 0:
-        assert record.capabilities.max_context_tokens >= 999_999_999
+    assert record is not None
+
+    if resolution.fallback_reason == "no_candidate":
+        assert resolution.status == "unknown"
+        assert resolution.explicit_pin is True
+        return
+
+    cap = record.capabilities.max_context_tokens
+    assert cap == 0 or cap >= huge
 
 
 # ---------------------------------------------------------------------------

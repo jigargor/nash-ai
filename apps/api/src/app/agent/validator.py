@@ -5,7 +5,9 @@ from app.agent.schema import DropReason, Finding
 
 get_parser: Any = None
 try:
-    from tree_sitter_language_pack import get_parser as _tree_sitter_get_parser
+    from tree_sitter_language_pack import (  # type: ignore[import-not-found]
+        get_parser as _tree_sitter_get_parser,
+    )
 
     get_parser = _tree_sitter_get_parser
 except Exception:  # pragma: no cover - import fallback for constrained environments
