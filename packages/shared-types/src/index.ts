@@ -1,6 +1,12 @@
 export type ReviewStatus = "queued" | "running" | "done" | "failed";
 export type Severity = "critical" | "high" | "medium" | "low";
-export type Category = "security" | "performance" | "correctness" | "style" | "maintainability";
+export type Category =
+  | "security"
+  | "performance"
+  | "correctness"
+  | "style"
+  | "maintainability"
+  | "best-practice";
 export type Evidence = "tool_verified" | "diff_visible" | "verified_fact" | "inference";
 
 export interface Finding {

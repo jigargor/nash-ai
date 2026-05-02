@@ -519,6 +519,34 @@ class ExternalEvaluationShard(Base):
     )
 
 
+class FindingLabel(Base):
+    """Human-assigned quality label for a specific finding in a review.
+
+    Used for Phase 3 human labeling to build ground-truth datasets for eval.
+    """
+
+    __tablename__ = "finding_labels"
+    __table_args__ = (
+        UniqueConstraint("review_id", "finding_index"),
+        Index("finding_labels_review", "review_id"),
+        Index("finding_labels_label", "label"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    review_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("reviews.id"), nullable=False)
+    finding_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    installation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    labeled_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    notes: Mapped[str | None] = mapped_column(Text)
+    labeled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+
+
 class ExternalEvaluationFinding(Base):
     __tablename__ = "external_evaluation_findings"
     __table_args__ = (
@@ -544,4 +572,41 @@ class ExternalEvaluationFinding(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class MissedIssue(Base):
+    """A real issue missed by the review agent, captured for recall metrics and eval export.
+
+    Each row links a missed finding back to the review that failed to catch it.
+    ``installation_id`` is denormalized for tenant-isolated queries without a join.
+    ``how_found`` tracks provenance so we can weight sources differently in metrics.
+    """
+
+    __tablename__ = "missed_issues"
+    __table_args__ = (
+        Index("missed_issues_review", "review_id"),
+        Index("missed_issues_installation", "installation_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    review_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("reviews.id"), nullable=False)
+    installation_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    line_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    line_end: Mapped[int | None] = mapped_column(Integer)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_category: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_severity: Mapped[str] = mapped_column(Text, nullable=False)
+    how_found: Mapped[str] = mapped_column(Text, nullable=False)
+    # how_found: "manual_report" | "bug_fix" | "static_analyzer" | "security_scan" | "test_failure" | "maintainer_review"
+    notes: Mapped[str | None] = mapped_column(Text)
+    reported_by_user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
     )

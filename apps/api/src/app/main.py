@@ -15,6 +15,8 @@ from app.admin.router import router as admin_router
 from app.api.benchmarks import router as benchmarks_router
 from app.api.benchmarks import telemetry_router
 from app.api.external_evals import router as external_evals_router
+from app.api.finding_labels import router as finding_labels_router
+from app.api.missed_issues import router as missed_issues_router
 from app.api.models_catalog import router as models_catalog_router
 from app.api.router import router as api_router
 from app.api.usage import router as usage_router
@@ -100,6 +102,8 @@ app.include_router(telemetry_router)
 app.include_router(usage_router)
 app.include_router(usage_metrics_router)
 app.include_router(external_evals_router)
+app.include_router(finding_labels_router)
+app.include_router(missed_issues_router)
 app.include_router(models_catalog_router)
 
 

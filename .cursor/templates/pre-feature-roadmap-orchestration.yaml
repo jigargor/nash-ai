@@ -1,0 +1,505 @@
+orchestration:
+  goal: "Implement the pre-feature roadmap (phases 0–8) that establishes quality foundations, provider-neutral observability, reproducible evals, human labeling, false-negative capture, confidence calibration, category normalization, external-engine baseline comparison, and full LLM-layer test coverage — before adding deeper observability/eval/continuous-improvement features."
+  mode: "implement" # analyze|implement|review
+  merge_strategy: "hybrid" # best_single|hybrid|weighted_vote
+
+  controller:
+    engine: "artiforge"
+    role: "Artiforge is the meta-orchestrator. It owns agent selection, task decomposition, dispatch, and synthesis. Use artiforge-make-development-task-plan for phase planning, act-as-agent for agent delegation, and codebase-scanner for pre-phase audits."
+    tools:
+      - "artiforge-make-development-task-plan"
+      - "act-as-agent"
+      - "codebase-scanner"
+    dispatch_policy:
+      min_agents: 3
+      max_agents: 5
+      scaling_trigger: "Artiforge scales from 3 to 5 based on phase dependency graph and available parallelism. Milestones A–B run with 3–4 agents; Milestones C–D add agents 4–5."
+      agent_selection: "Artiforge chooses agent specialization, model, and focus per phase. The worker definitions below are starting recommendations — Artiforge may reassign, split, or merge workers based on codebase-scanner findings and phase progress."
+
+  scoring:
+    correctness: 0.30
+    maintainability: 0.20
+    risk: 0.30
+    performance: 0.20
+
+  workers:
+    - id: "w1"
+      agent: "quality-architect"
+      model: "claude-4.6-sonnet-medium"
+      focus: "Own the quality spec (phase 0) and category normalization (phase 6). Write docs/quality-model.md defining true positive, false positive, false negative, duplicate, severity mismatch, category mismatch, actionable-but-weak, correct-but-not-worth-posting. Define precision, recall, clean-case FP rate, anchor validity, schema validity, cost per useful finding, useful/dismiss/ignore rate. Then build the canonical category mapping that normalizes security|performance|correctness|style|maintainability|best-practice across review schemas, evals, dashboards, and scorecards."
+      phases: [0, 6]
+      milestone: "A → B"
+      deliverables:
+        - "docs/quality-model.md with label taxonomy, metric definitions, and worked examples"
+        - "Canonical category enum/mapping module shared between Python and TypeScript"
+        - "Migration script or normalization layer for existing stored categories"
+
+    - id: "w2"
+      agent: "observability-engineer"
+      model: "claude-4.6-opus-high-thinking"
+      focus: "Design and implement the provider-neutral LLMObserver abstraction (phase 1). Create a thin internal boundary that wraps every Anthropic/OpenAI/Gemini generation, tool call, validation, and context build. The observer must unify token/latency/cost/model metadata already tracked in the ReAct loop, audit tables, and Langfuse traces. Start with DB/debug-artifact emission; design sink interfaces for Langfuse, Sentry breadcrumbs, and structured logs but implement only the DB sink initially."
+      phases: [1]
+      milestone: "A"
+      codebase_targets:
+        - "apps/api/src/app/llm/ — provider adapters, client wrappers, usage parsing"
+        - "apps/api/src/app/agent/ — ReAct loop, tool call recording"
+        - "apps/api/src/app/review/ — runner stages, audit emission"
+        - "apps/api/src/app/observability/ — existing Langfuse integration"
+      deliverables:
+        - "apps/api/src/app/observability/observer.py — LLMObserver class with start_review_trace, start_stage, record_generation, record_tool_call, record_validation, record_context_build, record_error, finish_review_trace"
+        - "Sink interface (Protocol) for DB, Langfuse, Sentry, structured log backends"
+        - "DB sink implementation writing to existing audit/debug tables"
+        - "All LLM calls routed through observer boundary"
+
+    - id: "w3"
+      agent: "eval-ci-engineer"
+      model: "gpt-5.3-codex"
+      focus: "Make evals reproducible (phase 2) and bring src/app/llm fully into test coverage (phase 8). For phase 2: build evals/generate_predictions.py that loads eval cases, runs offline snapshot replay against current code/prompt/model config, produces evals/predictions/candidate/*.json, then runs evals/run_eval.py and compares against baseline. CI must reject prompt-changing PRs that reuse stale predictions. For phase 8: write targeted tests for provider adapters, usage parsing, cached-token parsing, model routing, fallback chains, prompt-cache metadata, quota/rate-limit handling, structured output parsing, cost estimation, and provider-specific edge cases."
+      phases: [2, 8]
+      milestone: "B"
+      codebase_targets:
+        - "evals/ — existing eval harness, matcher, baseline/candidate structure"
+        - "apps/api/src/app/llm/ — provider layer, router, adapters"
+        - "apps/api/tests/ — existing test structure"
+        - ".github/workflows/ — CI pipeline for eval gate"
+      deliverables:
+        - "evals/generate_predictions.py with snapshot replay and candidate generation"
+        - "CI workflow step that generates predictions before eval comparison"
+        - "Baseline vs candidate comparison with clear pass/fail gate"
+        - "Test suite for apps/api/src/app/llm/ covering all provider adapters"
+        - "Coverage threshold config that includes src/app/llm/"
+
+    - id: "w4"
+      agent: "data-labeling-engineer"
+      model: "claude-4.6-sonnet-medium"
+      focus: "Build human labeling infrastructure (phase 3) and false-negative capture (phase 4). For phase 3: add a labeling mechanism for posted findings — labels include true_positive, false_positive, severity_wrong, category_wrong, duplicate, not_actionable, correct_but_too_minor, accepted, accepted_with_modification. Start as internal admin endpoint or dashboard control. Enable export into eval dataset format. For phase 4: add a missed-issue record type with review_id, file_path, line_start, description, expected_category, expected_severity, how_found (manual report, bug fix, static analyzer, security scan, test failure, maintainer review), notes. Link missed issues to reviews and enable conversion to eval cases."
+      phases: [3, 4]
+      milestone: "C"
+      codebase_targets:
+        - "apps/api/src/app/db/ — models, migrations for label/missed-issue tables"
+        - "apps/api/src/app/api/ — admin endpoints for labeling"
+        - "apps/web/src/ — optional dashboard labeling UI"
+        - "evals/ — export pipeline from labels to eval cases"
+      deliverables:
+        - "DB models + Alembic migrations for finding_labels and missed_issues tables"
+        - "FastAPI endpoints: POST/PATCH finding labels, POST missed issues, GET export"
+        - "Export script: labeled findings + missed issues → eval case JSON"
+        - "Optional dashboard UI for internal labeling workflow"
+
+    - id: "w5"
+      agent: "analytics-calibration-engineer"
+      model: "gpt-5.5-extra-high"
+      focus: "Implement confidence calibration (phase 5) and external-engine baseline comparison (phase 7). For phase 5: build scorecards bucketed by provider, model, category, severity, evidence type, confidence bucket, repo, and prompt version. Compare confidence ranges (90–100, 80–89, 70–79) against actual useful rates. For phase 7: define the external rule-based engine's role as high-precision static baseline, cheap regression detector, false-negative candidate source, eval dataset generator, and sanity-check layer. Build eval reports showing LLM-only findings, rule-engine-only findings, overlap findings, and missed-by-LLM deterministic findings."
+      phases: [5, 7]
+      milestone: "D"
+      codebase_targets:
+        - "apps/api/src/app/review/ — outcome telemetry, scorecard metrics"
+        - "apps/api/src/app/external_review/ — deterministic rule engine"
+        - "apps/api/src/app/db/ — scorecard storage"
+        - "apps/web/src/ — scorecard/calibration dashboard views"
+      deliverables:
+        - "Scorecard computation pipeline with multi-dimensional bucketing"
+        - "Confidence calibration report: per-bucket useful rates"
+        - "External-engine comparison report: LLM-only / rule-only / overlap / missed-by-LLM"
+        - "Dashboard views for calibration and comparison data"
+        - "Threshold recommendation engine based on calibration data"
+
+  milestones:
+    A:
+      name: "Repo is observable internally"
+      phases: [0, 1]
+      workers: ["w1", "w2"]
+      gate: "Quality spec reviewed and merged. Every LLM generation goes through LLMObserver. DB sink captures all generation/tool-call/validation events. Existing Langfuse traces unchanged."
+      done_when:
+        - "docs/quality-model.md exists with label taxonomy and metric definitions"
+        - "LLMObserver wraps all provider calls with unified event capture"
+        - "No LLM call bypasses the observer boundary"
+        - "Existing functionality unbroken — review pipeline produces identical outputs"
+
+    B:
+      name: "Evals are reproducible"
+      phases: [2, 6, 8]
+      workers: ["w1", "w3"]
+      gate: "Prompt-changing PRs generate fresh predictions in CI. Category taxonomy is canonical. LLM layer is under test coverage threshold."
+      depends_on: ["A"]
+      done_when:
+        - "CI generates candidate predictions from current code before eval comparison"
+        - "Stale prediction reuse causes CI failure"
+        - "All review surfaces use single canonical category taxonomy"
+        - "src/app/llm/ included in CI coverage thresholds"
+        - "Provider adapter tests cover Anthropic, OpenAI, Gemini edge cases"
+
+    C:
+      name: "Outcomes become ground truth"
+      phases: [3, 4]
+      workers: ["w4"]
+      gate: "Findings can be manually labeled. Missed issues can be recorded and linked to reviews. Both can be exported to eval datasets."
+      depends_on: ["B"]
+      done_when:
+        - "A reviewed finding can be manually labeled with any defined label"
+        - "A missed issue can be recorded with full metadata and linked to a review"
+        - "Labeled findings and missed issues exportable as eval case JSON"
+        - "Exported cases are compatible with evals/run_eval.py format"
+
+    D:
+      name: "Calibration and optimization begin"
+      phases: [5, 7]
+      workers: ["w5"]
+      gate: "Confidence buckets have measured useful rates. External engine findings are comparable against LLM findings. Cost per useful finding is computable."
+      depends_on: ["C"]
+      done_when:
+        - "Scorecard answers: For category X / severity Y / confidence Z, what % were useful?"
+        - "Eval reports show LLM-only, rule-only, overlap, missed-by-LLM findings"
+        - "Cost per useful finding is computed and visible"
+        - "Threshold recommendations are generated from calibration data"
+
+  phases:
+    - id: 0
+      name: "Quality model / spec"
+      milestone: "A"
+      worker: "w1"
+      priority: 1
+      depends_on: []
+      description: "Write docs/quality-model.md defining the quality taxonomy: true positive, false positive, false negative, duplicate, severity mismatch, category mismatch, actionable-but-weak, correct-but-not-worth-posting. Define minimum metrics: precision, recall, clean-case FP rate, anchor validity, schema validity, cost per useful finding, useful/dismiss/ignore rate."
+      acceptance:
+        - "docs/quality-model.md reviewed and approved"
+        - "Every label and metric has a concrete definition with examples"
+        - "Existing repo rules (.cursor/rules/80-findings-first-review-output.mdc, severity/confidence rules) are referenced as foundations"
+
+    - id: 1
+      name: "LLMObserver abstraction"
+      milestone: "A"
+      worker: "w2"
+      priority: 2
+      depends_on: [0]
+      description: "Create provider-neutral LLMObserver that wraps every LLM generation, tool call, validation, and context build. Unify token/latency/cost/model metadata from ReAct loop, audit tables, and Langfuse. Start with DB/debug-artifact sink; design interfaces for Langfuse, Sentry, structured log sinks."
+      acceptance:
+        - "Every Anthropic/OpenAI/Gemini call goes through one observation boundary"
+        - "DB sink captures: model, provider, stage, tokens_in, tokens_out, cached_tokens, latency_ms, cost_estimate, tool_calls, validation_results"
+        - "Existing Langfuse integration not broken"
+        - "Observer is mockable for testing"
+
+    - id: 2
+      name: "Generated eval predictions"
+      milestone: "B"
+      worker: "w3"
+      priority: 3
+      depends_on: [1]
+      description: "Add evals/generate_predictions.py that loads eval cases, runs offline snapshot replay, produces candidate predictions, runs run_eval.py, and compares against baseline. CI must reject prompt-changing PRs that reuse old predictions."
+      acceptance:
+        - "evals/generate_predictions.py produces candidate/*.json from current code"
+        - "CI workflow generates predictions before eval gate"
+        - "Stale predictions cause CI failure for prompt-touching PRs"
+        - "Baseline vs candidate comparison shows precision/recall/FP deltas"
+
+    - id: 6
+      name: "Category normalization"
+      milestone: "B"
+      worker: "w1"
+      priority: 4
+      depends_on: [0]
+      description: "Create canonical category mapping across all review surfaces. Normalize security, performance, correctness, style, maintainability, best-practice. Apply to outcome storage, evals, dashboards, scorecards, and external-engine comparison."
+      acceptance:
+        - "Single canonical category enum used by all review schemas"
+        - "Migration or normalization for existing stored categories"
+        - "Eval harness uses canonical categories for matching"
+        - "No category string mismatch between internal and external review"
+
+    - id: 8
+      name: "LLM-layer coverage"
+      milestone: "B"
+      worker: "w3"
+      priority: 5
+      depends_on: [1]
+      description: "Write tests for provider adapters, usage parsing, cached-token parsing, model routing, fallback chains, prompt-cache metadata, quota/rate-limit handling, structured output parsing, cost estimation, and provider-specific edge cases."
+      acceptance:
+        - "Test files for each provider adapter (Anthropic, OpenAI, Gemini)"
+        - "Usage parsing tests with real response fixtures"
+        - "Model routing tests covering fallback, BYOK, role-specific selection"
+        - "Coverage threshold for src/app/llm/ meets project minimum"
+
+    - id: 3
+      name: "Human labeling"
+      milestone: "C"
+      worker: "w4"
+      priority: 6
+      depends_on: [2, 6]
+      description: "Add finding labeling mechanism: true_positive, false_positive, severity_wrong, category_wrong, duplicate, not_actionable, correct_but_too_minor, accepted, accepted_with_modification. Admin endpoint or dashboard control. Export to eval dataset."
+      acceptance:
+        - "DB model + migration for finding_labels"
+        - "POST/PATCH endpoint for labeling a finding"
+        - "Label export produces eval-compatible JSON"
+        - "Auth-gated to admin/internal users only"
+
+    - id: 4
+      name: "False-negative capture"
+      milestone: "C"
+      worker: "w4"
+      priority: 7
+      depends_on: [3]
+      description: "Add missed-issue record type: review_id, file_path, line_start, description, expected_category, expected_severity, how_found, notes. Link to reviews. Convert to eval cases."
+      acceptance:
+        - "DB model + migration for missed_issues"
+        - "POST endpoint for recording missed issues"
+        - "Missed issues linkable to review_id"
+        - "Export to eval case format compatible with generate_predictions.py"
+
+    - id: 5
+      name: "Confidence calibration"
+      milestone: "D"
+      worker: "w5"
+      priority: 8
+      depends_on: [3, 4]
+      description: "Build scorecards by provider, model, category, severity, evidence type, confidence bucket, repo, prompt version. Compare confidence ranges against actual useful rates."
+      acceptance:
+        - "Scorecard pipeline computes per-bucket useful rates"
+        - "Can answer: for security/high/tool-verified above confidence 85, what % were useful?"
+        - "Different thresholds recommendable per category/evidence type"
+
+    - id: 7
+      name: "External engine baseline"
+      milestone: "D"
+      worker: "w5"
+      priority: 9
+      depends_on: [2, 3, 4, 6, 8]
+      hard_gate: "milestone_C"
+      description: "Treat external rule-based engine as deterministic baseline. Eval reports show LLM-only, rule-engine-only, overlap, and missed-by-LLM deterministic findings."
+      acceptance:
+        - "External engine role defined and documented"
+        - "Eval report includes four-quadrant comparison"
+        - "False-negative candidates from rule engine feedable into phase 4 capture"
+        - "Cost per useful finding computed for LLM vs rule engine"
+
+  main_principle: |
+    Do not add more observability features until the repo can answer this reliably:
+      For this finding:
+        Why was it posted?
+        What evidence supported it?
+        Was the line anchor valid?
+        Was the schema valid?
+        What did it cost?
+        Was it useful?
+        Would the current candidate prompt/model still post it?
+    Once those answers are stable, Langfuse/DeepEval/Sentry become valuable
+    instead of becoming another layer of noisy telemetry.
+
+  artiforge_orchestration:
+    planning_flow:
+      - step: "pre-scan"
+        tool: "codebase-scanner"
+        purpose: "Audit current state of LLM layer, eval harness, observability, schemas, and test coverage before each milestone."
+      - step: "plan"
+        tool: "artiforge-make-development-task-plan"
+        purpose: "Decompose each milestone's phases into concrete implementation tasks with file targets, dependencies, and acceptance criteria."
+      - step: "dispatch"
+        tool: "act-as-agent"
+        purpose: "Dispatch worker agents with phase-specific prompts. Artiforge selects agent specialization and model per task."
+      - step: "verify"
+        tool: "codebase-scanner"
+        purpose: "Post-implementation audit to verify acceptance criteria, coverage, and no regression."
+    wave_structure:
+      wave_1:
+        milestone: "A"
+        dispatch_sequence:
+          - step: 1
+            agent: "w1"
+            phase: 0
+            mode: "implement"
+            description: "Single implementation agent writes quality spec"
+          - step: 2
+            agent: "validator"
+            phase: 0
+            mode: "readonly"
+            optional: true
+            description: "Optional readonly validator confirms Phase 0 gate artifacts"
+          - step: 3
+            agent: "w2"
+            phase: 1
+            mode: "implement"
+            blocked_until: "Phase 0 accepted and merged to develop"
+            description: "LLMObserver implementation dispatched only after quality spec gate passes"
+        stop_condition: "Both phase 0 and phase 1 acceptance criteria met"
+      wave_2:
+        milestone: "B"
+        dispatch_sequence:
+          - step: 1
+            agent: "w1"
+            phase: 6
+            mode: "implement"
+            description: "Category normalization as contract PR — must merge before eval finalization"
+          - step: 2
+            agents: ["w3"]
+            phases: [2, 8]
+            mode: "implement"
+            parallel: true
+            description: "Eval generation and LLM tests run in parallel branches"
+          - step: 3
+            constraint: "Eval matcher/reporting outputs must not finalize until Phase 6 canonical categories are merged"
+        stop_condition: "Phases 2, 6, 8 acceptance criteria met. CI generates predictions and enforces category consistency."
+      wave_3:
+        milestone: "C"
+        dispatch_sequence:
+          - step: 1
+            agent: "w4"
+            phase: 3
+            mode: "implement"
+            sensitive_path_gates: true
+            description: "Human labeling — data model/API contracts first with auth/tenant checks"
+          - step: 2
+            agent: "w4"
+            phase: 4
+            mode: "implement"
+            sensitive_path_gates: true
+            blocked_until: "Phase 3 merged"
+            description: "False-negative capture with export compatibility tests"
+        stop_condition: "Labeled findings and missed issues exportable to eval datasets"
+      wave_4:
+        milestone: "D"
+        blocked_until: "Milestone C gate passes"
+        dispatch_sequence:
+          - step: 1
+            agent: "w5"
+            phases: [5, 7]
+            mode: "implement"
+            description: "Calibration scorecards and external-engine baseline — Phase 7 hard-gated on Milestone C"
+        stop_condition: "Calibration reports and external-engine comparisons are operational"
+
+  multi_agent_safety:
+    branch_format: "agent/<agent-id>/<task-slug>/<run-id>"
+    worktree_format: ".worktrees/<agent-id>/<task-slug>-<run-id>"
+    pr_target: "develop"
+    single_writer: true
+    ledger_fields:
+      - "run_id"
+      - "agent_id"
+      - "task_id"
+      - "branch"
+      - "worktree_path"
+      - "base_branch"
+      - "base_sha"
+      - "claimed_files"
+      - "latest_commit_sha"
+      - "dirty_state"
+      - "lifecycle_state"
+    preflight_commands:
+      - "git status --short"
+      - "git branch --show-current"
+      - "git rev-parse HEAD"
+      - "git worktree list"
+    abort_conditions:
+      - "branch/worktree format mismatch"
+      - "unowned dirty changes"
+      - "claimed file conflict with active agent"
+      - "base SHA unknown"
+
+  sensitive_path_gates:
+    applies_to_phases: [3, 4]
+    sensitive_prefixes:
+      - "apps/api/src/app/webhooks/"
+      - "apps/api/src/app/api/"
+      - "apps/api/src/app/db/"
+      - "apps/api/alembic/"
+      - "apps/web/src/app/api/"
+      - "apps/web/src/middleware.ts"
+    required_checks:
+      - "auth/session boundary verification"
+      - "tenant-isolation verification"
+      - "Alembic migration forward + rollback assumptions documented"
+      - "export format compatibility tests against eval ingestion path"
+
+  model_selection_policy:
+    mode: "artiforge-driven"
+    fallback: "If a worker model pinned in config is unavailable at dispatch time, Artiforge must replace it with a supported equivalent and record the substitution in gate report notes."
+    supported_slugs:
+      - "claude-4.6-opus-high-thinking"
+      - "claude-4.6-sonnet-medium"
+      - "composer-2-fast"
+      - "gpt-5.3-codex"
+      - "gpt-5.4-medium"
+      - "gpt-5.5-extra-high"
+
+  constraints:
+    - "No API break for existing consumers unless explicitly versioned."
+    - "Do not weaken auth/session, webhook, or tenant isolation controls."
+    - "Preserve strict typing — Python: mypy --strict, TypeScript: no unexcused any."
+    - "LLMObserver must not add measurable latency to the review pipeline hot path."
+    - "Human labeling endpoints must be auth-gated to admin/internal users."
+    - "Category normalization must be backward-compatible with existing stored data."
+    - "Eval generation must not require live LLM keys in CI — use snapshot replay."
+    - "All new DB tables must have Alembic migrations with forward + rollback."
+    - "Test coverage additions must not slow CI by more than 30 seconds."
+    - "Follow existing .cursor/rules and AGENTS.md constraints throughout."
+
+  gate_reports:
+    format: "markdown checklist attached to milestone PR"
+    required_sections:
+      - "Evidence Checklist (one row per done_when item with pass/fail + link)"
+      - "Test Commands Executed (exact commands and pass/fail output)"
+      - "CI Run Links (URL to green/red pipeline run)"
+      - "Generated Artifacts (file paths for eval outputs, snapshots, schemas)"
+      - "Migration Notes (forward + rollback for any Alembic changes)"
+      - "Auth/Tenant Verification (for sensitive-path phases only)"
+      - "Residual Risks (known issues deferred to next milestone)"
+      - "Model Substitutions (if Artiforge replaced a pinned model)"
+    milestone_checklists:
+      A:
+        - evidence: "docs/quality-model.md exists"
+          verify: "ls docs/quality-model.md"
+        - evidence: "Label taxonomy covers: TP, FP, FN, duplicate, severity mismatch, category mismatch, actionable-but-weak, correct-but-not-worth-posting"
+          verify: "grep -c 'true.positive\\|false.positive\\|false.negative\\|duplicate\\|severity.mismatch\\|category.mismatch\\|actionable.but.weak\\|correct.but.not.worth' docs/quality-model.md"
+        - evidence: "Metrics defined: precision, recall, clean-case FP rate, anchor validity, schema validity, cost per useful finding, useful/dismiss/ignore rate"
+          verify: "grep -c 'precision\\|recall\\|false.positive.rate\\|anchor.validity\\|schema.validity\\|cost.per.useful\\|useful.*rate' docs/quality-model.md"
+        - evidence: "LLMObserver wraps all provider calls"
+          verify: "grep -rn 'observer' apps/api/src/app/llm/providers/ apps/api/src/app/agent/loop.py"
+        - evidence: "No LLM call bypasses observer boundary"
+          verify: "grep -rn 'client.messages.create\\|client.chat.completions.create\\|client.generate_content' apps/api/src/app/ --include='*.py' | grep -v observer | grep -v test"
+        - evidence: "Review pipeline produces identical outputs"
+          verify: "cd apps/api && uv run pytest tests/ -m 'not live_github and not live_llm' --tb=short"
+      B:
+        - evidence: "CI generates candidate predictions from current code"
+          verify: "python evals/generate_predictions.py --prompt-version candidate --dry-run"
+        - evidence: "Stale prediction reuse causes CI failure"
+          verify: "Check .github/workflows/ for prediction generation step before eval comparison"
+        - evidence: "All review surfaces use single canonical category taxonomy"
+          verify: "grep -rn 'Category' apps/api/src/app/agent/schema.py apps/api/src/app/review/external/models.py packages/shared-types/src/index.ts"
+        - evidence: "src/app/llm/ included in CI coverage thresholds"
+          verify: "Check coverage config for llm/ inclusion"
+        - evidence: "Provider adapter tests cover Anthropic, OpenAI, Gemini"
+          verify: "cd apps/api && uv run pytest tests/test_llm_provider_adapters.py -v --tb=short"
+      C:
+        - evidence: "Finding can be manually labeled"
+          verify: "curl -X POST localhost:8000/api/v1/findings/{id}/labels -d '{\"label\": \"true_positive\"}'"
+        - evidence: "Missed issue can be recorded and linked"
+          verify: "curl -X POST localhost:8000/api/v1/missed-issues -d '{\"review_id\": ..., \"file_path\": ..., \"description\": ...}'"
+        - evidence: "Export produces eval-compatible JSON"
+          verify: "python -c 'from evals.run_eval import ...; # validate exported case shape'"
+        - evidence: "Auth-gated to admin/internal users"
+          verify: "curl -X POST localhost:8000/api/v1/findings/{id}/labels -H 'Authorization: Bearer invalid' # expect 401"
+        - evidence: "Alembic forward migration succeeds"
+          verify: "cd apps/api && DATABASE_URL=... uv run python -m alembic upgrade head"
+        - evidence: "Alembic rollback migration succeeds"
+          verify: "cd apps/api && DATABASE_URL=... uv run python -m alembic downgrade -1"
+        - evidence: "Tenant isolation verified"
+          verify: "Test that user A cannot label user B's findings"
+      D:
+        - evidence: "Scorecard computes per-bucket useful rates"
+          verify: "Scorecard pipeline test with fixture data"
+        - evidence: "Eval reports show four-quadrant comparison"
+          verify: "Run eval report generator and verify LLM-only/rule-only/overlap/missed sections"
+        - evidence: "Cost per useful finding computed"
+          verify: "Query scorecard endpoint and verify cost_per_useful_finding field"
+        - evidence: "Threshold recommendations generated"
+          verify: "Run threshold recommendation engine with fixture data"
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: false
+    include_data_contracts: true
+    include_quality_spec: true
+    include_observer_architecture: true
+    include_eval_pipeline_design: true
+    include_calibration_schema: true

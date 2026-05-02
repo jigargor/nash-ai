@@ -18,15 +18,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.categories import CanonicalCategory as FindingCategory
+
 FindingSeverity = Literal["critical", "high", "medium", "low"]
-FindingCategory = Literal[
-    "security",
-    "performance",
-    "correctness",
-    "best-practice",
-    "maintainability",
-    "style",
-]
 ServiceTier = Literal["economy", "balanced", "high"]
 ShardStatus = Literal["queued", "running", "done", "skipped", "failed"]
 EvaluationStatus = Literal[

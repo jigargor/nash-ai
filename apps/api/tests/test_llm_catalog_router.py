@@ -134,3 +134,264 @@ def test_resolve_model_attempt_chain_rotates_providers_then_lower_tiers() -> Non
     assert attempts[0].provider in {"openai", "anthropic", "gemini"}
     assert len({(item.provider, item.model) for item in attempts}) == len(attempts)
     assert any(item.tier == "economy" for item in attempts)
+
+
+# ---------------------------------------------------------------------------
+# Fallback on deprecated / retired explicit pins
+# ---------------------------------------------------------------------------
+
+
+def test_router_fallback_on_deprecated_model() -> None:
+    catalog = load_baseline_catalog().model_copy(deep=True)
+    pinned = catalog.find_model("openai", "gpt-5.5")
+    assert pinned is not None
+    pinned.status = "deprecated"
+
+    config = ReviewConfig(
+        model=ReviewModelConfig(provider="openai", name="gpt-5.5", explicit=True),
+        models=ModelsRoutingConfig(provider_order=["openai", "anthropic"], allow_auto_fallback=True),
+    )
+
+    resolution = resolve_model_for_role(
+        config,
+        "primary_review",
+        catalog=catalog,
+        available_providers={"openai", "anthropic"},
+    )
+
+    assert resolution.model != "gpt-5.5"
+    assert resolution.fallback_reason == "explicit_pin_deprecated"
+
+
+def test_router_fallback_on_retired_model() -> None:
+    catalog = load_baseline_catalog().model_copy(deep=True)
+    pinned = catalog.find_model("openai", "gpt-5.5")
+    assert pinned is not None
+    pinned.status = "retired"
+
+    config = ReviewConfig(
+        model=ReviewModelConfig(provider="openai", name="gpt-5.5", explicit=True),
+        models=ModelsRoutingConfig(provider_order=["openai", "anthropic"], allow_auto_fallback=True),
+    )
+
+    resolution = resolve_model_for_role(
+        config,
+        "primary_review",
+        catalog=catalog,
+        available_providers={"openai", "anthropic"},
+    )
+
+    assert resolution.model != "gpt-5.5"
+    assert resolution.fallback_reason == "explicit_pin_retired"
+
+
+def test_router_no_fallback_when_auto_fallback_disabled() -> None:
+    catalog = load_baseline_catalog().model_copy(deep=True)
+    pinned = catalog.find_model("openai", "gpt-5.5")
+    assert pinned is not None
+    pinned.status = "retired"
+
+    config = ReviewConfig(
+        model=ReviewModelConfig(provider="openai", name="gpt-5.5", explicit=True),
+        models=ModelsRoutingConfig(allow_auto_fallback=False),
+    )
+
+    resolution = resolve_model_for_role(
+        config,
+        "primary_review",
+        catalog=catalog,
+        available_providers={"openai", "anthropic"},
+    )
+
+    # Forced back to the pin even though retired
+    assert resolution.model == "gpt-5.5"
+
+
+# ---------------------------------------------------------------------------
+# Context token limit filtering
+# ---------------------------------------------------------------------------
+
+
+def test_router_respects_context_token_limit() -> None:
+    # claude-sonnet-4-6 has a large context window; a very large context forces
+    # the router to pick something that fits or fall back to a model without a
+    # hard cap (0 means "no limit enforced").
+    resolution = resolve_model_for_role(
+        ReviewConfig(),
+        "primary_review",
+        context_tokens=999_999_999,
+        available_providers={"anthropic", "openai", "gemini"},
+    )
+
+    catalog = load_baseline_catalog()
+    record = catalog.find_model(resolution.provider, resolution.model)
+    if record is not None and record.capabilities.max_context_tokens > 0:
+        assert record.capabilities.max_context_tokens >= 999_999_999
+
+
+# ---------------------------------------------------------------------------
+# Fast-path economy ordering by cost
+# ---------------------------------------------------------------------------
+
+
+def test_router_fast_path_cheapest_economy_model() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            provider_order=["anthropic", "openai", "gemini"],
+            roles={"fast_path": ModelRoleRoutingConfig(tier="economy")},
+        )
+    )
+
+    resolution = resolve_model_for_role(
+        config, "fast_path", available_providers={"anthropic", "openai", "gemini"}
+    )
+
+    catalog = load_baseline_catalog()
+    record = catalog.find_model(resolution.provider, resolution.model)
+    assert record is not None
+    assert record.tier == "economy"
+
+    # Verify it is actually the cheapest (or tied-cheapest) economy model available
+    economy_models = [
+        m for m in catalog.models
+        if m.tier == "economy" and m.status not in {"retired", "deprecated"}
+        and m.provider in {"anthropic", "openai", "gemini"}
+        and m.capabilities.tool_calling and m.capabilities.structured_output
+    ]
+    if economy_models and record.pricing.input_per_1m is not None:
+        min_price = min(
+            float(m.pricing.input_per_1m) for m in economy_models
+            if m.pricing.input_per_1m is not None
+        )
+        assert float(record.pricing.input_per_1m) <= min_price + 0.001
+
+
+# ---------------------------------------------------------------------------
+# Provider diversity
+# ---------------------------------------------------------------------------
+
+
+def test_router_provider_diversity_excludes_previous() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            provider_order=["anthropic", "openai", "gemini"],
+            roles={"primary_review": ModelRoleRoutingConfig(require_provider_diversity=True)},
+        )
+    )
+
+    resolution = resolve_model_for_role(
+        config,
+        "primary_review",
+        previous_provider="anthropic",
+        available_providers={"anthropic", "openai", "gemini"},
+    )
+
+    assert resolution.provider != "anthropic"
+
+
+# ---------------------------------------------------------------------------
+# All eight roles resolve to something
+# ---------------------------------------------------------------------------
+
+_ALL_ROLES = [
+    "fast_path",
+    "primary_review",
+    "chunk_review",
+    "synthesis",
+    "editor",
+    "challenger",
+    "tie_break",
+    "config_generator",
+]
+
+
+def test_router_all_eight_roles_resolve() -> None:
+    config = ReviewConfig()
+
+    for role in _ALL_ROLES:
+        resolution = resolve_model_for_role(
+            config,
+            role,  # type: ignore[arg-type]
+            available_providers={"anthropic", "openai", "gemini"},
+        )
+        assert resolution.provider in {"anthropic", "openai", "gemini"}
+        assert resolution.model
+        assert resolution.role == role
+
+
+# ---------------------------------------------------------------------------
+# Attempt chain spans providers
+# ---------------------------------------------------------------------------
+
+
+def test_router_attempt_chain_spans_providers() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            provider_order=["openai", "anthropic", "gemini"],
+        )
+    )
+
+    attempts = resolve_model_attempt_chain(
+        config,
+        "primary_review",
+        available_providers={"openai", "anthropic", "gemini"},
+    )
+
+    providers_seen = {a.provider for a in attempts}
+    assert len(providers_seen) >= 2
+
+
+def test_router_attempt_chain_has_no_duplicates() -> None:
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(
+            provider_order=["openai", "anthropic", "gemini"],
+        )
+    )
+
+    attempts = resolve_model_attempt_chain(
+        config,
+        "primary_review",
+        available_providers={"openai", "anthropic", "gemini"},
+    )
+
+    pairs = [(a.provider, a.model) for a in attempts]
+    assert len(pairs) == len(set(pairs))
+
+
+# ---------------------------------------------------------------------------
+# BYOK (user provider key override) — routing is not blocked when provider
+# is listed in available_providers
+# ---------------------------------------------------------------------------
+
+
+def test_router_byok_provider_available() -> None:
+    """Router resolves normally when the BYOK provider is in available_providers."""
+    config = ReviewConfig(
+        models=ModelsRoutingConfig(provider_order=["openai"])
+    )
+
+    resolution = resolve_model_for_role(
+        config,
+        "primary_review",
+        available_providers={"openai"},
+    )
+
+    assert resolution.provider == "openai"
+    assert resolution.model
+
+
+# ---------------------------------------------------------------------------
+# Resolution carries pricing metadata
+# ---------------------------------------------------------------------------
+
+
+def test_resolution_includes_pricing_metadata() -> None:
+    resolution = resolve_model_for_role(
+        ReviewConfig(),
+        "primary_review",
+        available_providers={"anthropic"},
+    )
+
+    meta = resolution.as_metadata()
+    assert "pricing" in meta
+    assert "input_per_1m_usd" in meta["pricing"]
