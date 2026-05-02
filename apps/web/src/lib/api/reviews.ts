@@ -142,10 +142,9 @@ export function fetchOutcomeSummary(installationId?: number, repoFullName?: stri
   return apiFetch<OutcomeSummary>(`/api/v1/telemetry/outcomes/summary${suffix}`);
 }
 
-export function rerunReview(reviewId: number, installationId: number, turnstileToken: string | null = null) {
+export function rerunReview(reviewId: number, installationId: number) {
   return apiFetch<{ ok: boolean; review_id: number }>(`/api/v1/reviews/${reviewId}/rerun?installation_id=${installationId}`, {
     method: "POST",
-    body: JSON.stringify({ turnstile_token: turnstileToken }),
   });
 }
 

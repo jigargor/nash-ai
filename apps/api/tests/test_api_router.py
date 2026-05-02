@@ -337,47 +337,21 @@ async def test_rerun_review_enqueues_job_and_resets_status(
         assert review.status == "queued"
 
 
-@pytest.mark.anyio
-async def test_verify_turnstile_rerun_token_requires_token_when_configured(
+def test_rerun_turnstile_clearance_header_required_when_turnstile_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "turnstile_secret_key", "required-secret")
 
-    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
     with pytest.raises(api_router.HTTPException) as exc_info:
-        await api_router._verify_turnstile_rerun_token(request, None)
+        api_router._require_turnstile_clearance_for_rerun(None)
     assert exc_info.value.status_code == 403
 
 
-@pytest.mark.anyio
-async def test_verify_turnstile_rerun_token_rejects_unsuccessful_verification(
+def test_rerun_turnstile_clearance_header_optional_when_turnstile_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "turnstile_secret_key", "required-secret")
-
-    class _FakeResponse:
-        status_code = 200
-
-        @staticmethod
-        def json() -> dict[str, object]:
-            return {"success": False}
-
-    class _FakeAsyncClient:
-        async def __aenter__(self) -> "_FakeAsyncClient":
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def post(self, _url: str, data: dict[str, str]) -> _FakeResponse:
-            assert data["response"] == "bad-token"
-            return _FakeResponse()
-
-    monkeypatch.setattr(api_router.httpx, "AsyncClient", lambda timeout: _FakeAsyncClient())
-    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
-    with pytest.raises(api_router.HTTPException) as exc_info:
-        await api_router._verify_turnstile_rerun_token(request, "bad-token")
-    assert exc_info.value.status_code == 403
+    monkeypatch.setattr(settings, "turnstile_secret_key", None)
+    api_router._require_turnstile_clearance_for_rerun(None)
 
 @pytest.mark.anyio
 async def test_rerun_review_duplicate_submission_lock_returns_409(
