@@ -8,6 +8,12 @@ import {
 import { buildGitHubAuthorizeUrl } from "@/lib/auth/github";
 import { createOAuthState, createPkceCodeVerifier, derivePkceCodeChallenge } from "@/lib/auth/session";
 
+const TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+
+interface TurnstileVerifyResponse {
+  success?: boolean;
+}
+
 function callbackUrl(requestUrl: string): string {
   const url = new URL("/api/v1/auth/callback", requestUrl);
   return url.toString();
@@ -21,6 +27,44 @@ function oauthNotConfiguredResponse(): NextResponse {
     },
     { status: 503 },
   );
+}
+
+function redirectToLoginWithError(requestUrl: string, error: string): NextResponse {
+  return NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(error)}`, requestUrl), 303);
+}
+
+function loginIpAddress(request: Request): string | null {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    const first = forwardedFor.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return request.headers.get("cf-connecting-ip");
+}
+
+async function verifyTurnstileToken(request: Request, token: string | null): Promise<boolean> {
+  const turnstileSecretKey = process.env.TURNSTILE_SECRET_KEY?.trim();
+  if (!turnstileSecretKey) return true;
+  if (!token) return false;
+  const payload = new URLSearchParams({
+    secret: turnstileSecretKey,
+    response: token,
+  });
+  const remoteIp = loginIpAddress(request);
+  if (remoteIp) payload.set("remoteip", remoteIp);
+
+  try {
+    const response = await fetch(TURNSTILE_SITEVERIFY_URL, {
+      method: "POST",
+      body: payload,
+      cache: "no-store",
+    });
+    if (!response.ok) return false;
+    const body = (await response.json()) as TurnstileVerifyResponse;
+    return body.success === true;
+  } catch {
+    return false;
+  }
 }
 
 async function redirectToGitHub(request: Request, statusCode?: number): Promise<NextResponse> {
@@ -50,11 +94,7 @@ async function redirectToGitHub(request: Request, statusCode?: number): Promise<
 }
 
 export async function GET(request: Request): Promise<NextResponse> {
-  if (!process.env.GITHUB_CLIENT_ID?.trim() || !process.env.GITHUB_CLIENT_SECRET?.trim()) {
-    return oauthNotConfiguredResponse();
-  }
-
-  return await redirectToGitHub(request);
+  return NextResponse.redirect(new URL("/login", request.url), 303);
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -62,6 +102,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     return oauthNotConfiguredResponse();
   }
 
-  await request.formData();
+  const formData = await request.formData();
+  const turnstileToken = formData.get("turnstile_token");
+  const isValidTurnstileToken = await verifyTurnstileToken(
+    request,
+    typeof turnstileToken === "string" ? turnstileToken : null,
+  );
+  if (!isValidTurnstileToken) return redirectToLoginWithError(request.url, "turnstile_failed");
+
   return await redirectToGitHub(request, 303);
 }

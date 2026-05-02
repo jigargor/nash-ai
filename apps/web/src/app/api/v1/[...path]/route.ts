@@ -58,6 +58,10 @@ async function normalizedUpstreamError(response: Response): Promise<NextResponse
   return errorResponse({ ...normalized, requestId: requestId ?? undefined });
 }
 
+function isReviewRerunPath(path: string[]): boolean {
+  return path.length === 3 && path[0] === "reviews" && path[2] === "rerun";
+}
+
 async function proxyApiRequest(request: Request, context: ApiProxyRouteContext): Promise<Response> {
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE_NAME)?.value;
@@ -97,6 +101,16 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   }
 
   const { path } = await context.params;
+  const cfClearanceCookie = cookieStore.get("cf_clearance")?.value;
+  if (isReviewRerunPath(path) && !cfClearanceCookie) {
+    return errorResponse(
+      makeApiError(403, "Turnstile clearance cookie required to re-run reviews.", {
+        code: "AUTH_CLEARANCE_REQUIRED",
+        family: "auth",
+        action: "none",
+      }),
+    );
+  }
   const incomingUrl = new URL(request.url);
   const apiBaseNormalized = normalizeUpstreamBaseUrl(apiBase);
   const targetUrl = new URL(`/api/v1/${path.join("/")}${incomingUrl.search}`, apiBaseNormalized);
@@ -120,6 +134,7 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   headers.set("X-Api-Key", apiAccessKey);
   headers.set("X-Dashboard-User-Token", dashboardUserToken);
   headers.set("X-Usage-Service", "dashboard-bff");
+  if (cfClearanceCookie) headers.set("X-CF-Clearance", cfClearanceCookie);
 
   let requestBody: ArrayBuffer | undefined;
   if (request.method !== "GET" && request.method !== "HEAD") {

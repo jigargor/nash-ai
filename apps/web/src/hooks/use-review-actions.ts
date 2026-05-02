@@ -17,12 +17,10 @@ export function useRerunReview() {
     mutationFn: ({
       reviewId,
       installationId,
-      turnstileToken,
     }: {
       reviewId: number;
       installationId: number;
-      turnstileToken: string | null;
-    }) => actionRerunReview(reviewId, installationId, turnstileToken),
+    }) => actionRerunReview(reviewId, installationId),
     onMutate: async ({ reviewId, installationId }) => {
       const reviewQueryKey = ["review", reviewId, installationId] as const;
       await queryClient.cancelQueries({ queryKey: reviewQueryKey });

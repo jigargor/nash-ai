@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
+
 const cookiesMock = vi.fn();
 const parseSessionTokenMock = vi.fn();
 const createDashboardUserTokenMock = vi.fn();
@@ -22,7 +24,10 @@ describe("api v1 proxy route", () => {
     vi.stubEnv("API_ACCESS_KEY", "service-secret");
     vi.stubEnv("API_URL", "http://api.example.local");
     cookiesMock.mockResolvedValue({
-      get: vi.fn().mockReturnValue({ value: "session-cookie-token" }),
+      get: vi.fn((name: string) => {
+        if (name === AUTH_COOKIE_NAME) return { value: "session-cookie-token" };
+        return undefined;
+      }),
     });
   });
 
@@ -85,6 +90,39 @@ describe("api v1 proxy route", () => {
     expect(forwardedHeaders.get("X-Api-Key")).toBe("service-secret");
     expect(forwardedHeaders.get("X-Dashboard-User-Token")).toBe("server-minted-dashboard-token");
     expect(forwardedHeaders.get("X-User-Github-Id")).toBeNull();
+  });
+
+  it("rejects rerun requests when cf_clearance cookie is missing", async () => {
+    parseSessionTokenMock.mockResolvedValue({
+      sub: "12345",
+      user: { id: 12345, login: "octocat" },
+      exp: Math.floor(Date.now() / 1000) + 60,
+    });
+    createDashboardUserTokenMock.mockReturnValue("server-minted-dashboard-token");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const routeModule = await import("./route");
+    const request = new Request("http://localhost:3000/api/v1/reviews/123/rerun?installation_id=1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    const response = await routeModule.POST(request, {
+      params: Promise.resolve({ path: ["reviews", "123", "rerun"] }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      detail: "Turnstile clearance cookie required to re-run reviews.",
+      error: {
+        code: "AUTH_CLEARANCE_REQUIRED",
+        family: "auth",
+        action: "none",
+        message: "Turnstile clearance cookie required to re-run reviews.",
+        retryable: false,
+      },
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("rejects oversized request bodies with 413", async () => {
@@ -181,5 +219,42 @@ describe("api v1 proxy route", () => {
       action: "retry",
       request_id: "api-req-1",
     });
+  });
+
+  it("forwards cf_clearance to backend when present", async () => {
+    parseSessionTokenMock.mockResolvedValue({
+      sub: "12345",
+      user: { id: 12345, login: "octocat" },
+      exp: Math.floor(Date.now() / 1000) + 60,
+    });
+    createDashboardUserTokenMock.mockReturnValue("server-minted-dashboard-token");
+    cookiesMock.mockResolvedValue({
+      get: vi.fn((name: string) => {
+        if (name === AUTH_COOKIE_NAME) return { value: "session-cookie-token" };
+        if (name === "cf_clearance") return { value: "cf-clearance-token" };
+        return undefined;
+      }),
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const routeModule = await import("./route");
+    const request = new Request("http://localhost:3000/api/v1/reviews/123/rerun?installation_id=1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    await routeModule.POST(request, {
+      params: Promise.resolve({ path: ["reviews", "123", "rerun"] }),
+    });
+
+    const fetchCall = fetchSpy.mock.calls[0];
+    const options = fetchCall?.[1] as RequestInit | undefined;
+    const forwardedHeaders = options?.headers as Headers;
+    expect(forwardedHeaders.get("X-CF-Clearance")).toBe("cf-clearance-token");
   });
 });

@@ -100,13 +100,11 @@ export async function actionFetchOutcomeSummary(
 export async function actionRerunReview(
   reviewId: number,
   installationId: number,
-  turnstileToken: string | null = null,
 ): Promise<{ ok: boolean; review_id: number }> {
   return serverBffFetch<{ ok: boolean; review_id: number }>(
     `/api/v1/reviews/${reviewId}/rerun?installation_id=${installationId}`,
     {
       method: "POST",
-      body: JSON.stringify({ turnstile_token: turnstileToken }),
     },
   );
 }

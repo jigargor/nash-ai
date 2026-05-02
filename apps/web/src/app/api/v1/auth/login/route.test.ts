@@ -26,8 +26,15 @@ describe("auth login route", () => {
   it("returns 303 to GitHub and sets oauth cookies on successful POST", async () => {
     vi.stubEnv("GITHUB_CLIENT_ID", "test-client-id");
     vi.stubEnv("GITHUB_CLIENT_SECRET", "test-client-secret");
+    vi.stubEnv("TURNSTILE_SECRET_KEY", "turnstile-secret");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
 
-    const requestBody = new URLSearchParams();
+    const requestBody = new URLSearchParams({ turnstile_token: "test-token" });
     const request = new Request("https://nash-ai.app/api/v1/auth/login", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -70,7 +77,7 @@ describe("auth login route", () => {
     expect(body.error).toContain("GitHub OAuth is not configured");
   });
 
-  it("GET redirects directly to GitHub authorize URL", async () => {
+  it("GET redirects to login page to enforce turnstile first", async () => {
     vi.stubEnv("GITHUB_CLIENT_ID", "test-client-id");
     vi.stubEnv("GITHUB_CLIENT_SECRET", "test-client-secret");
     cookiesMock.mockResolvedValue({
@@ -80,7 +87,31 @@ describe("auth login route", () => {
     const routeModule = await loadRouteModule();
     const response = await routeModule.GET(new Request("https://nash-ai.app/api/v1/auth/login"));
 
-    expect(response.status).toBe(307);
-    expect(response.headers.get("location")?.startsWith("https://github.com/login/oauth/authorize?")).toBe(true);
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("https://nash-ai.app/login");
+  });
+
+  it("returns to login with turnstile_failed when verification fails", async () => {
+    vi.stubEnv("GITHUB_CLIENT_ID", "test-client-id");
+    vi.stubEnv("GITHUB_CLIENT_SECRET", "test-client-secret");
+    vi.stubEnv("TURNSTILE_SECRET_KEY", "turnstile-secret");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const request = new Request("https://nash-ai.app/api/v1/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ turnstile_token: "bad-token" }).toString(),
+    });
+
+    const routeModule = await loadRouteModule();
+    const response = await routeModule.POST(request);
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("https://nash-ai.app/login?error=turnstile_failed");
   });
 });

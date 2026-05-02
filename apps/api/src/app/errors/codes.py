@@ -16,7 +16,7 @@ def family_for_status(status_code: int) -> ErrorFamily:
         return "rate_limit"
     if status_code == 503:
         return "dependency"
-    if status_code == 502:
+    if status_code in {502, 504}:
         return "upstream"
     return "internal"
 
