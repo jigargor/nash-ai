@@ -95,14 +95,6 @@ vi.mock("@/hooks/use-review-actions", () => ({
   }),
 }));
 
-vi.mock("@/components/security/turnstile-widget", () => ({
-  TurnstileWidget: ({ onToken }: { onToken: (token: string) => void }) => (
-    <button type="button" onClick={() => onToken("test-token")}>
-      Complete mock verification
-    </button>
-  ),
-}));
-
 describe("PrReviewPageClient", () => {
   beforeEach(() => {
     rerunState.isPending = false;

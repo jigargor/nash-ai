@@ -9,7 +9,6 @@ import { DiffViewer } from "@/components/review/diff-viewer";
 import { FileTree } from "@/components/review/file-tree";
 import { FindingsPanel } from "@/components/review/findings-panel";
 import { StreamingStatus } from "@/components/review/streaming-status";
-import { TurnstileWidget } from "@/components/security/turnstile-widget";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
@@ -29,9 +28,6 @@ interface PrReviewPageClientProps {
   reviewId: number;
   installationId: number;
 }
-
-const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "";
-const requiresPageVerification = turnstileSiteKey.length > 0;
 
 function isFindingVisible(_finding: Finding): boolean {
   return true;
@@ -308,19 +304,13 @@ function ProviderAvailabilityIndicator({
 export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installationId }: PrReviewPageClientProps) {
   const repoUrl = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const prUrl = `${repoUrl}/pull/${encodeURIComponent(prNumber)}`;
-  const [hasPassedPageVerification, setHasPassedPageVerification] = useState(!requiresPageVerification);
-  const [pageTurnstileError, setPageTurnstileError] = useState<string | null>(null);
-  const reviewQuery = useReview(reviewId, installationId, { enabled: hasPassedPageVerification });
+  const reviewQuery = useReview(reviewId, installationId);
   const rerunMutation = useRerunReview();
   const dismissMutation = useDismissFinding();
-  const modelAudits = useReviewModelAudits(reviewId, installationId, {
-    enabled: hasPassedPageVerification,
-  });
+  const modelAudits = useReviewModelAudits(reviewId, installationId);
   const selectedFindingIndex = useReviewUiStore((state) => state.selectedFindingIndex);
   const setSelectedFindingIndex = useReviewUiStore((state) => state.setSelectedFindingIndex);
-  const { connectionState } = useReviewStream(reviewId, installationId, {
-    enabled: hasPassedPageVerification,
-  });
+  const { connectionState } = useReviewStream(reviewId, installationId);
   const [userSelectedRunId, setUserSelectedRunId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -475,58 +465,6 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     displayedFindings,
     summaryParagraph,
   ]);
-
-  if (!hasPassedPageVerification && turnstileSiteKey) {
-    return (
-      <section className="pr-review-page" style={{ display: "grid", gap: "1rem" }}>
-        <div style={{ marginBottom: "-0.35rem" }}>
-          <Link href="/reviews" className="pr-review-back-link" aria-label="Back to all reviews">
-            <span aria-hidden className="pr-review-back-arrow">
-              ←
-            </span>
-            Back to reviews
-          </Link>
-        </div>
-        <Panel elevated>
-          <h1 style={{ margin: 0, fontFamily: "var(--font-instrument-serif)", overflowWrap: "anywhere", wordBreak: "break-word" }}>
-            <a href={repoUrl} target="_blank" rel="noopener noreferrer">
-              {owner}/{repo}
-            </a>{" "}
-            ·{" "}
-            <a href={prUrl} target="_blank" rel="noopener noreferrer">
-              PR #{prNumber}
-            </a>
-          </h1>
-          <div
-            style={{
-              marginTop: "0.85rem",
-              border: "1px solid var(--border-strong)",
-              background: "var(--card-muted)",
-              borderRadius: "var(--radius-md)",
-              padding: "0.75rem",
-              display: "grid",
-              gap: "0.45rem",
-            }}
-          >
-            <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)" }}>
-              Complete Turnstile verification before review data loads.
-            </p>
-            <TurnstileWidget
-              siteKey={turnstileSiteKey}
-              onToken={() => {
-                setPageTurnstileError(null);
-                setHasPassedPageVerification(true);
-              }}
-              onError={() => setPageTurnstileError("Turnstile did not load. Please disable blockers and retry.")}
-            />
-            {pageTurnstileError ? (
-              <p style={{ margin: 0, fontSize: "0.78rem", color: "#f43f5e" }}>{pageTurnstileError}</p>
-            ) : null}
-          </div>
-        </Panel>
-      </section>
-    );
-  }
 
   if (reviewQuery.isLoading) {
     return <StateBlock title="Loading review details" description="Preparing findings, stream status, and pipeline." />;
