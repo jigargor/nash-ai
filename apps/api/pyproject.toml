@@ -22,7 +22,8 @@ dependencies = [
   "asyncpg>=0.31.0",
   "alembic>=1.18.4",
   "arq>=0.28.0",
-  "redis>=7.4.0,<8",
+  # redis-py <6 required by arq; 5.x clients work with Redis server 7+
+  "redis>=5.0.0,<6",
   "pydantic>=2.13.3",
   "pydantic-settings>=2.14.0",
   "cryptography>=47.0.0",
