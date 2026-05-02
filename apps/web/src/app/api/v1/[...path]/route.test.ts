@@ -112,7 +112,16 @@ describe("api v1 proxy route", () => {
     });
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ detail: "Turnstile clearance cookie required to re-run reviews." });
+    expect(await response.json()).toMatchObject({
+      detail: "Turnstile clearance cookie required to re-run reviews.",
+      error: {
+        code: "AUTH_CLEARANCE_REQUIRED",
+        family: "auth",
+        action: "none",
+        message: "Turnstile clearance cookie required to re-run reviews.",
+        retryable: false,
+      },
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
