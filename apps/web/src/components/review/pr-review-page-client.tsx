@@ -9,6 +9,7 @@ import { DiffViewer } from "@/components/review/diff-viewer";
 import { FileTree } from "@/components/review/file-tree";
 import { FindingsPanel } from "@/components/review/findings-panel";
 import { StreamingStatus } from "@/components/review/streaming-status";
+import { TurnstileWidget } from "@/components/security/turnstile-widget";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
@@ -28,6 +29,9 @@ interface PrReviewPageClientProps {
   reviewId: number;
   installationId: number;
 }
+
+const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "";
+const requiresPageVerification = turnstileSiteKey.length > 0;
 
 function isFindingVisible(_finding: Finding): boolean {
   return true;
