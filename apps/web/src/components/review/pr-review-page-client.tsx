@@ -302,8 +302,6 @@ function ProviderAvailabilityIndicator({
 }
 
 export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installationId }: PrReviewPageClientProps) {
-  const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? "";
-  const requiresPageVerification = turnstileSiteKey.length > 0;
   const repoUrl = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const prUrl = `${repoUrl}/pull/${encodeURIComponent(prNumber)}`;
   const reviewQuery = useReview(reviewId, installationId);

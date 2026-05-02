@@ -136,17 +136,14 @@ describe("PrReviewPageClient", () => {
     expect(scoped.queryAllByText("second")).toHaveLength(0);
   });
 
-  it("loads review data when Turnstile site key is set (page gate or login-only)", () => {
+  it("loads review data immediately when Turnstile site key is set", () => {
     process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY = "test-site-key";
     render(<PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />);
 
-    const verifyButton = screen.queryByRole("button", { name: /Complete mock verification/i });
-    if (verifyButton) fireEvent.click(verifyButton);
-
     const lastReviewOpts = useReviewMock.mock.calls.filter((c) => c[0] === 1 && c[1] === 10).at(-1)?.[2];
     const lastAuditsOpts = useReviewModelAuditsMock.mock.calls.filter((c) => c[0] === 1 && c[1] === 10).at(-1)?.[2];
-    expect(lastReviewOpts).toEqual({ enabled: true });
-    expect(lastAuditsOpts).toEqual({ enabled: true });
+    expect(lastReviewOpts).toBeUndefined();
+    expect(lastAuditsOpts).toBeUndefined();
     expect(screen.getAllByRole("button", { name: /Re-run review/i }).length).toBeGreaterThan(0);
   });
 });
