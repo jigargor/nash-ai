@@ -10,7 +10,7 @@ const rerunState = {
 };
 
 const useReviewMock = vi.fn(
-  (_reviewId: number, _installationId: number, _options: { enabled: boolean }) => ({
+  (_reviewId: number, _installationId: number, _options?: { enabled?: boolean }) => ({
   isLoading: false,
   isError: false,
   data: {
@@ -49,7 +49,7 @@ const useReviewMock = vi.fn(
   },
 }));
 const useReviewModelAuditsMock = vi.fn(
-  (_reviewId: number, _installationId: number, _options: { enabled: boolean }) => ({
+  (_reviewId: number, _installationId: number, _options?: { enabled?: boolean }) => ({
   data: {
     model_audits: [],
   },
@@ -69,7 +69,7 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("@/hooks/use-review", () => ({
-  useReview: (reviewId: number, installationId: number, options: { enabled: boolean }) =>
+  useReview: (reviewId: number, installationId: number, options?: { enabled?: boolean }) =>
     useReviewMock(reviewId, installationId, options),
 }));
 
@@ -81,7 +81,7 @@ vi.mock("@/hooks/use-review-stream", () => ({
 }));
 
 vi.mock("@/hooks/use-review-model-audits", () => ({
-  useReviewModelAudits: (reviewId: number, installationId: number, options: { enabled: boolean }) =>
+  useReviewModelAudits: (reviewId: number, installationId: number, options?: { enabled?: boolean }) =>
     useReviewModelAuditsMock(reviewId, installationId, options),
 }));
 
@@ -144,18 +144,12 @@ describe("PrReviewPageClient", () => {
     expect(scoped.queryAllByText("second")).toHaveLength(0);
   });
 
-  it("gates review data until Turnstile passes", () => {
+  it("loads review data when Turnstile site key is set (Turnstile is login-only)", () => {
     process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY = "test-site-key";
     render(<PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />);
 
-    expect(screen.getByText("Complete Turnstile verification before review data loads.")).toBeInTheDocument();
-    expect(useReviewMock).toHaveBeenCalledWith(1, 10, { enabled: false });
-    expect(useReviewModelAuditsMock).toHaveBeenCalledWith(1, 10, { enabled: false });
-
-    fireEvent.click(screen.getByRole("button", { name: "Complete mock verification" }));
-
-    expect(useReviewMock).toHaveBeenLastCalledWith(1, 10, { enabled: true });
-    expect(useReviewModelAuditsMock).toHaveBeenLastCalledWith(1, 10, { enabled: true });
-    expect(screen.queryByText("Complete Turnstile verification before review data loads.")).not.toBeInTheDocument();
+    expect(useReviewMock).toHaveBeenCalledWith(1, 10, undefined);
+    expect(useReviewModelAuditsMock).toHaveBeenCalledWith(1, 10, undefined);
+    expect(screen.getAllByRole("button", { name: /Re-run review/i }).length).toBeGreaterThan(0);
   });
 });
