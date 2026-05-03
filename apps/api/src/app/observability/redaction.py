@@ -85,7 +85,7 @@ def _redact_sensitive_strings(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _truncate_payload(payload: dict[str, Any], *, max_metadata_bytes: int) -> dict[str, Any]:
-    encoded = str(payload).encode("utf-8", errors="ignore")
+    encoded = json.dumps(payload, default=str).encode("utf-8")
     if len(encoded) <= max_metadata_bytes:
         return payload
     return {
