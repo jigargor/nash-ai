@@ -1,0 +1,204 @@
+orchestration:
+  goal: "Build a snapshot-driven eval replay system that exports labeled/confident production reviews into eval cases, organizes them into bucketed datasets, and runs them through an in-repo pytest-shaped harness with custom metrics. Prepare the harness architecture for DeepEval integration in P5 without making DeepEval the source of truth for eval definitions."
+  mode: "implement"
+  merge_strategy: "hybrid"
+
+  prerequisites:
+    required_phases:
+      - "P1 (Observability Core) merged — records and IDs available for snapshot correlation"
+      - "Pre-feature Phase 2 (generate_predictions.py) merged — baseline prediction pipeline exists"
+      - "Pre-feature Phase 6 (category normalization) merged — canonical categories in place"
+    verify_before_start:
+      - "evals/generate_predictions.py exists and produces candidate/*.json"
+      - "CI eval gate functional with baseline vs candidate comparison"
+      - "Canonical category enum shared between Python and TypeScript"
+      - "ReviewTraceRecord and ContextBuildRecord being emitted by observer"
+
+  scoring:
+    correctness: 0.35
+    maintainability: 0.20
+    risk: 0.25
+    performance: 0.20
+
+  workers:
+    - id: "w1"
+      agent: "eval-architect"
+      model: "claude-4.6-opus-max-thinking"
+      focus: >
+        Design and implement the snapshot export pipeline. Build a CLI/script that queries
+        review_context_snapshots from the DB, joins with observability records (ReviewTraceRecord)
+        and any existing outcome labels, and exports eval cases. Each case must include:
+        the frozen context snapshot (diff hunks, file contents, repo metadata), the review
+        configuration at time of review (model, prompt version, confidence thresholds,
+        validators enabled), the actual findings produced, and the outcome label (if available).
+        Cases without labels get auto-labeled from signals: merged-without-change = likely clean,
+        suggestion-applied = useful finding, finding-dismissed = likely FP.
+        Build the dataset bucketing system: assign each case to one or more buckets based on
+        heuristics (file extensions, diff patterns, finding categories, repo metadata).
+        Define bucket taxonomy: clean, security, correctness, performance, fp_traps,
+        vendor_generated, large_pr_chunking, repo_policy, framework_quirks.
+        Store exported datasets as versioned JSON under evals/datasets/{bucket}/{case_id}.json
+        with a manifest evals/datasets/manifest.json tracking case counts, versions, and
+        export timestamps.
+      codebase_targets:
+        - "evals/export_cases.py — new snapshot export pipeline"
+        - "evals/datasets/ — bucketed dataset storage"
+        - "evals/buckets.py — bucket taxonomy and assignment heuristics"
+        - "apps/api/src/app/db/ — query helpers for snapshot + record joins"
+
+    - id: "w2"
+      agent: "eval-engineer"
+      model: "gpt-5.3-codex-high-fast"
+      focus: >
+        Build the pytest-shaped eval harness that runs replay evals against exported
+        snapshot datasets. The harness must:
+        1) Load eval cases from evals/datasets/ by bucket or full suite.
+        2) For each case, reconstruct the review context from the snapshot and run the
+        current pipeline code (prompt, model config, validators) against it — this is
+        offline replay, no live GitHub API calls.
+        3) Produce candidate findings and compare against baseline findings using the
+        existing eval matcher (evals/run_eval.py).
+        4) Compute per-case metrics: precision, recall, anchor validity, schema validity,
+        finding count delta, new findings, dropped findings, category drift.
+        5) Aggregate metrics per-bucket and overall.
+        6) Output results as JSON (for CI gate) and human-readable report (for PR comments).
+        Structure the harness as pytest tests under evals/tests/ so DeepEval can wrap
+        them in P5 without restructuring. Each bucket is a parameterized test fixture.
+        Custom metrics are plain Python functions that return (score, pass_fail, details)
+        tuples — not tied to any framework's metric class yet.
+      codebase_targets:
+        - "evals/tests/ — pytest-shaped eval test suite"
+        - "evals/metrics/ — custom metric functions"
+        - "evals/replay.py — offline replay engine"
+        - "evals/run_eval.py — extend existing matcher with new metrics"
+        - "evals/conftest.py — fixtures for bucket loading and replay setup"
+
+    - id: "w3"
+      agent: "ci-engineer"
+      model: "claude-4.6-sonnet-medium"
+      focus: >
+        Wire the eval replay into CI and build the regression detection pipeline.
+        1) Extend .github/workflows/ to run eval replay on PRs that touch prompt files,
+        model config, validator logic, or pipeline code (path-based trigger).
+        2) The CI step must: export latest snapshot cases (or use cached dataset),
+        run replay against current branch code, compare against baseline metrics stored
+        in evals/baselines/, and fail if any bucket's precision drops below threshold
+        or if regression is detected.
+        3) Build the baseline management system: evals/baselines/{version}.json stores
+        per-bucket metric snapshots. A script evals/update_baseline.py promotes current
+        metrics to baseline after manual review.
+        4) Generate a CI comment summarizing per-bucket metric deltas for reviewer context.
+        5) Add dataset versioning checks: if the dataset version changes, force baseline
+        re-generation to prevent stale comparisons.
+      codebase_targets:
+        - ".github/workflows/ — eval CI workflow extension"
+        - "evals/baselines/ — baseline metric storage"
+        - "evals/update_baseline.py — baseline promotion script"
+        - "evals/ci_report.py — CI comment generation"
+
+  dataset_design:
+    case_schema:
+      id: "UUIDv7 — matches review_id from observability records"
+      version: "Monotonic integer — bumped on re-export with different snapshot data"
+      bucket: "Primary bucket assignment (enum from bucket taxonomy)"
+      secondary_buckets: "Additional bucket tags for cross-cutting analysis"
+      snapshot:
+        diff_hunks: "Frozen diff content from review_context_snapshot"
+        file_contents: "Frozen surrounding context from snapshot"
+        repo_metadata: "Language, framework, size, org-level config"
+      config_at_review:
+        model: "Model used for primary review"
+        prompt_version: "Hash of prompt template at review time"
+        confidence_thresholds: "Per-category thresholds active at review time"
+        validators_enabled: "List of active validators"
+      findings: "Array of findings produced (the 'expected output' for eval)"
+      outcome_label: "Optional: TP, FP, useful, dismissed, ignored, auto-labeled"
+      outcome_source: "manual | auto_signal | unlabeled"
+      metadata:
+        review_id: "Link back to production review"
+        export_timestamp: "When this case was exported"
+        pr_url: "GitHub PR URL for reference"
+
+    bucket_taxonomy:
+      clean: "PRs with no real issues — should produce zero or near-zero findings"
+      security: "PRs with known security issues — should catch them"
+      correctness: "Logic bugs, null checks, race conditions, off-by-ones"
+      performance: "N+1 queries, unbounded loops, memory leaks, blocking I/O"
+      fp_traps: "PRs designed to trigger common false positive patterns"
+      vendor_generated: "Generated code, lockfiles, vendor directories — should skip or minimize"
+      large_pr_chunking: "PRs requiring chunked review — tests chunking quality"
+      repo_policy: "Org-specific rules, CODEOWNERS, required labels, branch policies"
+      framework_quirks: "Framework-specific patterns (Next.js, FastAPI, React, etc.)"
+
+    auto_labeling_signals:
+      merged_without_change: "PR merged without addressing finding → likely FP or not-worth-posting"
+      suggestion_applied: "Suggestion commit applied → useful finding"
+      finding_dismissed: "Reviewer dismissed via reaction or comment → likely FP"
+      finding_resolved: "Finding addressed in follow-up commit → true positive"
+      no_interaction_7d: "No interaction after 7 days → ignored"
+
+  recommendations:
+    - title: "Keep eval definitions in-repo, not in DeepEval"
+      detail: >
+        Custom metrics (precision, recall, anchor validity, etc.) should be plain Python
+        functions in evals/metrics/. DeepEval in P5 will wrap these as DeepEval custom
+        metrics, but the canonical definition stays in-repo. This ensures you can run evals
+        without DeepEval, switch frameworks later, and version metrics with your code.
+    - title: "Snapshot immutability"
+      detail: >
+        Once a snapshot is exported as an eval case, it must never be mutated. Version bumps
+        create new case files. This prevents silent baseline drift and ensures reproducibility.
+    - title: "Separate export from replay"
+      detail: >
+        The export pipeline (DB → JSON cases) and the replay pipeline (JSON cases → findings →
+        metrics) should be completely decoupled. Export runs against production DB. Replay
+        runs against local JSON files with no DB or API dependencies. This allows CI replay
+        without production DB access.
+    - title: "Start with manual dataset curation"
+      detail: >
+        Auto-labeling signals are heuristics. For the initial baseline, manually curate
+        10-20 cases per bucket with verified labels. Use auto-labeled cases to expand the
+        dataset over time, but always track label_source so you can filter to high-confidence
+        cases for critical metrics.
+    - title: "Replay must be deterministic"
+      detail: >
+        Set temperature=0, fixed seed where supported, and mock any non-deterministic inputs
+        (timestamps, random IDs). For live-model replay (optional), run 3x and take majority
+        vote. For CI, always use cached/snapshot replay — never live LLM calls.
+
+  constraints:
+    - "Eval replay must not require live LLM API keys — use snapshot/cached replay for CI."
+    - "Dataset files must not contain secrets, PII, or raw repository code at INFO log level."
+    - "Snapshot export must respect existing tenant isolation — no cross-installation data leaks."
+    - "CI eval gate must not add more than 60 seconds to pipeline for cached replay."
+    - "Custom metrics must be plain Python functions, not tied to any eval framework."
+    - "Baseline promotion must be a manual, auditable step — no auto-promotion."
+    - "All new code must pass mypy --strict."
+    - "Dataset versioning must prevent stale baseline comparisons."
+
+  acceptance:
+    - "evals/export_cases.py exports snapshot cases from production reviews"
+    - "Each exported case includes frozen snapshot, config-at-review, findings, and outcome label"
+    - "Auto-labeling assigns labels from merge/dismiss/apply/ignore signals"
+    - "Cases assigned to buckets via heuristic classifier"
+    - "At least 9 bucket types defined with assignment rules"
+    - "evals/tests/ contains pytest-parameterized tests per bucket"
+    - "Offline replay engine reconstructs review context from snapshot without live API"
+    - "Custom metrics compute precision, recall, anchor validity, schema validity per case"
+    - "Per-bucket and overall metric aggregation produces JSON report"
+    - "CI workflow triggers eval replay on prompt/model/validator/pipeline changes"
+    - "Baseline management system stores versioned metric snapshots"
+    - "Precision regression below threshold fails CI"
+    - "CI comment summarizes per-bucket metric deltas"
+    - "Dataset manifest tracks case counts, versions, export timestamps"
+    - "Metrics are plain Python functions, not framework-coupled"
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: false
+    include_data_contracts: true
+    include_eval_pipeline_design: true

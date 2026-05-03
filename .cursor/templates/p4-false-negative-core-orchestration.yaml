@@ -1,0 +1,222 @@
+orchestration:
+  goal: "Build a missed-issue and false-negative capture system that detects issues the reviewer should have found but didn't, converts them into eval regression cases, and feeds them into both the eval dataset (P2) and Langfuse as negative-signal scores (P1). Create a closed loop where every missed issue becomes a regression test that future prompt/model changes must pass."
+  mode: "implement"
+  merge_strategy: "hybrid"
+
+  prerequisites:
+    required_phases:
+      - "P1 (Observability Core) merged — ReviewTraceRecord for correlation"
+      - "P2 (Eval Replay Core) merged — eval case format and bucket taxonomy available"
+      - "P3 (Human Feedback Core) merged — feedback event interface for signal routing"
+      - "Pre-feature Phase 4 (false-negative capture) merged — missed_issues DB table exists"
+    verify_before_start:
+      - "missed_issues table exists with review_id, file_path, line_start, description, expected_category, expected_severity, how_found, notes"
+      - "Eval case export pipeline can ingest cases with expected findings"
+      - "Feedback event interface supports new signal types"
+      - "Langfuse deferred score attachment functional"
+
+  scoring:
+    correctness: 0.35
+    maintainability: 0.20
+    risk: 0.30
+    performance: 0.15
+
+  workers:
+    - id: "w1"
+      agent: "backend-engineer"
+      model: "claude-4.6-opus-max-thinking"
+      focus: >
+        Build automated false-negative detection from external signals. Implement detectors
+        for each how_found source:
+        1) Bug-fix commit detector: monitor merged PRs in reviewed repositories. When a
+        commit message matches bug-fix patterns (fix, bugfix, hotfix, patch, resolve,
+        CVE-*, security) and modifies files that were in a recently-reviewed PR's diff,
+        create a candidate missed-issue record linked to the original review.
+        2) Static analyzer import: accept findings from external tools (ESLint, Ruff,
+        Semgrep, CodeQL) via API endpoint. Compare against the review's findings —
+        issues found by the analyzer but not by the reviewer become candidate missed-issues.
+        3) Test failure correlation: when a test failure is reported (via CI webhook or
+        manual entry) and the failing test touches files from a recent review, create
+        a candidate missed-issue.
+        4) Maintainer report: the manual missed-issue endpoint from pre-feature Phase 4,
+        enhanced with structured fields for expected_finding (category, severity, description,
+        suggested_fix) and comparison_metadata (what the reviewer said vs what was missed).
+        All candidates start as "candidate" status requiring triage. Triage upgrades to
+        "confirmed" (real miss), "not_applicable" (would not have been in scope), or
+        "already_caught" (reviewer found it but in a different form).
+      codebase_targets:
+        - "apps/api/src/app/feedback/detectors/ — automated detection implementations"
+        - "apps/api/src/app/feedback/detectors/bugfix_commit.py — bug-fix commit detector"
+        - "apps/api/src/app/feedback/detectors/static_analyzer.py — external tool import"
+        - "apps/api/src/app/feedback/detectors/test_failure.py — test failure correlation"
+        - "apps/api/src/app/feedback/models.py — extend with missed-issue candidate model"
+        - "apps/api/src/app/webhooks/ — extend for bug-fix commit detection"
+        - "apps/api/src/app/api/ — static analyzer import endpoint"
+
+    - id: "w2"
+      agent: "eval-engineer"
+      model: "gpt-5.3-codex-high-fast"
+      focus: >
+        Build the missed-issue → regression case pipeline. When a missed-issue is confirmed:
+        1) Create a regression eval case. The case includes the original review's snapshot
+        (from P2), the expected finding that was missed (from the missed-issue record),
+        and metadata about how it was discovered.
+        2) Assign the case to the appropriate eval bucket (security, correctness, performance,
+        etc.) based on the expected_category. Also tag it with a "regression" marker so
+        regression-specific test runs can be isolated.
+        3) Add the case to evals/datasets/regression/ as a separate regression suite that
+        must always pass — regressions are non-negotiable.
+        4) Build a regression runner: evals/run_regression.py that specifically tests
+        confirmed missed-issues against current pipeline code. A regression is "fixed"
+        when the current pipeline would catch the issue. Regressions that remain unfixed
+        for >2 weeks should trigger an alert.
+        5) Extend the CI eval gate: regression suite must pass with 100% recall on confirmed
+        missed-issues. Any prompt/model change that causes a regression to reappear fails CI.
+        6) Build the recall metric computation: per-category false-negative rate computed
+        from confirmed missed-issues against total reviewed findings in that category.
+        Feed this into the aggregate metrics from P3.
+      codebase_targets:
+        - "evals/regression/ — regression test suite"
+        - "evals/run_regression.py — regression-specific runner"
+        - "evals/export_cases.py — extend with regression case generation"
+        - "evals/metrics/recall.py — per-category false-negative rate"
+        - ".github/workflows/ — extend CI with regression gate"
+        - "apps/api/src/app/feedback/pipelines/ — missed-issue → case pipeline"
+
+    - id: "w3"
+      agent: "frontend-engineer"
+      model: "claude-4.6-sonnet-medium"
+      focus: >
+        Build the missed-issue triage UI and false-negative analytics dashboard.
+        1) Missed-issue triage queue: a dashboard page showing candidate missed-issues
+        sorted by severity and recency. Each card shows the original review summary,
+        the detected miss, how it was found, and the relevant code diff. Triage actions:
+        confirm (with optional correction of category/severity), not_applicable, already_caught.
+        2) Missed-issue report form: a form accessible from the review detail page and
+        from a standalone page. Structured fields for file_path, line, description,
+        expected_category, expected_severity, how_found, optional suggested_fix.
+        3) False-negative analytics: extend the feedback metrics dashboard with a
+        "Missed Issues" tab showing: missed issues by category (pie chart), missed issues
+        by detection source (bar chart), recall trend over time (line chart), time-to-detection
+        distribution, and a table of recent confirmed misses with links to reviews.
+        4) Regression suite status: show current regression suite pass/fail status with
+        per-case details — which regressions are fixed, which remain open.
+      codebase_targets:
+        - "apps/web/src/app/dashboard/missed-issues/ — triage and analytics pages"
+        - "apps/web/src/components/missed-issues/ — triage cards, report form"
+        - "apps/web/src/components/feedback/ — extend metrics dashboard"
+        - "apps/web/src/hooks/ — missed-issue data hooks"
+        - "apps/web/src/lib/api/ — missed-issue API client functions"
+
+  detection_design:
+    candidate_lifecycle:
+      created: "Automated detector or manual report creates candidate"
+      candidate: "Awaiting triage — not yet used for eval or metrics"
+      confirmed: "Triaged as real miss — feeds regression suite and recall metrics"
+      not_applicable: "Triaged as out-of-scope for reviewer"
+      already_caught: "Triaged as caught but in different form"
+    detection_sources:
+      bugfix_commit:
+        trigger: "Merged commit with bug-fix pattern in message"
+        matching: "File overlap between fix commit and reviewed PR diff"
+        confidence: "0.6 — requires triage confirmation"
+        rate_limit: "Max 10 candidates per review to prevent noise"
+        lookback_days: 30  # fix commit must be within 30 days of the review
+      static_analyzer:
+        trigger: "External tool findings imported via API"
+        matching: "Finding file/line within reviewed PR diff, not in reviewer findings"
+        confidence: "0.7 — depends on tool precision"
+        supported_tools: ["eslint", "ruff", "semgrep", "codeql", "custom"]
+      test_failure:
+        trigger: "CI failure on files in recently-reviewed PR"
+        matching: "Failing test file or tested module overlaps with review diff"
+        confidence: "0.5 — weakest signal, may be unrelated"
+      manual_report:
+        trigger: "Human submits missed-issue form"
+        matching: "Direct specification of file/line/expected finding"
+        confidence: "0.9 — human-reported, still triaged for accuracy"
+
+  recommendations:
+    - title: "Separate candidate from confirmed to avoid poisoning evals"
+      detail: >
+        Automated detectors will produce noisy candidates. Only confirmed missed-issues
+        should enter the regression suite or affect recall metrics. Candidates stay in
+        triage until a human reviews them. This prevents a bad bug-fix-commit heuristic
+        from injecting false regression cases that break CI.
+    - title: "Regression suite is append-only with explicit removal"
+      detail: >
+        Once a missed-issue is confirmed and added to the regression suite, it stays
+        there permanently unless explicitly archived with a reason (e.g., "out of scope
+        after policy change", "test case invalid"). This ensures regressions are never
+        silently lost. Archive requires admin action with audit log.
+    - title: "Rate-limit automated detection to prevent noise"
+      detail: >
+        The bug-fix-commit detector could generate hundreds of candidates for active
+        repos. Cap at 10 candidates per review and require the fix commit to be within
+        30 days of the review. Also deduplicate — if the same file/line has an existing
+        candidate or confirmed miss, don't create a duplicate.
+    - title: "Langfuse negative scores for false negatives"
+      detail: >
+        When a missed-issue is confirmed, retroactively attach a negative score to the
+        original review's Langfuse trace: false_negative_count, false_negative_categories.
+        This enables Langfuse-based filtering for reviews with known misses and provides
+        the signal for P5 judge comparison.
+    - title: "Use missed-issues for targeted prompt improvement in P6"
+      detail: >
+        Cluster confirmed missed-issues by category and pattern. If 5+ missed-issues share
+        a pattern (e.g., "missed null check after optional chaining"), that pattern becomes
+        a prompt engineering target in P6. Tag the cluster for the experiment system.
+
+  sensitive_path_gates:
+    applies: true
+    sensitive_prefixes:
+      - "apps/api/src/app/webhooks/"
+      - "apps/api/src/app/api/"
+      - "apps/api/src/app/db/"
+      - "apps/api/alembic/"
+    required_checks:
+      - "Bug-fix-commit webhook handler verifies HMAC"
+      - "Static analyzer import endpoint auth-gated"
+      - "Tenant isolation: candidates scoped to installation"
+      - "DB migrations have forward + rollback"
+      - "No raw code content at INFO log level in detection logs"
+
+  constraints:
+    - "Only confirmed missed-issues enter the regression suite — candidates stay in triage."
+    - "Regression suite must pass with 100% recall on confirmed cases — no exceptions."
+    - "Automated detection rate-limited to prevent noise (max 10 candidates per review)."
+    - "Bug-fix commit detection limited to 30-day window after review."
+    - "Regression cases are append-only — removal requires admin action with audit log."
+    - "Static analyzer import endpoint auth-gated and rate-limited."
+    - "No raw code content logged at INFO level in detection pipeline."
+    - "Webhook handlers verify HMAC before processing fix-commit events."
+    - "Tenant isolation enforced on all candidate/confirmed records."
+    - "mypy --strict, existing .cursor/rules constraints."
+
+  acceptance:
+    - "Bug-fix-commit detector creates candidates from merged fix commits overlapping reviewed files"
+    - "Static analyzer import endpoint accepts findings from ESLint/Ruff/Semgrep/CodeQL"
+    - "Test failure correlation creates candidates from CI failures on reviewed files"
+    - "Manual missed-issue form captures structured expected_finding data"
+    - "Candidate lifecycle: candidate → confirmed/not_applicable/already_caught"
+    - "Only confirmed missed-issues enter regression suite"
+    - "Regression eval cases include original snapshot + expected finding"
+    - "Regression runner (run_regression.py) tests current pipeline against confirmed cases"
+    - "CI regression gate: 100% recall on confirmed cases required"
+    - "Per-category false-negative rate computed from confirmed misses"
+    - "Langfuse negative scores attached to reviews with confirmed misses"
+    - "Triage queue UI with confirm / not_applicable / already_caught actions and candidate details"
+    - "Missed-issue report form with structured fields"
+    - "False-negative analytics dashboard: by category, by source, recall trend"
+    - "Regression suite status visible in dashboard"
+    - "Automated detection rate-limited (max 10/review, 30-day window)"
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: true
+    include_data_contracts: true
+    include_eval_pipeline_design: true

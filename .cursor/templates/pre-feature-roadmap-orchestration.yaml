@@ -316,7 +316,7 @@ orchestration:
             agent: "w2"
             phase: 1
             mode: "implement"
-            blocked_until: "Phase 0 accepted and merged to develop"
+            blocked_until: "Phase 0 accepted and merged to main"
             description: "LLMObserver implementation dispatched only after quality spec gate passes"
         stop_condition: "Both phase 0 and phase 1 acceptance criteria met"
       wave_2:
@@ -367,7 +367,7 @@ orchestration:
   multi_agent_safety:
     branch_format: "agent/<agent-id>/<task-slug>/<run-id>"
     worktree_format: ".worktrees/<agent-id>/<task-slug>-<run-id>"
-    pr_target: "develop"
+    pr_target: "main"
     single_writer: true
     ledger_fields:
       - "run_id"

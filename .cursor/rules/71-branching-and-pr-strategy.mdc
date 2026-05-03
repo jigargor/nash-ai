@@ -1,0 +1,39 @@
+---
+description: Branching and PR strategy until v1
+alwaysApply: true
+---
+
+# Branching & PR Strategy (Pre-v1)
+
+## Base branch
+
+- `main` is the default base branch until v1.
+- Start all work branches from `main` unless a maintainer explicitly asks for a different base.
+- Open pull requests to `main` unless the user explicitly requests another target.
+
+## Protected main workflow
+
+- Do not push directly to `main` for product changes.
+- Land changes through pull requests only, with required checks green.
+- Keep branch protection active for `main` (no direct pushes, approval required, required checks required).
+
+## Branch scope and naming
+
+- One phase (or tightly coupled pair) per branch.
+- Branch names: `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, or `agent/<agent-id>/<task-slug>/<run-id>`.
+- Keep branch scope narrow to reduce review risk and rollback complexity.
+
+## PR and merge requirements
+
+- Use conventional-commit style PR titles: `type(scope): short description`.
+- Keep PRs reviewable (soft cap ~400 non-generated changed lines unless justified).
+- If stacked, include `blocked-by:#<PR>` in downstream PR bodies.
+- Prefer squash merge unless the user or repository policy says otherwise.
+
+## Rollback readiness
+
+- Any schema/data-impacting PR must include rollback notes and risk statement.
+
+## Post-v1 note
+
+- After v1, integration branch strategy may change; this rule applies to pre-v1 workflow.

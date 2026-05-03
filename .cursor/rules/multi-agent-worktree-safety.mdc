@@ -12,7 +12,7 @@ When multiple agents work in this repo, Artiforge is the source of truth for age
 - Each agent must use one dedicated git worktree and one unique branch.
 - Branch format: `agent/<agent-id>/<task-slug>/<run-id>`.
 - Worktree format: `.worktrees/<agent-id>/<task-slug>-<run-id>`.
-- Do not edit directly on `main`, `develop`, shared integration branches, the repo root, or another agent's worktree.
+- Do not edit directly on `main`, shared integration branches, the repo root, or another agent's worktree; use a named branch and PR.
 
 ## Artiforge Ledger
 

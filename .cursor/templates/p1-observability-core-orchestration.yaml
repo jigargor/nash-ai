@@ -1,0 +1,178 @@
+orchestration:
+  goal: "Define provider-neutral observability records (LLMGenerationRecord, ToolCallRecord, ValidationRecord, ContextBuildRecord, ReviewTraceRecord) with stable IDs (review_id, run_id, stage_id, generation_id, parent_stage_id). Wire multi-sink emission to DB + Langfuse. Establish the telemetry contract that all downstream phases depend on — before swapping or adding frameworks."
+  mode: "implement"
+  merge_strategy: "hybrid"
+
+  prerequisites:
+    required_phases:
+      - "Pre-feature roadmap Phase 0 (quality-model.md) merged"
+      - "Pre-feature roadmap Phase 1 (LLMObserver abstraction) merged"
+    verify_before_start:
+      - "LLMObserver wraps all provider calls — no raw client.messages.create bypasses"
+      - "DB sink captures generation events"
+      - "Existing Langfuse traces functional"
+
+  scoring:
+    correctness: 0.35
+    maintainability: 0.20
+    risk: 0.25
+    performance: 0.20
+
+  workers:
+    - id: "w1"
+      agent: "observability-architect"
+      model: "claude-4.6-opus-max-thinking"
+      focus: >
+        Design and implement the canonical record types as frozen dataclasses or Pydantic models:
+        LLMGenerationRecord (model, provider, stage, tokens_in, tokens_out, cached_tokens, latency_ms,
+        cost_estimate, prompt_hash, response_hash, structured_output_valid, error),
+        ToolCallRecord (tool_name, args_hash, result_summary, latency_ms, success, error),
+        ValidationRecord (validator_name, input_hash, passed, drop_reason, findings_before, findings_after),
+        ContextBuildRecord (repo, pr_number, file_count, hunk_count, total_tokens, budget_used_pct,
+        context_pressure_ratio, bloat_score, files_truncated, files_dropped),
+        ReviewTraceRecord (review_id, run_id, installation_id, repo, pr_number, stages, total_cost,
+        total_latency_ms, final_findings_count, outcome).
+        Define the ID hierarchy: review_id → run_id → stage_id → generation_id, with parent_stage_id
+        for nested stages (chunked sub-reviews, ReAct tool loops). Ensure IDs are UUIDs generated
+        at creation, not DB auto-increments, so they work across sinks before DB write.
+      codebase_targets:
+        - "apps/api/src/app/observability/ — extend existing observer.py"
+        - "apps/api/src/app/observability/records.py — new record types"
+        - "apps/api/src/app/observability/ids.py — ID generation and hierarchy"
+
+    - id: "w2"
+      agent: "backend-engineer"
+      model: "gpt-5.3-codex-high-fast"
+      focus: >
+        Implement the multi-sink emission layer. Refactor LLMObserver to accept a list of Sink
+        protocol implementations and fan-out records to each. Implement three sinks:
+        1) DBSink — writes records to existing audit tables + new observability tables via
+        SQLAlchemy async sessions (batch-buffered, flush on stage/review end).
+        2) LangfuseSink — maps records to Langfuse primitives: ReviewTraceRecord → trace,
+        stage → span, LLMGenerationRecord → generation, scores attached per-trace.
+        3) StructuredLogSink — emits records as structured JSON logs at DEBUG level for
+        local dev and future OTEL/Sentry integration.
+        Wire the sink list from config: OBSERVABILITY_SINKS env var (comma-separated: db,langfuse,log).
+        Ensure sink failures are isolated — one sink error must not block others or the review pipeline.
+      codebase_targets:
+        - "apps/api/src/app/observability/sinks/ — sink protocol + implementations"
+        - "apps/api/src/app/observability/observer.py — refactor to multi-sink"
+        - "apps/api/src/app/config.py — add OBSERVABILITY_SINKS config"
+
+    - id: "w3"
+      agent: "backend-engineer"
+      model: "claude-4.6-sonnet-medium"
+      focus: >
+        Instrument every pipeline stage to emit the correct record type at the right lifecycle
+        point. Wire record emission into: fast-path decision, primary review, max-mode
+        challenger/tie-break, editor pass, deterministic filters, post-review, and chunked
+        sub-reviews. Each stage must call observer.start_stage() / observer.end_stage() and
+        emit LLMGenerationRecord after every LLM call, ToolCallRecord after every tool
+        invocation, ValidationRecord after every validator pass. The ReAct loop must emit
+        ToolCallRecords with parent_stage_id linking to the enclosing generation's stage.
+        Add ContextBuildRecord emission in context_builder.py after context packaging.
+        Add ReviewTraceRecord emission as the final observer call in runner.py.
+        Write integration tests that verify: (a) a mock review produces all expected record
+        types, (b) IDs form a valid hierarchy, (c) no record is orphaned.
+      codebase_targets:
+        - "apps/api/src/app/review/runner.py — stage lifecycle hooks"
+        - "apps/api/src/app/agent/loop.py — ReAct loop instrumentation"
+        - "apps/api/src/app/review/context_builder.py — context build records"
+        - "apps/api/src/app/review/validators/ — validation records"
+        - "apps/api/tests/test_observability_integration.py — new integration tests"
+
+  record_design:
+    id_hierarchy:
+      review_id: "Top-level identifier for one PR review job. Generated when webhook enqueues."
+      run_id: "One execution attempt within a review (retries get new run_ids under same review_id)."
+      stage_id: "One pipeline stage: fast_path, primary, challenger, tie_break, editor, post_review, chunk_N."
+      generation_id: "One LLM API call. Multiple per stage (ReAct iterations, retries)."
+      parent_stage_id: "Links sub-stages to parent. Chunked sub-reviews link to the merge stage. ReAct tool calls link to their generation's stage."
+    id_format: "UUIDv7 (time-sortable) for all IDs. Generated at creation, not DB-assigned."
+    correlation: "All records carry review_id + run_id. Stage-scoped records add stage_id. Generation records add generation_id."
+
+  langfuse_mapping:
+    trace: "ReviewTraceRecord → one Langfuse trace per PR review"
+    span: "stage_id → one Langfuse span per pipeline stage, nested under trace"
+    generation: "LLMGenerationRecord → one Langfuse generation per LLM call, nested under stage span"
+    score_attachments:
+      - "validator_drop_rate — fraction of findings dropped by validators"
+      - "anchor_validity — fraction of findings with valid file/line anchors"
+      - "schema_validity — fraction of findings passing schema validation"
+      - "precision_proxy — heuristic precision from validator signals"
+      - "useful_rate — fraction of findings not dismissed/ignored (from P3 human feedback)"
+      - "dismiss_rate — fraction explicitly dismissed by reviewer"
+      - "ignore_rate — fraction with no interaction after 7 days"
+      - "cost_usd — total cost for this review"
+      - "latency_ms — total wall-clock time"
+      - "context_pressure_ratio — context tokens used / budget"
+      - "bloat_score — ratio of low-signal context (lockfiles, vendor, generated)"
+      - "poisoning_score — prompt injection risk signals detected in context"
+    dataset_item: "Defer to P2 — snapshot replay will populate Langfuse dataset items"
+
+  recommendations:
+    - title: "Sink isolation via fire-and-forget async tasks"
+      detail: >
+        Each sink.emit() should be wrapped in an asyncio task with a timeout. If Langfuse
+        is down or slow, the review pipeline must not be affected. Log sink errors at WARN
+        and increment a counter metric. This is critical for production reliability.
+    - title: "Record immutability"
+      detail: >
+        Records should be frozen after creation. Use frozen=True on dataclasses or
+        model_config frozen in Pydantic. This prevents accidental mutation between sink
+        emissions and makes records safe to share across concurrent sinks.
+    - title: "Batch DB writes"
+      detail: >
+        The DBSink should buffer records and flush in a single transaction at stage
+        boundaries (end_stage) and review completion (finish_review_trace). This avoids
+        per-record DB round-trips during the hot path. Buffer size capped at 100 records
+        with auto-flush.
+    - title: "Backward-compatible audit tables"
+      detail: >
+        The existing audit tables should continue to work. New observability tables
+        (llm_generation_records, tool_call_records, etc.) are additive. The DBSink
+        writes to both old audit rows and new observability rows during the transition
+        period. Old audit writes can be removed in a future phase once dashboards migrate.
+    - title: "Config-driven Langfuse score attachment"
+      detail: >
+        Not all scores are available at trace creation time (useful_rate requires human
+        feedback from P3). The LangfuseSink should support deferred score attachment —
+        a separate method to update scores on an existing trace by review_id. This will
+        be called by the feedback pipeline in P3.
+
+  constraints:
+    - "No measurable latency added to the review pipeline hot path — sinks are async/fire-and-forget."
+    - "Sink failures are isolated — one broken sink must not block review completion."
+    - "No secrets in structured log output — model names and token counts yes, API keys never."
+    - "Records must be serializable to JSON for debug artifacts and cross-sink compatibility."
+    - "Existing Langfuse integration must not break during migration to new sink architecture."
+    - "DB sink uses existing async session management — no new connection pools."
+    - "All new code must pass mypy --strict and existing .cursor/rules constraints."
+    - "New DB tables require Alembic migrations with documented forward + rollback."
+
+  acceptance:
+    - "All 5 record types defined with full field sets and frozen immutability"
+    - "ID hierarchy (review_id → run_id → stage_id → generation_id) enforced in record constructors"
+    - "UUIDv7 IDs generated at record creation, not DB-assigned"
+    - "Multi-sink emission: DBSink, LangfuseSink, StructuredLogSink all functional"
+    - "Sink failures isolated — test that a throwing sink does not block review completion"
+    - "Every pipeline stage emits correct record types at lifecycle boundaries"
+    - "ReAct loop emits ToolCallRecords linked to enclosing generation stage"
+    - "ContextBuildRecord emitted after context packaging with pressure/bloat metrics"
+    - "ReviewTraceRecord emitted as final record with aggregate cost/latency/findings"
+    - "Langfuse trace/span/generation mapping matches langfuse_mapping spec"
+    - "Langfuse scores attached per-trace (validator_drop_rate, anchor_validity, schema_validity, cost, latency at minimum)"
+    - "OBSERVABILITY_SINKS config controls which sinks are active"
+    - "Integration test verifies full record hierarchy from a mock review"
+    - "Existing audit table writes preserved during transition period"
+    - "No pipeline latency regression (benchmark before/after)"
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: false
+    include_data_contracts: true
+    include_observer_architecture: true

@@ -1,0 +1,306 @@
+orchestration:
+  goal: "Build the continuous improvement layer: confidence calibration from real outcome data, model/prompt A/B experiments via the existing router, and threshold tuning with rollback safety. Optimize in strict order: precision → recall → latency → cost. Gate all automated changes behind judge agreement (P5) and human oversight."
+  mode: "implement"
+  merge_strategy: "hybrid"
+
+  prerequisites:
+    required_phases:
+      - "P1 (Observability Core) merged — full telemetry for cost/latency/model tracking"
+      - "P2 (Eval Replay Core) merged — eval harness for measuring experiment impact"
+      - "P3 (Human Feedback Core) merged — useful/dismiss/ignore rates for calibration"
+      - "P4 (False-Negative Core) merged — recall data for experiment validation"
+      - "P5 (Framework Integration) merged — judge agreement gate passing (kappa >= 0.7)"
+    verify_before_start:
+      - "Judge agreement gate passes with kappa >= 0.7 on 50+ labeled findings"
+      - "Per-category useful rates computed from P3 feedback with sufficient volume"
+      - "Per-category false-negative rates computed from P4 confirmed misses"
+      - "Cost and latency per review available from P1 observability records"
+      - "Eval replay harness functional with per-bucket metrics"
+      - "Model router supports role-specific model selection and provider diversity"
+
+  scoring:
+    correctness: 0.30
+    maintainability: 0.15
+    risk: 0.35
+    performance: 0.20
+
+  workers:
+    - id: "w1"
+      agent: "calibration-engineer"
+      model: "claude-4.6-opus-max-thinking"
+      focus: >
+        Build the confidence calibration system using real outcome data.
+        1) Calibration pipeline: compute per-bucket useful rates by slicing on:
+        provider, model, category, severity, evidence_type (tool_verified, context_only,
+        heuristic), confidence_bucket (90-100, 80-89, 70-79, 60-69, <60), repo/org,
+        prompt_version. Use P3 human feedback labels and P4 false-negative data.
+        2) Calibration report: for each slice, compute: useful_rate, dismiss_rate,
+        ignore_rate, false_positive_rate, false_negative_rate, precision, recall,
+        suggestion_apply_rate, cost_per_useful_finding, findings_per_1k_changed_lines.
+        Also compute calibration curves: does confidence=90 actually mean 90% useful?
+        3) Threshold recommendation engine: given calibration data, recommend per-category
+        confidence thresholds that optimize for precision first (target: >85% useful rate
+        for posted findings), then recall (minimize false negatives), then latency, then cost.
+        Output recommendations as a JSON config with current_threshold, recommended_threshold,
+        expected_precision_change, expected_recall_change, sample_size, confidence_interval.
+        4) Threshold application: integrate with the existing adaptive threshold infrastructure
+        (already present in config). Apply changes through a staged rollout: shadow mode
+        (log what would change, don't actually change) → advisory mode (show recommendations
+        in dashboard, manual approval required) → enforced mode (auto-apply with rollback).
+        5) Rollback system: every threshold change is versioned. If precision drops below
+        the rollback threshold (configurable, default: 80% useful rate) within the evaluation
+        window (configurable, default: 100 reviews), auto-rollback to previous thresholds
+        and alert.
+      codebase_targets:
+        - "apps/api/src/app/calibration/ — new calibration module"
+        - "apps/api/src/app/calibration/pipeline.py — calibration computation"
+        - "apps/api/src/app/calibration/report.py — calibration report generation"
+        - "apps/api/src/app/calibration/recommender.py — threshold recommendations"
+        - "apps/api/src/app/calibration/applicator.py — staged threshold application"
+        - "apps/api/src/app/calibration/rollback.py — rollback system"
+        - "apps/api/src/app/config.py — calibration config and threshold overrides"
+
+    - id: "w2"
+      agent: "experiment-engineer"
+      model: "gpt-5.3-codex-high-fast"
+      focus: >
+        Build the model/prompt A/B experiment system using the existing model router.
+        1) Experiment definition: YAML-based experiment configs under experiments/
+        defining: experiment_id, experiment_type (model_ab, prompt_ab, config_ab),
+        control (current config), treatment (modified config), traffic_split (percentage
+        or hash-based), target_population (all, specific repos, specific categories),
+        duration, primary_metric, secondary_metrics, success_criteria.
+        2) Experiment types and router integration:
+        - fast_path model A/B: economy model A vs economy model B for fast-path decisions.
+          Wire into the model router's role-based selection for role='fast_path'.
+        - primary_review model A/B: balanced vs frontier for primary review.
+          Wire into role='primary_review' selection.
+        - editor tier A/B: economy vs balanced for editor pass.
+          Wire into role='editor' selection.
+        - challenger provider A/B: same provider vs cross-provider for challenger.
+          Wire into role='challenger' selection with provider diversity.
+        - chunk size A/B: 18k target vs 24k target context window.
+          Wire into ContextBudgets configuration.
+        - per-category confidence A/B: threshold 80 vs 85 vs 90 by category.
+          Wire into the threshold configuration from w1's calibration system.
+        3) Traffic routing: hash-based (deterministic per review_id) or percentage-based
+        (random). Hash-based preferred for reproducibility. Router reads active experiments
+        and routes accordingly.
+        4) Experiment telemetry: tag all P1 observability records with experiment_id and
+        variant (control/treatment). This enables per-experiment metric computation.
+        5) Experiment analysis: compute per-variant metrics from P1/P3/P4 data.
+        Statistical significance testing (chi-squared for rates, bootstrap for confidence
+        intervals). Generate experiment report with winner/loser/inconclusive verdict.
+        6) Experiment lifecycle: draft → active → concluded (winner applied) or
+        concluded (no winner, reverted).
+      codebase_targets:
+        - "apps/api/src/app/experiments/ — experiment module"
+        - "apps/api/src/app/experiments/config.py — experiment YAML loading"
+        - "apps/api/src/app/experiments/router_integration.py — model router hooks"
+        - "apps/api/src/app/experiments/analysis.py — statistical analysis"
+        - "apps/api/src/app/experiments/telemetry.py — experiment tagging in observer"
+        - "experiments/ — experiment definition YAML files"
+        - "apps/api/src/app/llm/router.py — extend with experiment routing"
+        - "apps/api/src/app/observability/observer.py — add experiment_id to records"
+
+    - id: "w3"
+      agent: "frontend-engineer"
+      model: "claude-4.6-sonnet-medium"
+      focus: >
+        Build the calibration and experiment dashboards.
+        1) Calibration dashboard: interactive multi-dimensional calibration view.
+        Slice selectors for: category, severity, model, provider, confidence bucket,
+        evidence type, repo/org. For each slice: useful rate (gauge), precision/recall
+        (bar chart), calibration curve (confidence vs actual useful rate scatter plot),
+        cost per useful finding (metric card), sample size (for statistical confidence).
+        Threshold recommendation cards showing current vs recommended thresholds with
+        expected impact. Approval workflow: admin clicks "Apply" to promote a recommendation
+        through the staged rollout (shadow → advisory → enforced).
+        2) Experiment dashboard: list of active/concluded experiments. Each experiment
+        shows: control vs treatment metrics (side-by-side), traffic split, sample size,
+        statistical significance (p-value, confidence interval), current winner/status.
+        Experiment creation form for new experiments. Experiment lifecycle controls:
+        start, pause, conclude (apply winner or revert).
+        3) Improvement timeline: a historical view showing threshold changes, experiment
+        conclusions, and metric trends over time. Annotated with events: "Confidence
+        threshold for security raised from 80 → 85", "Frontier model A/B: Claude wins
+        on precision, applied". Rollback events highlighted in red.
+        4) Cost analytics: extend dashboard with cost-focused views — cost per review
+        by model, cost per useful finding trend, cost savings from experiments.
+      codebase_targets:
+        - "apps/web/src/app/dashboard/calibration/ — calibration pages"
+        - "apps/web/src/app/dashboard/experiments/ — experiment pages"
+        - "apps/web/src/app/dashboard/improvement/ — timeline and cost pages"
+        - "apps/web/src/components/calibration/ — calibration charts and widgets"
+        - "apps/web/src/components/experiments/ — experiment cards and forms"
+        - "apps/web/src/hooks/ — calibration and experiment data hooks"
+        - "apps/web/src/lib/api/ — calibration and experiment API clients"
+
+  optimization_order:
+    principle: "For a code review app, one bad noisy finding harms trust more than a slow review"
+    priority_1:
+      name: "Precision"
+      target: ">85% useful rate for posted findings"
+      rationale: "Trust is the product. False positives erode it irreversibly."
+      experiment_examples:
+        - "Raise confidence threshold for categories with <80% useful rate"
+        - "A/B test frontier vs balanced model — frontier often has better precision"
+        - "Per-category thresholds (security can be lower, style must be higher)"
+    priority_2:
+      name: "Recall"
+      target: "Minimize false negatives for security and correctness categories"
+      rationale: "Missing a real bug is the second-worst outcome after false alarms."
+      experiment_examples:
+        - "A/B test chunking strategies for large PRs (miss rate is higher)"
+        - "Cross-provider challenger to catch provider-specific blind spots"
+    priority_3:
+      name: "Latency"
+      target: "p50 < 30s, p95 < 120s for single-chunk reviews"
+      rationale: "Developers expect near-instant feedback. Slow reviews get ignored."
+      experiment_examples:
+        - "Fast-path economy model A/B (faster model with same precision)"
+        - "Context window size A/B (smaller context = faster, but recall impact?)"
+    priority_4:
+      name: "Cost"
+      target: "Cost per useful finding decreasing quarter over quarter"
+      rationale: "Cost optimization only after trust is established."
+      experiment_examples:
+        - "Economy vs balanced for editor pass (often equivalent quality)"
+        - "Prompt compaction experiments (fewer tokens, same precision?)"
+
+  calibration_design:
+    rollout_stages:
+      shadow:
+        description: "Log what threshold changes would do, don't apply them"
+        duration: "Minimum 7 days or 200 reviews, whichever comes last"
+        metrics_tracked: ["would_have_filtered_count", "would_have_posted_count", "precision_impact_estimate"]
+        exit_criteria: "No unexpected filtering spikes, estimated precision improvement positive"
+      advisory:
+        description: "Show recommendations in dashboard, require manual approval"
+        duration: "Until admin approves or rejects"
+        metrics_tracked: ["recommendation_acceptance_rate", "time_to_decision"]
+        exit_criteria: "Admin approves the threshold change"
+      enforced:
+        description: "Auto-apply thresholds with rollback monitoring"
+        duration: "Indefinite, with evaluation window for rollback check"
+        metrics_tracked: ["actual_precision", "actual_recall", "rollback_triggers"]
+        exit_criteria: "Precision stays above rollback threshold for evaluation window"
+    rollback:
+      trigger: "Precision drops below rollback_threshold within evaluation_window"
+      rollback_threshold: 0.80
+      evaluation_window_reviews: 100
+      evaluation_window_days: 14
+      evaluation_window_logic: "whichever_comes_first"  # explicit: first condition reached triggers evaluation
+      action: "Revert to previous threshold config, alert admin, log rollback event"
+      cooldown: "No auto-apply for the affected category for 7 days after rollback"
+
+  experiment_design:
+    traffic_routing:
+      method: "hash-based on review_id for deterministic assignment"
+      default_split: "50/50 control/treatment"
+      minimum_sample: 100
+      maximum_duration_days: 30
+    experiment_types:
+      model_ab:
+        description: "Compare two models for the same pipeline role"
+        configurable_fields: ["provider", "model", "role"]
+        example: "primary_review: claude-sonnet vs gpt-4o"
+      prompt_ab:
+        description: "Compare two prompt versions for the same stage"
+        configurable_fields: ["prompt_version", "stage"]
+        example: "primary_review prompt v3.1 vs v3.2"
+      config_ab:
+        description: "Compare two configuration values"
+        configurable_fields: ["confidence_threshold", "chunk_size", "context_budget"]
+        example: "chunk_target: 18k vs 24k tokens"
+    analysis:
+      primary_metric: "precision (useful_rate)"
+      secondary_metrics: ["recall", "latency_p50", "latency_p95", "cost_per_review", "cost_per_useful_finding"]
+      significance: "chi-squared for rate comparison, bootstrap CI for continuous metrics"
+      significance_threshold: 0.05
+      practical_significance: "Minimum 2 percentage points improvement in primary metric"
+      early_stopping: "If treatment is significantly worse on primary metric at any checkpoint, stop early"
+
+  recommendations:
+    - title: "Gate all automated threshold changes on judge agreement"
+      detail: >
+        The judge agreement gate from P5 must pass (kappa >= 0.7) before any automated
+        threshold changes are applied. If judge agreement drops below the gate during
+        operation, pause all automated changes and revert to manual-only mode. This
+        prevents the system from optimizing against unreliable signals.
+    - title: "Start experiments with the lowest-risk pipeline role"
+      detail: >
+        First experiment should be fast-path economy model A/B — lowest risk because
+        fast-path only decides full-review vs skip, and the full-review path is unaffected.
+        Graduate to primary-review and editor experiments only after the experiment
+        infrastructure is validated on fast-path.
+    - title: "Never A/B test in production without shadow mode first"
+      detail: >
+        Every experiment should run in shadow mode (both variants execute, only control
+        is posted, treatment is logged) for at least 50 reviews before going live.
+        This validates that the treatment doesn't crash, timeout, or produce obviously
+        bad output.
+    - title: "Separate precision experiments from cost experiments"
+      detail: >
+        Never run a "cheaper model" experiment and a "higher threshold" experiment
+        simultaneously on the same population. If both degrade precision, the compound
+        effect could be severe. Run precision experiments first, lock in the winner,
+        then run cost experiments.
+    - title: "Keep human override for all calibration decisions"
+      detail: >
+        Even in "enforced" mode, an admin should be able to override any threshold
+        with a manual value. The calibration system recommends; humans decide. Log
+        all overrides for audit.
+    - title: "Disaggregation matters more than global metrics"
+      detail: >
+        A global 85% useful rate might mask a 60% useful rate for style findings and
+        a 95% rate for security findings. Always present calibration data at the
+        per-category level. Global metrics are for executive summaries; per-category
+        metrics are for tuning decisions.
+
+  constraints:
+    - "Judge agreement gate (kappa >= 0.7) must pass before any automated threshold changes."
+    - "Optimization order: precision → recall → latency → cost. No cost optimization that degrades precision."
+    - "Every threshold change goes through shadow → advisory → enforced stages."
+    - "Rollback triggers automatically if precision drops below 80% within evaluation window."
+    - "No simultaneous experiments on the same population that both affect precision."
+    - "Experiment shadow mode required for minimum 50 reviews before live traffic."
+    - "Hash-based traffic routing for deterministic experiment assignment."
+    - "Admin override available for all calibration decisions."
+    - "All threshold changes, experiment conclusions, and rollbacks logged with full audit trail."
+    - "No experiment or calibration change in production without eval regression suite passing."
+    - "mypy --strict, existing .cursor/rules constraints."
+    - "Do not weaken auth/session, webhook, or tenant isolation controls."
+
+  acceptance:
+    - "Calibration pipeline computes per-slice useful rates across all dimensions"
+    - "Calibration curves show confidence vs actual useful rate per category"
+    - "Threshold recommendations generated with expected precision/recall impact"
+    - "Staged rollout: shadow mode logs threshold impact without applying"
+    - "Staged rollout: advisory mode shows recommendations in dashboard"
+    - "Staged rollout: enforced mode auto-applies with rollback monitoring"
+    - "Rollback triggers when precision drops below threshold within evaluation window"
+    - "Rollback cooldown prevents re-application for 7 days on affected category"
+    - "Experiment configs loadable from YAML with all required fields"
+    - "Model A/B experiments route traffic via model router with experiment tagging"
+    - "Observability records tagged with experiment_id and variant"
+    - "Experiment analysis computes per-variant metrics with statistical significance"
+    - "Experiment reports show winner/loser/inconclusive with confidence intervals"
+    - "Experiment lifecycle: draft → active → concluded (applied or reverted)"
+    - "Calibration dashboard: interactive slice selectors, calibration curves, recommendation cards"
+    - "Experiment dashboard: active/concluded list, metric comparison, lifecycle controls"
+    - "Improvement timeline: annotated history of threshold changes and experiment conclusions"
+    - "Cost analytics: cost per review by model, cost per useful finding trend"
+    - "Admin override functional for all calibration thresholds"
+    - "Full audit trail for all threshold changes, experiments, and rollbacks"
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: true
+    include_data_contracts: true
+    include_calibration_schema: true
+    include_experiment_config_spec: true
