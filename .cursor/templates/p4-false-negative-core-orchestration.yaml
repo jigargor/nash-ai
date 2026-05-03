@@ -121,6 +121,7 @@ orchestration:
         matching: "File overlap between fix commit and reviewed PR diff"
         confidence: "0.6 — requires triage confirmation"
         rate_limit: "Max 10 candidates per review to prevent noise"
+        lookback_days: 30  # fix commit must be within 30 days of the review
       static_analyzer:
         trigger: "External tool findings imported via API"
         matching: "Finding file/line within reviewed PR diff, not in reviewer findings"
