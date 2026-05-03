@@ -1,5 +1,7 @@
 import logging
 from typing import Any, Final, cast
+from time import monotonic
+from hashlib import sha256
 
 from pydantic import ValidationError
 
@@ -10,6 +12,8 @@ from app.agent.text_sanitizer import sanitize_markdown_text, truncate_markdown_t
 from app.categories import ALL_CATEGORIES, CATEGORY_ALIASES
 from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.providers import StructuredOutputRequest, get_provider_adapter
+from app.observability.events import LLMUsage as ObserverLLMUsage
+from app.observability.observer import StageSpan, get_observer
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,7 @@ async def finalize_review(
             "Now submit your corrected review using the submit_review tool."
         )
     adapter = get_provider_adapter(provider)
+    request_started = monotonic()
     try:
         structured = await adapter.structured_output(
             request=StructuredOutputRequest(
@@ -71,6 +76,22 @@ async def finalize_review(
         )
 
     repaired_input = _repair_review_input(structured.payload)
+    span = context.get("_observation_stage_span")
+    if isinstance(span, StageSpan):
+        get_observer().record_generation(
+            span,
+            provider=provider,
+            model=model_name,
+            usage=ObserverLLMUsage(
+                input_tokens=int(structured.usage.input_tokens),
+                output_tokens=int(structured.usage.output_tokens),
+                cache_read_tokens=int(structured.usage.cached_input_tokens),
+                cache_write_tokens=int(structured.usage.cache_creation_input_tokens),
+            ),
+            latency_ms=int((monotonic() - request_started) * 1000),
+            request_hash=sha256(final_prompt.encode("utf-8")).hexdigest(),
+            response_hash=sha256(str(structured.payload).encode("utf-8")).hexdigest(),
+        )
     _record_verified_fact_cap_debug_artifacts(context, repaired_input)
     try:
         return ReviewResult.model_validate(repaired_input)

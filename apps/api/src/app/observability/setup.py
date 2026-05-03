@@ -6,6 +6,8 @@ import logging
 from typing import Any
 
 from app.config import settings
+from app.observability.observer import configure_observer
+from app.observability.sinks import DBSink, ObservabilitySink, StructuredLogSink
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ def init_observability(service_name: str) -> None:
     """Initialise Sentry and Langfuse.  Safe to call multiple times."""
     _init_sentry(service_name)
     _init_langfuse()
+    _init_observer_sinks()
 
 
 def _init_sentry(service_name: str) -> None:
@@ -55,6 +58,41 @@ def _init_langfuse() -> None:
         secret_key=settings.langfuse_secret_key,
         host=settings.langfuse_host,
     )
+
+
+def _init_observer_sinks() -> None:
+    enabled = bool(settings.observability_enabled)
+    sinks = _build_observer_sinks()
+    configure_observer(
+        sinks=sinks,
+        enabled=enabled and bool(sinks),
+        sample_rate=float(settings.observability_sample_rate),
+        max_events_per_review=int(settings.observability_max_events_per_review),
+    )
+
+
+def _build_observer_sinks() -> list[ObservabilitySink]:
+    sink_names = [
+        name.strip().lower()
+        for name in str(settings.observability_sinks or "disabled").split(",")
+        if name.strip()
+    ]
+    if not sink_names or "disabled" in sink_names:
+        return []
+
+    sinks: list[ObservabilitySink] = []
+    if "log" in sink_names:
+        sinks.append(
+            StructuredLogSink(
+                payload_mode=settings.observability_payload_mode,  # type: ignore[arg-type]
+                max_metadata_bytes=settings.observability_max_metadata_bytes,
+            )
+        )
+    if "db" in sink_names:
+        from app.db.session import AsyncSessionLocal
+
+        sinks.append(DBSink(session_factory=AsyncSessionLocal))
+    return sinks
 
 
 def record_review_trace(metadata: dict[str, Any]) -> None:

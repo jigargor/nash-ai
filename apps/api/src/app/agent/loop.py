@@ -1,5 +1,6 @@
 from time import monotonic
 from typing import Any
+from hashlib import sha256
 
 from app.agent.constants import MAX_ITERATIONS
 from app.agent.context_builder import count_tokens
@@ -14,10 +15,26 @@ from app.agent.tools import TOOLS, execute_tool
 from app.llm.errors import coerce_quota_error
 from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
 from app.observability import create_async_anthropic_client
+from app.observability.events import LLMUsage as ObserverLLMUsage
+from app.observability.observer import StageSpan, get_observer
 
 
 def _result_token_count(content: object) -> int:
     return count_tokens(str(content))
+
+
+def _as_observer_usage(input_usage: Any) -> ObserverLLMUsage:
+    return ObserverLLMUsage(
+        input_tokens=int(getattr(input_usage, "input_tokens", 0)),
+        output_tokens=int(getattr(input_usage, "output_tokens", 0)),
+        cache_read_tokens=int(getattr(input_usage, "cached_input_tokens", 0)),
+        cache_write_tokens=int(getattr(input_usage, "cache_creation_input_tokens", 0)),
+    )
+
+
+def _get_stage_span(context: dict[str, Any]) -> StageSpan | None:
+    span = context.get("_observation_stage_span")
+    return span if isinstance(span, StageSpan) else None
 
 
 async def run_agent(
@@ -60,6 +77,7 @@ async def _run_agent_anthropic(
     for _ in range(MAX_ITERATIONS):
         if _contains_empty_user_message(messages):
             break
+        request_started = monotonic()
         try:
             response = await client.messages.create(
                 model=model_name,
@@ -77,7 +95,20 @@ async def _run_agent_anthropic(
         if turns == 1:
             context["first_model_call_latency_ms"] = int((monotonic() - started_at) * 1000)
 
-        record_usage(context, "anthropic", model_name, adapter.parse_usage(response.usage))
+        parsed_usage = adapter.parse_usage(response.usage)
+        record_usage(context, "anthropic", model_name, parsed_usage)
+        span = _get_stage_span(context)
+        if span is not None:
+            get_observer().record_generation(
+                span,
+                provider="anthropic",
+                model=model_name,
+                usage=_as_observer_usage(parsed_usage),
+                latency_ms=int((monotonic() - request_started) * 1000),
+                attempt_index=turns,
+                response_hash=sha256(str(response.content).encode("utf-8")).hexdigest(),
+                stop_reason=str(response.stop_reason or ""),
+            )
 
         messages.append({"role": "assistant", "content": response.content})
 
@@ -91,10 +122,22 @@ async def _run_agent_anthropic(
                     continue
                 if block.name == "fetch_file_content":
                     fetch_file_content_calls += 1
+                tool_started = monotonic()
                 result = await execute_tool(block.name, block.input, context)
                 normalized = result if str(result).strip() else "Tool returned empty output."
                 tool_result_tokens_by_tool[block.name] = tool_result_tokens_by_tool.get(block.name, 0) + _result_token_count(normalized)
                 tool_result_calls_by_tool[block.name] = tool_result_calls_by_tool.get(block.name, 0) + 1
+                span = _get_stage_span(context)
+                if span is not None:
+                    get_observer().record_tool_call(
+                        span,
+                        tool_name=block.name,
+                        duration_ms=int((monotonic() - tool_started) * 1000),
+                        result_tokens=_result_token_count(normalized),
+                        success=True,
+                        input_hash=sha256(str(block.input).encode("utf-8")).hexdigest(),
+                        output_hash=sha256(str(normalized).encode("utf-8")).hexdigest(),
+                    )
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -152,6 +195,7 @@ async def _run_agent_openai_compatible(
     for _ in range(MAX_ITERATIONS):
         openai_messages: Any = messages
         openai_tools_any: Any = openai_tools
+        request_started = monotonic()
         try:
             completion = await client.chat.completions.create(
                 model=model_name,
@@ -174,7 +218,20 @@ async def _run_agent_openai_compatible(
             context["first_model_call_latency_ms"] = int((monotonic() - started_at) * 1000)
         usage = completion.usage
         if usage is not None:
-            record_usage(context, provider, model_name, adapter.parse_usage(usage))
+            parsed_usage = adapter.parse_usage(usage)
+            record_usage(context, provider, model_name, parsed_usage)
+            span = _get_stage_span(context)
+            if span is not None:
+                get_observer().record_generation(
+                    span,
+                    provider=provider,
+                    model=model_name,
+                    usage=_as_observer_usage(parsed_usage),
+                    latency_ms=int((monotonic() - request_started) * 1000),
+                    attempt_index=turns,
+                    response_hash=sha256(str(completion).encode("utf-8")).hexdigest(),
+                    stop_reason="tool_use" if list(getattr(completion.choices[0].message, "tool_calls", []) or []) else "end_turn",
+                )
         if not completion.choices:
             break
         message = completion.choices[0].message
@@ -218,10 +275,22 @@ async def _run_agent_openai_compatible(
                 parsed_input = parse_openai_tool_arguments(
                     function_arguments if isinstance(function_arguments, str) else "{}"
                 )
+                tool_started = monotonic()
                 result = await execute_tool(function_name, parsed_input, context)
                 normalized = result if str(result).strip() else "Tool returned empty output."
                 tool_result_tokens_by_tool[function_name] = tool_result_tokens_by_tool.get(function_name, 0) + _result_token_count(normalized)
                 tool_result_calls_by_tool[function_name] = tool_result_calls_by_tool.get(function_name, 0) + 1
+                span = _get_stage_span(context)
+                if span is not None:
+                    get_observer().record_tool_call(
+                        span,
+                        tool_name=function_name,
+                        duration_ms=int((monotonic() - tool_started) * 1000),
+                        result_tokens=_result_token_count(normalized),
+                        success=True,
+                        input_hash=sha256(str(parsed_input).encode("utf-8")).hexdigest(),
+                        output_hash=sha256(str(normalized).encode("utf-8")).hexdigest(),
+                    )
                 messages.append(
                     {
                         "role": "tool",

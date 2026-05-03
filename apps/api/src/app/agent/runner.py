@@ -86,7 +86,9 @@ from app.llm.router import ModelRoleRoutingConfig, resolve_model_attempt_chain
 from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.rate_limit_backoff import sleep_after_llm_rate_limit
 from app.llm.types import ModelProvider
-from app.observability import record_review_trace
+from app.observability import ObservationContext, get_observer, record_review_trace
+from app.observability.events import TerminalStatus
+from app.observability.observer import ReviewTrace
 from app.agent.snapshot import SnapshotPayload, store_snapshot
 from app.llm.circuit_breaker import record_provider_failure, record_provider_success
 from app.ratelimit import check_and_consume_daily_token_budget, current_daily_token_usage
@@ -106,6 +108,19 @@ ALLOWED_CHUNK_FILE_CLASSES: set[FileClass] = {
     "binary_unsupported",
     "deleted_only",
 }
+
+
+def _to_terminal_status(status: str) -> str:
+    mapping = {
+        "done": "success",
+        "skipped": "skipped",
+        "failed": "failed",
+        "canceled": "canceled",
+        "partial": "partial",
+        "rate_limited": "rate_limited",
+        "budget_exhausted": "budget_exhausted",
+    }
+    return mapping.get(status, "failed")
 
 
 class DiffAnchorMetadata(TypedDict):
@@ -203,6 +218,31 @@ async def _assemble_context(
     if isinstance(debug_artifacts, dict):
         debug_artifacts["verified_fact_retrieval"] = select_verified_fact_telemetry(diff_text)
     user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
+    trace = context.get("_observation_trace")
+    observer = get_observer()
+    if isinstance(trace, ReviewTrace):
+        span = observer.start_stage(trace, "context_build", run_id=str(context.get("run_id", "")))
+        try:
+            observer.record_context_build(
+                span,
+                total_tokens=count_tokens(context_bundle.rendered),
+                layers={
+                    str(name): int(value)
+                    for name, value in context_bundle.telemetry.layer_token_usage.items()
+                },
+                pressure=float(context_bundle.telemetry.pressure_ratio),
+                bloat_score=float(context_bundle.telemetry.bloat_score),
+                poisoning_score=float(context_bundle.telemetry.poisoning_score),
+            )
+            observer.finish_stage(span, status="success")
+        except Exception:
+            observer.record_error(
+                span,
+                error_type="context_build_observability",
+                message="Failed to emit context build event",
+                recoverable=True,
+            )
+            observer.finish_stage(span, status="partial")
     return files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt
 
 
@@ -340,7 +380,19 @@ async def _run_fast_path_stage(
     review_config: ReviewConfig,
     diff_tokens: int,
 ) -> tuple[FastPathDecision, ModelResolution | None]:
+    observer = get_observer()
+    trace = context.get("_observation_trace")
+    stage_span = (
+        observer.start_stage(trace, "fast_path", run_id=str(context.get("run_id", "")))
+        if isinstance(trace, ReviewTrace)
+        else None
+    )
+    if stage_span is not None:
+        context["_observation_stage_span"] = stage_span
     if not review_config.fast_path.enabled:
+        if stage_span is not None:
+            observer.finish_stage(stage_span, status="skipped")
+            context.pop("_observation_stage_span", None)
         return fallback_full_review(
             "Fast-path pre-pass is disabled.", risk_labels=["disabled"]
         ), None
@@ -365,6 +417,9 @@ async def _run_fast_path_stage(
     )
     fast_resolution = fast_attempts[0] if fast_attempts else None
     if fast_resolution is None:
+        if stage_span is not None:
+            observer.finish_stage(stage_span, status="failed")
+            context.pop("_observation_stage_span", None)
         return fallback_full_review(
             "Fast-path pre-pass has no available provider.", risk_labels=["no_provider_available"]
         ), None
@@ -482,6 +537,9 @@ async def _run_fast_path_stage(
         extra_metadata=metadata,
         stage_started_at=stage_started_at,
     )
+    if stage_span is not None:
+        observer.finish_stage(stage_span, status="success")
+        context.pop("_observation_stage_span", None)
     return decision, fast_resolution
 
 
@@ -739,6 +797,21 @@ async def run_review(
         "user_github_id": user_github_id,
         "_redis": redis,
     }
+    observer = get_observer()
+    trace = observer.start_review_trace(
+        review_id=review_id,
+        installation_id=installation_id,
+        run_id=str(context["run_id"]),
+        prompt_version=PROMPT_VERSION,
+        metadata={"repo": f"{owner}/{repo}", "pr_number": pr_number, "head_sha": head_sha},
+    )
+    context["_observation_trace"] = trace
+    context["observation_context"] = ObservationContext(
+        review_id=review_id,
+        run_id=str(context["run_id"]),
+        trace_id=trace.trace_id,
+        prompt_version=PROMPT_VERSION,
+    )
     _update_provider_availability_debug(context)
     started_at = monotonic()
 
@@ -956,6 +1029,13 @@ async def run_review(
         primary_resolution = primary_attempts[0]
         primary_stage_started_at = monotonic()
         token_snapshot = _token_snapshot(context)
+        primary_span = (
+            observer.start_stage(trace, "primary_review", run_id=str(context.get("run_id", "")))
+            if isinstance(trace, ReviewTrace)
+            else None
+        )
+        if primary_span is not None:
+            context["_observation_stage_span"] = primary_span
         last_primary_error: Exception | None = None
         for attempt_index, attempt in enumerate(primary_attempts):
             try:
@@ -994,6 +1074,9 @@ async def run_review(
                 )
                 continue
         else:
+            if primary_span is not None:
+                observer.finish_stage(primary_span, status="rate_limited")
+                context.pop("_observation_stage_span", None)
             raise RuntimeError(
                 f"All primary provider attempts failed due to quota/rate-limit: {last_primary_error}"
             )
@@ -1033,6 +1116,15 @@ async def run_review(
             window=REPAIR_SEARCH_WINDOW,
         )
         result, validator_dropped, generated = _validate_result(result, validator)
+        if primary_span is not None:
+            observer.record_validation(
+                primary_span,
+                validation_type="finding_validation",
+                passed=len(validator_dropped) == 0,
+                findings_before=generated,
+                findings_after=len(result.findings),
+                drop_reason="validator_filtered" if validator_dropped else "",
+            )
         retry_triggered = False
         retry_mode: str | None = None
         retry_recovered: int = 0
@@ -1132,6 +1224,9 @@ async def run_review(
                 known_fact_ids=load_verified_fact_ids(),
             )
         )
+        if primary_span is not None:
+            observer.finish_stage(primary_span, status="success")
+            context.pop("_observation_stage_span", None)
         draft_result = ReviewResult(findings=list(result.findings), summary=result.summary)
         debate_conflict_score: int | None = None
         if (
@@ -1453,7 +1548,16 @@ async def run_review(
             review_id,
             int((monotonic() - started_at) * 1000),
         )
+        observer.record_error(
+            trace,
+            error_type=exc.__class__.__name__,
+            message=str(exc)[:500],
+            recoverable=False,
+        )
         raise
+    finally:
+        terminal = str(context.get("_terminal_status", "failed"))
+        observer.finish_review_trace(trace, status=cast(TerminalStatus, terminal))
 
 
 async def _mark_review_done(
@@ -1462,6 +1566,7 @@ async def _mark_review_done(
     status: str,
     review_config: ReviewConfig | None = None,
 ) -> None:
+    context["_terminal_status"] = _to_terminal_status(status)
     input_price = _decimal_from_context(context.get("runtime_input_per_1m_usd")) or (
         review_config.model.input_per_1m_usd if review_config else Decimal("3.00")
     )
