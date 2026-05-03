@@ -2,6 +2,12 @@
 
 ## Cursor Cloud specific instructions
 
+### Git branching
+
+- Until v1, create feature/fix/chore branches from `main`.
+- Open pull requests to `main` unless a maintainer explicitly asks for a different base.
+- Do not push directly to `main`; land changes through PRs only.
+
 ### Architecture overview
 
 This is a monorepo for **Nash AI**, a GitHub App that reviews pull requests using Claude/OpenAI/Gemini. It has:

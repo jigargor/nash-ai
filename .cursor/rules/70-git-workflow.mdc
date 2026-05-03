@@ -9,6 +9,8 @@ alwaysApply: false
 ## Branches
 
 - `main` is deployable at all times.
+- Pre-v1, branch all feature/fix/chore/prompt work from `main`.
+- Do not push directly to `main`; use pull requests for all normal changes.
 - Feature branches: `feat/<short-description>` (e.g., `feat/opus-model-support`).
 - Fixes: `fix/<short-description>`.
 - Prompt changes: `prompt/<description>` — these trigger evals in CI.
@@ -24,6 +26,7 @@ alwaysApply: false
 ## Pull requests
 
 - One logical change per PR. If you're adding a feature and refactoring, those are two PRs.
+- Pre-v1 default PR base is `main` unless the user/maintainer specifies another base.
 - PR title mirrors the commit message (squash merge produces one commit).
 - Description template:
   ```

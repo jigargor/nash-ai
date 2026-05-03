@@ -15,7 +15,7 @@ Orchestrates **many open PRs**: discover, optionally refresh title/body, skip-re
 
 ## Defaults (unless the user overrides)
 
-- **Base branch**: This repo’s usual integration branch is `develop`—confirm if the user meant another base.
+- **Base branch**: Pre-v1 default base is `main`—confirm if the user meant another base.
 - **Description footer**: When updating a PR body, append **`[skip-nash-review]`** on its own line at the end **unless** the user says not to (or specifies different footer text).
 - **Title/body refresh**: Use the **fastr-pr** skill (see [.cursor/skills/fastr-pr/SKILL.md](../fastr-pr/SKILL.md)) for suggested title and body; merge user intent if they already provided copy.
 - **Merge**: Only when the PR is mergeable and **required checks are success**—same discipline as **finishugh** / **babysit** (wait for pending checks; no merge on red).
@@ -34,8 +34,8 @@ Examples: all heads matching `dependabot/*`, `cursor/*`, a regex, or a list of p
 
 Interpretations vary—**ask** if any of these are unclear:
 
-- **PR base/head pair**: “All open PRs from **`feature/a`** into **`develop`**” (explicit base + head).
-- **Integration finish**: “Everything targeting **`release/1.2`**” or “all PRs with base **`develop`** whose head matches **`cursor/**`**.”
+- **PR base/head pair**: “All open PRs from **`feature/a`** into **`main`**” (explicit base + head).
+- **Integration finish**: “Everything targeting **`release/1.2`**” or “all PRs with base **`main`** whose head matches **`cursor/**`**.”
 - **Prefix/suffix**: “Branches that **start with** `dependabot`” vs “**contain** `cursor`.”
 
 If the user says “between `main` and `develop`,” clarify whether they mean PRs **base `main` head `develop`**, the opposite, **both directions**, or **all PRs in a compare range** (not always representable as a single `gh` query—prefer explicit base/head).

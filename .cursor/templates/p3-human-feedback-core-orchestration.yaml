@@ -1,0 +1,208 @@
+orchestration:
+  goal: "Build a provider-independent human feedback collection system that captures useful/dismiss/ignore signals on posted findings, feeds labeled data into eval datasets (P2), and attaches outcome scores to Langfuse traces (P1). Start collect-only — no automated threshold changes from feedback until P5/P6."
+  mode: "implement"
+  merge_strategy: "hybrid"
+
+  prerequisites:
+    required_phases:
+      - "P1 (Observability Core) merged — ReviewTraceRecord IDs available for score attachment"
+      - "P2 (Eval Replay Core) merged — eval case export pipeline ready to ingest labels"
+      - "Pre-feature Phase 3 (human labeling) merged — finding_labels DB table exists"
+    verify_before_start:
+      - "Langfuse traces created per-review with review_id correlation"
+      - "LangfuseSink supports deferred score attachment by review_id"
+      - "evals/export_cases.py can filter by outcome label"
+      - "finding_labels table exists with basic label enum"
+
+  scoring:
+    correctness: 0.30
+    maintainability: 0.20
+    risk: 0.30
+    performance: 0.20
+
+  workers:
+    - id: "w1"
+      agent: "backend-engineer"
+      model: "claude-4.6-opus-max-thinking"
+      focus: >
+        Extend the feedback collection system with provider-independent signal capture.
+        Build three feedback ingestion paths:
+        1) GitHub webhook signals — capture emoji reactions on review comments (thumbs up/down,
+        confused, etc.), comment replies with keywords ("false positive", "good catch", etc.),
+        suggestion-applied commits (via check_suite/pull_request events), and finding-addressed
+        follow-up commits detected by diff overlap.
+        2) Dashboard explicit feedback — extend the admin labeling endpoint from pre-feature
+        Phase 3 with richer labels: useful, not_useful, false_positive, severity_wrong,
+        category_wrong, duplicate, not_actionable, correct_but_minor, accepted,
+        accepted_with_modification, missed_context, wrong_file, wrong_line.
+        3) Implicit timeout signals — background job that marks findings with no interaction
+        after 7 days as "ignored" (soft label, lower confidence than explicit feedback).
+        All feedback records must include: finding_id, review_id, signal_source (github_reaction,
+        github_reply, github_suggestion_applied, dashboard_explicit, timeout_implicit),
+        label, confidence (1.0 for explicit, 0.5-0.8 for inferred), labeled_by (user_id or
+        "system"), labeled_at timestamp.
+        Design the feedback record to be provider-independent — no Langfuse/DeepEval-specific
+        fields. The record feeds downstream consumers via an event/callback interface.
+      codebase_targets:
+        - "apps/api/src/app/feedback/ — new feedback module"
+        - "apps/api/src/app/feedback/models.py — feedback record types"
+        - "apps/api/src/app/feedback/collectors/ — ingestion path implementations"
+        - "apps/api/src/app/feedback/events.py — feedback event interface"
+        - "apps/api/src/app/db/models/ — feedback tables"
+        - "apps/api/src/app/webhooks/ — extend webhook handlers for reaction/reply events"
+
+    - id: "w2"
+      agent: "backend-engineer"
+      model: "gpt-5.3-codex-high-fast"
+      focus: >
+        Build the feedback → eval dataset pipeline and the feedback → Langfuse score pipeline.
+        1) Eval dataset feeding: when a feedback record is created, check if the associated
+        review has a snapshot. If so, update the eval case's outcome_label and outcome_source.
+        Provide a batch re-export command that refreshes all cases with latest feedback labels.
+        High-confidence explicit labels override auto-labels. Multiple labels on the same
+        finding use latest-explicit-wins with conflict logging.
+        2) Langfuse score attachment: when feedback is recorded, call the LangfuseSink's
+        deferred score method to attach/update scores on the review's trace. Compute aggregate
+        scores per-review: useful_rate (useful / total findings), dismiss_rate, ignore_rate,
+        false_positive_rate. These update the Langfuse trace scores in near-real-time.
+        3) Aggregate metrics computation: build a scheduled job (or on-demand endpoint)
+        that computes rolling feedback metrics: per-installation useful rate, per-category
+        useful rate, per-model useful rate, per-confidence-bucket useful rate. Store in
+        a metrics table for dashboard consumption and calibration in P6.
+      codebase_targets:
+        - "apps/api/src/app/feedback/pipelines/ — eval and Langfuse feed pipelines"
+        - "apps/api/src/app/feedback/aggregation.py — rolling metric computation"
+        - "apps/api/src/app/observability/sinks/langfuse.py — extend deferred score attachment"
+        - "evals/export_cases.py — extend with feedback label integration"
+        - "apps/api/src/app/queue/ — scheduled aggregation job"
+
+    - id: "w3"
+      agent: "frontend-engineer"
+      model: "claude-4.6-sonnet-medium"
+      focus: >
+        Build the dashboard feedback UI for internal labeling and feedback metrics display.
+        1) Finding labeling interface: on the review detail page, each finding should have
+        a feedback widget with quick-action buttons (useful, not useful, false positive)
+        and an expandable detail form for specific labels (severity_wrong, category_wrong,
+        duplicate, etc.) with optional notes. Show existing labels and their sources.
+        2) Feedback metrics dashboard: a new dashboard page showing aggregate feedback
+        metrics — useful rate over time (line chart), useful rate by category (bar chart),
+        useful rate by model (comparison table), feedback volume over time, label distribution.
+        3) Eval dataset management view: show current eval dataset stats — cases per bucket,
+        labeled vs unlabeled counts, last export timestamp. Provide a button to trigger
+        re-export (calls the batch re-export endpoint).
+        Use existing Shadcn UI components. Keep this as a dashboard admin feature — gated
+        behind admin/internal role check.
+      codebase_targets:
+        - "apps/web/src/components/feedback/ — feedback widgets"
+        - "apps/web/src/app/dashboard/feedback/ — feedback metrics page"
+        - "apps/web/src/app/dashboard/evals/ — eval dataset management page"
+        - "apps/web/src/hooks/ — feedback data hooks"
+        - "apps/web/src/lib/api/ — feedback API client functions"
+
+  feedback_design:
+    signal_hierarchy:
+      explicit_dashboard: "confidence: 1.0 — human explicitly labeled via dashboard"
+      explicit_github_reply: "confidence: 0.9 — human replied with clear signal on GitHub"
+      suggestion_applied: "confidence: 0.85 — suggestion commit was applied"
+      github_reaction: "confidence: 0.7 — emoji reaction (thumbs up = useful, thumbs down = not useful)"
+      follow_up_fix: "confidence: 0.75 — follow-up commit touches same lines in same file"
+      timeout_implicit: "confidence: 0.5 — no interaction after 7 days"
+    conflict_resolution: "Latest explicit label wins. If only implicit labels exist, highest-confidence wins. All conflicts logged with both labels for audit."
+    label_enum:
+      - "useful"
+      - "not_useful"
+      - "false_positive"
+      - "severity_wrong"
+      - "category_wrong"
+      - "duplicate"
+      - "not_actionable"
+      - "correct_but_minor"
+      - "accepted"
+      - "accepted_with_modification"
+      - "missed_context"
+      - "wrong_file"
+      - "wrong_line"
+      - "ignored"
+
+  recommendations:
+    - title: "Collect-only until P5/P6 — no automated threshold changes"
+      detail: >
+        This phase is strictly about building the feedback collection and aggregation
+        infrastructure. The feedback data informs P5 (framework integration for eval
+        scoring) and P6 (calibration/threshold tuning). Do not wire feedback into
+        automated confidence threshold adjustments yet. The path is:
+        P3 collect → P5 compare judge vs human → P6 enable threshold changes.
+    - title: "Provider-independent signal design"
+      detail: >
+        The feedback record format must not assume Langfuse, DeepEval, or any specific
+        framework. The core record is a simple (finding_id, label, confidence, source,
+        timestamp) tuple. Downstream consumers (Langfuse scores, eval datasets, calibration)
+        subscribe to feedback events and transform as needed. This ensures you can swap
+        or add frameworks without migrating feedback data.
+    - title: "GitHub webhook signal extraction requires care"
+      detail: >
+        Reaction events (issue_comment.reaction) and pull_request_review_comment events
+        need careful mapping. A thumbs-down on a review comment doesn't always mean
+        "false positive" — it could mean "I disagree with the severity." Start conservative:
+        only map thumbs-up → useful and suggestion-applied → useful with high confidence.
+        Other signals get lower confidence and are used for aggregate metrics, not individual
+        case labeling, until validated in P5.
+    - title: "Batch re-export must be idempotent"
+      detail: >
+        Running export_cases.py multiple times with updated feedback should produce the
+        same result. Case IDs are stable (based on review_id). Labels update in place.
+        Version number bumps only when snapshot data changes, not when labels change.
+        This prevents dataset churn while allowing label refinement.
+
+  sensitive_path_gates:
+    applies: true
+    sensitive_prefixes:
+      - "apps/api/src/app/webhooks/"
+      - "apps/api/src/app/api/"
+      - "apps/api/src/app/db/"
+      - "apps/api/alembic/"
+      - "apps/web/src/app/api/"
+    required_checks:
+      - "Webhook handlers for reactions/replies must verify HMAC before processing"
+      - "Feedback endpoints must be auth-gated to admin/internal users"
+      - "Tenant isolation: user A cannot label user B's installation's findings"
+      - "DB migrations have documented forward + rollback"
+      - "No PII beyond GitHub login stored in feedback records"
+
+  constraints:
+    - "Collect-only — no automated threshold changes from feedback in this phase."
+    - "Provider-independent feedback records — no Langfuse/DeepEval-specific fields in core model."
+    - "Webhook signal extraction must verify HMAC before processing."
+    - "Feedback endpoints auth-gated to admin/internal users only."
+    - "Tenant isolation enforced — cross-installation feedback access blocked."
+    - "No PII beyond GitHub login in feedback records."
+    - "Implicit timeout labeling must be clearly marked as low-confidence."
+    - "Langfuse score updates must be async/fire-and-forget — failures don't block feedback recording."
+    - "All new DB tables require Alembic migrations with forward + rollback."
+    - "mypy --strict, existing .cursor/rules constraints."
+
+  acceptance:
+    - "Three feedback ingestion paths functional: GitHub signals, dashboard explicit, timeout implicit"
+    - "Feedback records include finding_id, review_id, signal_source, label, confidence, labeled_by, labeled_at"
+    - "GitHub reaction webhook handler captures thumbs up/down on review comments"
+    - "Suggestion-applied detection via pull_request events"
+    - "Dashboard labeling widget on review detail page with quick-action and detail labels"
+    - "Feedback labels feed into eval case export — cases updated with outcome labels"
+    - "Langfuse trace scores updated when feedback recorded (useful_rate, dismiss_rate, etc.)"
+    - "Rolling aggregate metrics computed: per-installation, per-category, per-model useful rates"
+    - "Feedback metrics dashboard page showing rates, volumes, distributions over time"
+    - "Eval dataset management view showing per-bucket counts and export controls"
+    - "Conflict resolution: latest-explicit-wins with audit logging"
+    - "Batch re-export idempotent — same result on repeated runs"
+    - "All endpoints auth-gated and tenant-isolated"
+    - "HMAC verification on all webhook signal paths"
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: true
+    include_data_contracts: true

@@ -11,7 +11,7 @@ Your job is the same as **babysit**—get the PR merge-ready—**and** merge whe
 
 ## Shared with babysit (always)
 
-1. **Base branch**: Confirm the PR targets the branch the user intends (this repo’s default integration branch is `develop`). Retarget with `gh pr edit <n> --base <branch>` when the user asks.
+1. **Base branch**: Confirm the PR targets the branch the user intends (pre-v1 default is `main`). Retarget with `gh pr edit <n> --base <branch>` when the user asks.
 
 2. **Comments**: Review every comment (including Bugbot). Fix only what you agree with; explain disagreement or uncertainty.
 

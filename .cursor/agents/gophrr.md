@@ -31,7 +31,7 @@ If the user **aborts or cancels** a run, **stop** immediately; do not spawn dupl
 
 ## Before the main PR loop (do this first)
 
-1. **PR must exist** — For each head branch in scope (including the current branch when the parent prompt implies it): if there is **no** open PR for that head into the intended base, **open one** with `gh pr create` (default base **`develop`** unless the user or **pr-closer** context says otherwise). Link the PR in your progress notes. If a PR already exists for that head/base pair, do not create a duplicate.
+1. **PR must exist** — For each head branch in scope (including the current branch when the parent prompt implies it): if there is **no** open PR for that head into the intended base, **open one** with `gh pr create` (pre-v1 default base **`main`** unless the user or **pr-closer** context says otherwise). Link the PR in your progress notes. If a PR already exists for that head/base pair, do not create a duplicate.
 
 2. **Automated workflow runs** — For each in-scope head branch, drive **GitHub Actions** (and any other repo-standard automation tied to those runs) to a known state **before** merge-or-fix work:
    - List recent runs for the branch (`gh run list --branch <head> --limit 30` or equivalent).

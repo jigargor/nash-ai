@@ -1,0 +1,215 @@
+orchestration:
+  goal: "Integrate DeepEval as a pytest-shaped execution harness for the eval suite (P2) and expand Langfuse from trace/score storage to full experiment tracking, dataset management, and judge comparison. Keep canonical eval definitions and scoring in-repo — frameworks are execution/visualization layers, not sources of truth."
+  mode: "implement"
+  merge_strategy: "hybrid"
+
+  prerequisites:
+    required_phases:
+      - "P1 (Observability Core) merged — Langfuse traces with scores functional"
+      - "P2 (Eval Replay Core) merged — eval cases, metrics, and replay harness exist"
+      - "P3 (Human Feedback Core) merged — human labels available for judge comparison"
+      - "P4 (False-Negative Core) merged — regression suite with confirmed cases"
+    verify_before_start:
+      - "evals/tests/ contains pytest-parameterized eval tests"
+      - "evals/metrics/ has custom metric functions returning (score, pass_fail, details)"
+      - "Human feedback labels exist with sufficient volume for judge comparison (min 50 labeled findings)"
+      - "Regression suite has confirmed cases"
+      - "Langfuse traces have attached scores from P1 and P3"
+
+  scoring:
+    correctness: 0.30
+    maintainability: 0.25
+    risk: 0.25
+    performance: 0.20
+
+  workers:
+    - id: "w1"
+      agent: "eval-framework-engineer"
+      model: "claude-4.6-opus-max-thinking"
+      focus: >
+        Integrate DeepEval as the eval execution harness. Key design principle: DeepEval
+        wraps your in-repo metrics, it does not replace them.
+        1) Create DeepEval custom metric classes that delegate to evals/metrics/ functions.
+        Each metric class calls the plain Python function and maps the result to DeepEval's
+        metric interface (score, success, reason). This keeps the canonical metric logic
+        in-repo and DeepEval as a runner.
+        2) Convert evals/tests/ parameterized tests to use DeepEval's test case and
+        assert_test patterns. Each test loads an eval case, creates a DeepEval LLMTestCase
+        with input (snapshot context), actual_output (candidate findings), expected_output
+        (baseline/labeled findings), and runs custom metrics.
+        3) Wire DeepEval's dataset API to load from evals/datasets/ JSON files —
+        not from DeepEval's hosted platform. Datasets live in-repo.
+        4) Configure DeepEval to output results as JSON (for CI) and to optionally push
+        to Confident AI dashboard for visualization (behind a config flag, never required).
+        5) Add a deepeval.toml or equivalent config at repo root.
+        6) Build the pytest conftest.py integration that makes deepeval run naturally
+        with pytest (pytest evals/tests/ should work with and without deepeval installed).
+        Graceful degradation: if deepeval is not installed, tests run with plain pytest
+        assertions using the same metric functions.
+      codebase_targets:
+        - "evals/deepeval_metrics/ — DeepEval metric wrappers around in-repo metrics"
+        - "evals/tests/ — convert to DeepEval test cases (backward-compatible)"
+        - "evals/conftest.py — DeepEval/pytest integration with graceful degradation"
+        - "evals/deepeval_config.py — DeepEval configuration"
+        - "pyproject.toml or deepeval.toml — DeepEval project config"
+
+    - id: "w2"
+      agent: "observability-engineer"
+      model: "gpt-5.3-codex-high-fast"
+      focus: >
+        Expand Langfuse integration from basic trace/score storage to full experiment
+        tracking and dataset management.
+        1) Langfuse dataset sync: build a pipeline that syncs eval cases from
+        evals/datasets/ to Langfuse datasets. Each eval case becomes a dataset item.
+        Sync is one-way (repo → Langfuse) to maintain repo as source of truth.
+        Dataset items include the snapshot context, expected findings, and labels.
+        2) Langfuse experiment runs: when eval replay runs (P2), push results to
+        Langfuse as experiment runs. Each run is tagged with prompt_version, model,
+        config_hash. This enables Langfuse's experiment comparison UI.
+        3) Langfuse score expansion: beyond P1's per-trace scores, add per-experiment
+        aggregate scores: overall precision, recall, FP rate, per-bucket scores.
+        4) Braintrust mirror (optional, behind config flag): build a thin adapter
+        that mirrors Langfuse experiment data to Braintrust for teams that prefer
+        that UI. Same principle — Braintrust is a visualization layer, not source of truth.
+        5) Score reconciliation: ensure scores from P1 (automatic), P3 (human feedback),
+        and P5 (eval/judge) are all attached to the same Langfuse trace and clearly
+        labeled by source.
+      codebase_targets:
+        - "apps/api/src/app/observability/langfuse_datasets.py — dataset sync pipeline"
+        - "apps/api/src/app/observability/langfuse_experiments.py — experiment run tracking"
+        - "apps/api/src/app/observability/sinks/langfuse.py — expand score types"
+        - "apps/api/src/app/observability/braintrust_mirror.py — optional Braintrust adapter"
+        - "apps/api/src/app/config.py — Langfuse dataset/experiment config"
+
+    - id: "w3"
+      agent: "eval-judge-engineer"
+      model: "claude-4.6-sonnet-medium"
+      focus: >
+        Build the judge vs human comparison pipeline — the prerequisite for P6 threshold
+        tuning.
+        1) Judge evaluator: build a configurable LLM judge that evaluates individual
+        findings. The judge receives: the finding (category, severity, description,
+        suggestion, evidence), the code context (diff hunk, surrounding code), and
+        evaluates: is this finding useful? is the severity appropriate? is the suggestion
+        applicable? Output: judge_verdict (useful/not_useful/unsure), confidence, reasoning.
+        2) Judge must be provider-independent: configure via model router (same as review
+        pipeline). Default to a different provider than the one that generated the finding
+        to avoid self-agreement bias.
+        3) Human vs judge comparison: build a comparison pipeline that runs the judge on
+        all human-labeled findings (from P3) and computes agreement metrics: Cohen's kappa,
+        simple agreement rate, confusion matrix (judge says useful but human says FP, etc.),
+        and edge case analysis (where do they disagree most?).
+        4) Comparison report: generate a report showing judge accuracy against human labels
+        broken down by category, severity, confidence bucket, and provider. This report
+        is the gate artifact for P6 — threshold tuning is only enabled when judge agreement
+        exceeds the configured threshold (default: 0.7 kappa).
+        5) Judge results are recorded as a separate feedback source (signal_source: "judge")
+        in the feedback system from P3.
+      codebase_targets:
+        - "apps/api/src/app/eval/judge.py — LLM judge evaluator"
+        - "apps/api/src/app/eval/judge_comparison.py — human vs judge pipeline"
+        - "apps/api/src/app/eval/judge_report.py — comparison report generation"
+        - "apps/api/src/app/feedback/collectors/judge.py — judge as feedback source"
+        - "evals/tests/test_judge_agreement.py — agreement metric tests"
+
+  deepeval_integration_design:
+    principle: "DeepEval is a runner, not the source of truth"
+    metric_architecture:
+      canonical: "evals/metrics/*.py — plain Python functions, no framework dependencies"
+      deepeval_wrapper: "evals/deepeval_metrics/*.py — thin wrappers calling canonical functions"
+      fallback: "If deepeval not installed, tests use canonical metrics directly via pytest"
+    dataset_architecture:
+      source_of_truth: "evals/datasets/*.json — versioned in-repo"
+      langfuse_mirror: "One-way sync repo → Langfuse datasets (visualization only)"
+      deepeval_loading: "DeepEval loads from local JSON, not Confident AI"
+    test_structure:
+      with_deepeval: "pytest evals/tests/ — DeepEval LLMTestCase + custom metrics"
+      without_deepeval: "pytest evals/tests/ — plain assertions with same metric functions"
+      ci_default: "Run without DeepEval in CI (faster, no external dependency)"
+
+  judge_design:
+    evaluation_criteria:
+      usefulness: "Would a competent developer act on this finding?"
+      severity_accuracy: "Is the assigned severity proportional to the actual risk?"
+      suggestion_applicability: "Would applying the suggestion fix the issue without introducing new problems?"
+      evidence_quality: "Is the evidence cited sufficient to understand and verify the finding?"
+    provider_independence:
+      rule: "Judge must use a different provider than the finding's generator"
+      implementation: "Use model router with role='judge', exclude generating provider from candidates"
+      fallback: "If only one provider configured, use a different model tier (e.g., frontier for judge, balanced for generator)"
+    agreement_gate:
+      metric: "Cohen's kappa"
+      threshold: 0.7
+      minimum_samples: 50
+      purpose: "P6 threshold tuning is only enabled when judge agreement exceeds this gate"
+
+  recommendations:
+    - title: "Never make DeepEval required for CI"
+      detail: >
+        DeepEval should be an optional dependency. CI runs evals with plain pytest and
+        in-repo metrics. DeepEval provides additional features (dashboard, comparison UI)
+        for local development and experiment tracking, but the CI gate must not depend on
+        a third-party service. This also means no Confident AI API calls in CI.
+    - title: "Judge provider rotation to prevent self-agreement"
+      detail: >
+        If Claude generated a finding, don't use Claude to judge it. The judge pipeline
+        should track which provider generated each finding and route to a different provider.
+        This is critical for unbiased comparison. Log the judge provider in the feedback
+        record for analysis.
+    - title: "Langfuse dataset sync is append-only"
+      detail: >
+        When syncing to Langfuse, never delete existing dataset items. Add new items and
+        update existing ones (by case_id). This prevents accidental data loss in Langfuse.
+        Sync should be idempotent and safe to run repeatedly.
+    - title: "Start with small judge comparison before scaling"
+      detail: >
+        Run the judge comparison on 50 high-confidence human-labeled findings first.
+        Review the disagreement cases manually. Iterate on judge prompt and evaluation
+        criteria before running on the full dataset. Bad judge criteria will produce
+        misleading agreement metrics.
+    - title: "Braintrust mirror is fully optional"
+      detail: >
+        The Braintrust adapter is behind a config flag (ENABLE_BRAINTRUST_MIRROR=false
+        by default). It exists for teams that have Braintrust subscriptions and prefer
+        that UI. It should never be required and should not affect the primary pipeline.
+
+  constraints:
+    - "DeepEval is optional — CI must work without it."
+    - "Canonical eval metrics live in-repo — DeepEval wrappers delegate, never replace."
+    - "Datasets are versioned in-repo — Langfuse/Confident AI are mirrors, not sources."
+    - "Judge must use a different provider than the finding's generator."
+    - "Judge agreement gate (kappa >= 0.7) must pass before P6 threshold tuning is enabled."
+    - "Minimum 50 human-labeled findings required for judge comparison validity."
+    - "Langfuse dataset sync is one-way (repo → Langfuse) and append-only."
+    - "Braintrust mirror behind config flag, default off."
+    - "No Confident AI or external eval service API calls in CI pipeline."
+    - "Judge feedback records stored via P3 feedback system with signal_source='judge'."
+    - "mypy --strict, existing .cursor/rules constraints."
+
+  acceptance:
+    - "DeepEval custom metrics wrap in-repo metrics — each canonical metric has a DeepEval counterpart"
+    - "Eval tests run with and without DeepEval installed (graceful degradation)"
+    - "DeepEval loads datasets from local evals/datasets/ JSON, not external service"
+    - "Langfuse dataset sync pipeline pushes eval cases as dataset items"
+    - "Langfuse experiment runs created from eval replay results with proper tagging"
+    - "Score reconciliation: automatic, human, and judge scores all on same Langfuse trace"
+    - "LLM judge evaluates findings with usefulness/severity/suggestion/evidence criteria"
+    - "Judge uses different provider than finding generator (verified in tests)"
+    - "Human vs judge comparison computes Cohen's kappa and agreement rate"
+    - "Comparison report breaks down agreement by category, severity, confidence bucket"
+    - "Judge agreement gate artifact generated (kappa value + pass/fail against threshold)"
+    - "Judge verdicts stored as feedback records with signal_source='judge'"
+    - "CI runs evals without DeepEval dependency"
+    - "Braintrust mirror functional when enabled, no-op when disabled"
+    - "deepeval.toml or equivalent config present at repo root"
+
+  output:
+    include_patch: true
+    include_test_plan: true
+    include_rollout_plan: true
+    include_risk_matrix: true
+    include_skill_docs: false
+    include_wireframe_briefs: false
+    include_data_contracts: true
+    include_eval_pipeline_design: true
+    include_judge_architecture: true
