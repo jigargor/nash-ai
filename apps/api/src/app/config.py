@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    observability_enabled: bool = False
+    observability_sinks: str = "disabled"
+    observability_payload_mode: str = "metadata_only"
+    observability_sample_rate: float = 1.0
+    observability_emit_tool_payload_hashes: bool = True
+    observability_max_metadata_bytes: int = 8192
+    observability_max_events_per_review: int = 500
     web_app_url: str | None = None
     snapshot_retention_days: int = 30
     snapshot_archive_batch_size: int = 100
@@ -142,6 +149,27 @@ class Settings(BaseSettings):
             return None
         text = str(v).strip().rstrip("/")
         return text or None
+
+    @field_validator("observability_payload_mode", mode="before")
+    @classmethod
+    def validate_observability_payload_mode(cls, v: object) -> str:
+        value = str(v or "metadata_only").strip().lower()
+        allowed = {
+            "metadata_only",
+            "hashed_payloads",
+            "redacted_payloads",
+            "raw_debug_local_only",
+        }
+        if value not in allowed:
+            raise ValueError(f"OBSERVABILITY_PAYLOAD_MODE must be one of: {sorted(allowed)}")
+        return value
+
+    @field_validator("observability_sample_rate", mode="after")
+    @classmethod
+    def validate_observability_sample_rate(cls, v: float) -> float:
+        if v < 0 or v > 1:
+            raise ValueError("OBSERVABILITY_SAMPLE_RATE must be between 0 and 1")
+        return v
 
     @field_validator("fernet_key", mode="after")
     @classmethod

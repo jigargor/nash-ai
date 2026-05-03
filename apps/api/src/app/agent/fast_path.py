@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, Literal, cast
+from time import monotonic
+from hashlib import sha256
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -13,6 +15,8 @@ from app.agent.prompt_compaction import compact_diff_excerpt, extension_histogra
 from app.agent.review_config import FastPathConfig
 from app.llm.providers import StructuredOutputRequest, get_provider_adapter
 from app.llm.types import ModelProvider
+from app.observability.events import LLMUsage as ObserverLLMUsage
+from app.observability.observer import StageSpan, get_observer
 
 FastPathDecisionValue = Literal["skip_review", "light_review", "full_review", "high_risk_review"]
 logger = logging.getLogger(__name__)
@@ -369,6 +373,7 @@ async def _request_fast_path_decision(
     provider: ModelProvider,
 ) -> object:
     adapter = get_provider_adapter(provider)
+    request_started = monotonic()
     result = await adapter.structured_output(
         request=StructuredOutputRequest(
             model_name=model_name,
@@ -382,6 +387,22 @@ async def _request_fast_path_decision(
             temperature=0,
         )
     )
+    span = context.get("_observation_stage_span")
+    if isinstance(span, StageSpan):
+        get_observer().record_generation(
+            span,
+            provider=provider,
+            model=model_name,
+            usage=ObserverLLMUsage(
+                input_tokens=int(result.usage.input_tokens),
+                output_tokens=int(result.usage.output_tokens),
+                cache_read_tokens=int(result.usage.cached_input_tokens),
+                cache_write_tokens=int(result.usage.cache_creation_input_tokens),
+            ),
+            latency_ms=int((monotonic() - request_started) * 1000),
+            request_hash=sha256(user_prompt.encode("utf-8")).hexdigest(),
+            response_hash=sha256(str(result.payload).encode("utf-8")).hexdigest(),
+        )
     return result.payload
 
 

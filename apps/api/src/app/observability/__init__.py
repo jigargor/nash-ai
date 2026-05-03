@@ -18,6 +18,7 @@ from app.observability.setup import (
 # Re-export new observer API
 from app.observability.observer import (
     LLMObserver,
+    ObservationContext,
     ReviewTrace,
     StageSpan,
     configure_observer,
@@ -42,6 +43,7 @@ from app.observability.events import (
 # Re-export sink types
 from app.observability.sinks import (
     DBSink,
+    InMemoryTestSink,
     ObservabilitySink,
     StructuredLogSink,
 )
@@ -63,6 +65,7 @@ __all__ = [
     "create_async_anthropic_client",
     # Observer
     "LLMObserver",
+    "ObservationContext",
     "ReviewTrace",
     "StageSpan",
     "get_observer",
@@ -82,5 +85,6 @@ __all__ = [
     # Sinks
     "ObservabilitySink",
     "DBSink",
+    "InMemoryTestSink",
     "StructuredLogSink",
 ]

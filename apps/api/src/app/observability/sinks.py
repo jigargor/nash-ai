@@ -17,6 +17,7 @@ from app.observability.events import (
     ToolCallEvent,
     ValidationEvent,
 )
+from app.observability.redaction import ObservabilityPayloadMode, sanitize_payload
 
 logger = logging.getLogger(__name__)
 
@@ -61,15 +62,28 @@ class StructuredLogSink:
     Always active so there is always a cheap, zero-dependency audit trail.
     """
 
-    def __init__(self, log_level: int = logging.DEBUG) -> None:
+    def __init__(
+        self,
+        log_level: int = logging.DEBUG,
+        *,
+        payload_mode: ObservabilityPayloadMode = "metadata_only",
+        max_metadata_bytes: int = 8192,
+    ) -> None:
         self._level = log_level
         self._log = logging.getLogger("nash.observability")
+        self._payload_mode = payload_mode
+        self._max_metadata_bytes = max_metadata_bytes
 
     def _emit(self, event_type: str, payload: dict[str, object]) -> None:
         if self._log.isEnabledFor(self._level):
+            safe_payload = sanitize_payload(
+                payload,
+                mode=self._payload_mode,
+                max_metadata_bytes=self._max_metadata_bytes,
+            )
             self._log.log(
                 self._level,
-                json.dumps({"event": event_type, **payload}, default=str),
+                json.dumps({"event": event_type, **safe_payload}, default=str),
             )
 
     def on_review_start(self, event: ReviewStartEvent) -> None:
@@ -302,3 +316,44 @@ class DBSink:
 
     def flush(self) -> None:
         pass
+
+
+class InMemoryTestSink:
+    """Collect all events in memory for unit/integration tests."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def _append(self, event_type: str, event: object) -> None:
+        payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else {"raw": event}
+        self.events.append({"event": event_type, "payload": payload})
+
+    def on_review_start(self, event: ReviewStartEvent) -> None:
+        self._append("review_start", event)
+
+    def on_review_end(self, event: ReviewEndEvent) -> None:
+        self._append("review_end", event)
+
+    def on_stage_start(self, event: StageStartEvent) -> None:
+        self._append("stage_start", event)
+
+    def on_stage_end(self, event: StageEndEvent) -> None:
+        self._append("stage_end", event)
+
+    def on_generation(self, event: GenerationEvent) -> None:
+        self._append("generation", event)
+
+    def on_tool_call(self, event: ToolCallEvent) -> None:
+        self._append("tool_call", event)
+
+    def on_validation(self, event: ValidationEvent) -> None:
+        self._append("validation", event)
+
+    def on_context_build(self, event: ContextBuildEvent) -> None:
+        self._append("context_build", event)
+
+    def on_error(self, event: ErrorEvent) -> None:
+        self._append("error", event)
+
+    def flush(self) -> None:
+        return
