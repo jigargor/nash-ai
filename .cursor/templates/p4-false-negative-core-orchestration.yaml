@@ -204,7 +204,7 @@ orchestration:
     - "CI regression gate: 100% recall on confirmed cases required"
     - "Per-category false-negative rate computed from confirmed misses"
     - "Langfuse negative scores attached to reviews with confirmed misses"
-    - "Triage queue UI with confirm/reject actions and candidate details"
+    - "Triage queue UI with confirm / not_applicable / already_caught actions and candidate details"
     - "Missed-issue report form with structured fields"
     - "False-negative analytics dashboard: by category, by source, recall trend"
     - "Regression suite status visible in dashboard"
