@@ -217,6 +217,136 @@ async def get_provider_usage_metrics(
     }
 
 
+@router.get("/traceability")
+async def get_traceability_report(
+    installation_id: int = Query(..., ge=1),
+    review_id: int | None = Query(default=None, ge=1),
+    days: int = Query(default=7, ge=1, le=90),
+    limit: int = Query(default=500, ge=1, le=2000),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
+) -> dict[str, object]:
+    """Report how well durable audit rows can be traversed back to observer traces."""
+    allowed_installation_ids = await _allowed_installation_ids(current_user)
+    _require_installation_access(allowed_installation_ids, installation_id)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        stmt = (
+            select(ReviewModelAudit)
+            .where(ReviewModelAudit.installation_id == installation_id)
+            .where(ReviewModelAudit.created_at >= since)
+            .order_by(ReviewModelAudit.created_at.desc())
+            .limit(limit)
+        )
+        if review_id is not None:
+            stmt = stmt.where(ReviewModelAudit.review_id == review_id)
+        audits = (await session.execute(stmt)).scalars().all()
+
+    stage_counts: dict[str, int] = {}
+    provider_counts: dict[str, int] = {}
+    model_counts: dict[str, int] = {}
+    reviews: dict[int, dict[str, object]] = {}
+    linked_rows = 0
+    generation_rows = 0
+    stage_duration_values: list[int] = []
+
+    for audit in audits:
+        metadata = audit.metadata_json if isinstance(audit.metadata_json, dict) else {}
+        trace_id = metadata.get("trace_id")
+        generation_id = metadata.get("generation_id")
+        has_trace = isinstance(trace_id, str) and bool(trace_id.strip())
+        has_generation = isinstance(generation_id, str) and bool(generation_id.strip())
+        if has_trace:
+            linked_rows += 1
+        if has_generation:
+            generation_rows += 1
+        if isinstance(audit.stage_duration_ms, int):
+            stage_duration_values.append(audit.stage_duration_ms)
+
+        stage_counts[audit.stage] = stage_counts.get(audit.stage, 0) + 1
+        provider_counts[audit.provider] = provider_counts.get(audit.provider, 0) + 1
+        model_counts[audit.model] = model_counts.get(audit.model, 0) + 1
+
+        summary = reviews.setdefault(
+            int(audit.review_id),
+            {
+                "review_id": int(audit.review_id),
+                "run_ids": set(),
+                "stages": set(),
+                "providers": set(),
+                "models": set(),
+                "total_tokens": 0,
+                "trace_linked_rows": 0,
+                "generation_linked_rows": 0,
+            },
+        )
+        cast_set(summary, "run_ids").add(audit.run_id)
+        cast_set(summary, "stages").add(audit.stage)
+        cast_set(summary, "providers").add(audit.provider)
+        cast_set(summary, "models").add(audit.model)
+        summary["total_tokens"] = _int_summary_value(summary, "total_tokens") + int(
+            audit.total_tokens or 0
+        )
+        if has_trace:
+            summary["trace_linked_rows"] = _int_summary_value(summary, "trace_linked_rows") + 1
+        if has_generation:
+            summary["generation_linked_rows"] = (
+                _int_summary_value(summary, "generation_linked_rows") + 1
+            )
+
+    review_summaries = []
+    for summary in reviews.values():
+        review_summaries.append(
+            {
+                "review_id": summary["review_id"],
+                "run_ids": sorted(cast_set(summary, "run_ids")),
+                "stages": sorted(cast_set(summary, "stages")),
+                "providers": sorted(cast_set(summary, "providers")),
+                "models": sorted(cast_set(summary, "models")),
+                "total_tokens": summary["total_tokens"],
+                "trace_linked_rows": summary["trace_linked_rows"],
+                "generation_linked_rows": summary["generation_linked_rows"],
+            }
+        )
+
+    row_count = len(audits)
+    return {
+        "installation_id": installation_id,
+        "review_id": review_id,
+        "window_days": days,
+        "row_count": row_count,
+        "review_count": len(reviews),
+        "trace_linked_row_count": linked_rows,
+        "trace_link_coverage": linked_rows / row_count if row_count else 0.0,
+        "generation_linked_row_count": generation_rows,
+        "generation_link_coverage": generation_rows / row_count if row_count else 0.0,
+        "stage_counts": dict(sorted(stage_counts.items())),
+        "provider_counts": dict(sorted(provider_counts.items())),
+        "model_counts": dict(sorted(model_counts.items())),
+        "latency": {
+            "sample_count": len(stage_duration_values),
+            "max_stage_duration_ms": max(stage_duration_values) if stage_duration_values else None,
+            "avg_stage_duration_ms": (
+                sum(stage_duration_values) / len(stage_duration_values)
+                if stage_duration_values
+                else None
+            ),
+        },
+        "reviews": review_summaries[:100],
+    }
+
+
+def cast_set(summary: dict[str, object], key: str) -> set[str]:
+    value = summary[key]
+    return value if isinstance(value, set) else set()
+
+
+def _int_summary_value(summary: dict[str, object], key: str) -> int:
+    value = summary[key]
+    return value if isinstance(value, int) else 0
+
+
 @router.get("/scorecard")
 async def get_fast_path_scorecard(
     installation_id: int = Query(..., ge=1),

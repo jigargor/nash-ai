@@ -11,7 +11,7 @@ from app.llm.types import LLMUsage as ProviderLLMUsage
 from app.observability.events import LLMUsage as ObserverLLMUsage
 from app.observability.observer import LLMObserver, configure_observer, get_observer, reset_observer
 from app.observability.redaction import sanitize_payload
-from app.observability.sinks import InMemoryTestSink
+from app.observability.sinks import InMemoryTestSink, LangfuseSink
 from app.queue import worker as worker_module
 
 
@@ -169,3 +169,76 @@ def test_stage_failed_status_emits_end_event() -> None:
     stage_end_events = [event for event in sink.events if event["event"] == "stage_end"]
     assert stage_end_events
     assert stage_end_events[-1]["payload"]["status"] == "failed"
+
+
+class _FakeLangfuseNode:
+    def __init__(self, calls: list[dict[str, Any]], name: str = "root") -> None:
+        self._calls = calls
+        self._name = name
+
+    def trace(self, **kwargs: object) -> "_FakeLangfuseNode":
+        self._calls.append({"method": "trace", "node": self._name, "kwargs": kwargs})
+        return _FakeLangfuseNode(self._calls, "trace")
+
+    def span(self, **kwargs: object) -> "_FakeLangfuseNode":
+        self._calls.append({"method": "span", "node": self._name, "kwargs": kwargs})
+        return _FakeLangfuseNode(self._calls, "span")
+
+    def generation(self, **kwargs: object) -> "_FakeLangfuseNode":
+        self._calls.append({"method": "generation", "node": self._name, "kwargs": kwargs})
+        return _FakeLangfuseNode(self._calls, "generation")
+
+    def event(self, **kwargs: object) -> None:
+        self._calls.append({"method": "event", "node": self._name, "kwargs": kwargs})
+
+    def score(self, **kwargs: object) -> None:
+        self._calls.append({"method": "score", "node": self._name, "kwargs": kwargs})
+
+    def update(self, **kwargs: object) -> None:
+        self._calls.append({"method": "update", "node": self._name, "kwargs": kwargs})
+
+    def end(self, **kwargs: object) -> None:
+        self._calls.append({"method": "end", "node": self._name, "kwargs": kwargs})
+
+    def flush(self) -> None:
+        self._calls.append({"method": "flush", "node": self._name, "kwargs": {}})
+
+
+def test_langfuse_sink_mirrors_trace_span_generation_ids() -> None:
+    calls: list[dict[str, Any]] = []
+    client = _FakeLangfuseNode(calls)
+    sink = LangfuseSink(client, environment="test")
+    observer = LLMObserver(sinks=[sink], enabled=True)
+    trace = observer.start_review_trace(
+        review_id=20,
+        installation_id=30,
+        run_id="run-20",
+        trace_id="trace-20",
+        prompt_version="prompt-v1",
+    )
+    stage = observer.start_stage(
+        trace,
+        "primary_review",
+        stage_id="stage-20",
+        span_id="span-20",
+    )
+    observer.record_generation(
+        stage,
+        provider="anthropic",
+        model="claude-sonnet-4-5",
+        usage=ObserverLLMUsage(input_tokens=100, output_tokens=50),
+        latency_ms=123,
+        generation_id="generation-20",
+        request_hash="request-hash",
+        response_hash="response-hash",
+    )
+    observer.finish_stage(stage, status="success")
+    observer.finish_review_trace(trace, status="success")
+
+    trace_call = next(call for call in calls if call["method"] == "trace")
+    span_call = next(call for call in calls if call["method"] == "span")
+    generation_call = next(call for call in calls if call["method"] == "generation")
+    assert trace_call["kwargs"]["id"] == "trace-20"
+    assert span_call["kwargs"]["id"] == "span-20"
+    assert generation_call["kwargs"]["id"] == "generation-20"
+    assert generation_call["kwargs"]["metadata"]["request_hash"] == "request-hash"

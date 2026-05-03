@@ -4,6 +4,7 @@
 
 - `GET /api/v1/usage/metrics`
 - `GET /api/v1/usage/scorecard`
+- `GET /api/v1/usage/traceability`
 
 ## Metrics Endpoint
 
@@ -35,6 +36,20 @@ Returns:
 - disagreement rate
 - dismiss/ignore/useful rates
 - target disagreement range used for Goldilocks calibration
+
+## Traceability Endpoint
+
+`GET /api/v1/usage/traceability?installation_id=...&days=7&review_id=...`
+
+Returns a durable-audit coverage report for review traceability:
+
+- audit row count and review count
+- trace-linked and generation-linked coverage
+- stage/provider/model counts
+- stage latency summary
+- per-review traversal summary (`review_id` → runs → stages → providers/models)
+
+This endpoint reads internal `ReviewModelAudit` rows and does not require Langfuse to be available. Langfuse is a mirror; internal audit rows remain the durable reporting path.
 
 ## RLS Feasibility Notes
 

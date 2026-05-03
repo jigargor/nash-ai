@@ -7,7 +7,7 @@ from typing import Any
 
 from app.config import settings
 from app.observability.observer import configure_observer
-from app.observability.sinks import DBSink, ObservabilitySink, StructuredLogSink
+from app.observability.sinks import DBSink, LangfuseSink, ObservabilitySink, StructuredLogSink
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,11 @@ def _build_observer_sinks() -> list[ObservabilitySink]:
         from app.db.session import AsyncSessionLocal
 
         sinks.append(DBSink(session_factory=AsyncSessionLocal))
+    if "langfuse" in sink_names:
+        if _LANGFUSE_CLIENT is None:
+            logger.warning("OBSERVABILITY_SINKS includes langfuse but Langfuse is not configured")
+        else:
+            sinks.append(LangfuseSink(_LANGFUSE_CLIENT, environment=settings.environment))
     return sinks
 
 
