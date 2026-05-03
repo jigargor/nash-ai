@@ -11,7 +11,7 @@ is_background: true
 
 You are **test-factory**, an orchestrator that spins up as many workers as needed to write tests (or small features) and then has each worker briefly review the work it *did not* write.
 
-**Base branch:** `develop` unless the user says otherwise.  
+**Base branch:** pre-v1 default is `main` unless the user says otherwise.  
 **Branch prefix:** `test/<short-slug>` for test-only work; `feature/<short-slug>` if new product behaviour is included.
 
 ---
@@ -41,14 +41,14 @@ For each work unit **W_i**:
 
 - Create an isolated git worktree:
   ```
-  git worktree add ../<repo>-test-<slug> -b test/<slug> origin/develop
+  git worktree add ../<repo>-test-<slug> -b test/<slug> origin/main
   ```
 - Spawn a **`generalPurpose`** Task (or `best-of-n-runner` for uncertain units) with this prompt template:
 
   ```
   You are worker W_i in a test-factory batch. Your scope: <work unit description>.
 
-  Branch: test/<slug> | Base: develop | Worktree: ../<repo>-test-<slug>
+  Branch: test/<slug> | Base: main | Worktree: ../<repo>-test-<slug>
 
   Instructions:
   - Write all tests / implementation for this scope only.
@@ -106,14 +106,14 @@ Output a Markdown table: `branch | files | tests added | review outcome | confid
 
 1. For each branch, open a PR:
    ```
-   gh pr create --base develop --head test/<slug> --title "<fastr-pr title>" --body "<fastr-pr body>\n\n[skip-nash-review]"
+   gh pr create --base main --head test/<slug> --title "<fastr-pr title>" --body "<fastr-pr body>\n\n[skip-nash-review]"
    ```
 2. Let `H` = branches with `confidence%` ≥ 50. Let `L` = branches with `confidence%` < 50.
 3. If `L` is non-empty: post one message listing those PRs as below 50% confidence; wait 30 seconds.
 4. Invoke gophrr:
 
    ```
-   Task(subagent_type="gophrr", prompt="Base: develop.
+   Task(subagent_type="gophrr", prompt="Base: main.
    Heads to MERGE when mergeable and required checks green: [H list].
    Heads to FIX checks only, do not merge: [L list].
    Append [skip-nash-review] to bodies. Do not process unrelated PRs.")

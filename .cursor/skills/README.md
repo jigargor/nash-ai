@@ -48,7 +48,7 @@ This index maps project skills in `.cursor/skills` to the hardening phases so ag
 - **fastr-pr** — Same workflow as fast-pr; compact output for tooling and agents.
 - **pr-closer** — Sweep PRs by branch patterns or branch pairs; merge when green, fix in Agent mode when not; optional `[skip-nash-review]` footer; ask when scope is ambiguous.
 - **babysit** / **finishugh** — Single-PR merge readiness; finishugh adds merge-when-green.
-- **code-sesh** (`.cursor/agents/code-sesh.md`) — Triage a mixed list of enhancements, bug fixes, and feature additions, run parallel **bugfix/** worktrees (`bugfix/short-slug`), apply conservative model routing, then hand off allowlisted heads to **gophrr** into `develop`.
+- **code-sesh** (`.cursor/agents/code-sesh.md`) — Triage a mixed list of enhancements, bug fixes, and feature additions, run parallel **bugfix/** worktrees (`bugfix/short-slug`), apply conservative model routing, then hand off allowlisted heads to **gophrr** into `main`.
 
 ## Quick Skill Selection
 
