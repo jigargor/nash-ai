@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { ReviewModelAudit } from "@/lib/api/reviews";
+import { doesAuditReasonTextSuggestStageFailure } from "@/lib/review-audit-stage-failure";
 
 // ---------------------------------------------------------------------------
 // Stage metadata
@@ -130,8 +131,8 @@ function extractStatusCode(audit: ReviewModelAudit): number | null {
 function isFailedStage(audit: ReviewModelAudit): boolean {
   const code = extractStatusCode(audit);
   if (code != null && code >= 400) return true;
-  const reason = (audit.metadata_json?.reason as string | undefined)?.toLowerCase() ?? "";
-  return reason.includes("failed") || reason.includes("error");
+  const raw = audit.metadata_json?.reason;
+  return doesAuditReasonTextSuggestStageFailure(typeof raw === "string" ? raw : undefined);
 }
 
 function CopyDebugJsonButton({ getPayload }: { getPayload: () => Record<string, unknown> }) {

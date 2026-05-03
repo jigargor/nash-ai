@@ -17,6 +17,7 @@ import { useDismissFinding, useRerunReview } from "@/hooks/use-review-actions";
 import { useReview } from "@/hooks/use-review";
 import { useReviewStream } from "@/hooks/use-review-stream";
 import type { ReviewModelAudit } from "@/lib/api/reviews";
+import { doesAuditReasonTextSuggestStageFailure } from "@/lib/review-audit-stage-failure";
 import { buildPrReviewDebugExport } from "@/lib/pr-review-debug-export";
 import { isReviewInFlightStatus } from "@/lib/review-status";
 import { useReviewUiStore } from "@/stores/review-ui-store";
@@ -99,10 +100,7 @@ function stageLooksFailed(audit: ReviewModelAudit): boolean {
   const metadata = audit.metadata_json;
   if (!metadata || typeof metadata !== "object") return false;
   const reason = metadata.reason;
-  if (typeof reason === "string") {
-    const lowered = reason.toLowerCase();
-    if (lowered.includes("failed") || lowered.includes("error")) return true;
-  }
+  if (typeof reason === "string" && doesAuditReasonTextSuggestStageFailure(reason)) return true;
   return false;
 }
 
