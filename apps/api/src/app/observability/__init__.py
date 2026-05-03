@@ -44,6 +44,7 @@ from app.observability.events import (
 from app.observability.sinks import (
     DBSink,
     InMemoryTestSink,
+    LangfuseSink,
     ObservabilitySink,
     StructuredLogSink,
 )
@@ -86,5 +87,6 @@ __all__ = [
     "ObservabilitySink",
     "DBSink",
     "InMemoryTestSink",
+    "LangfuseSink",
     "StructuredLogSink",
 ]
