@@ -172,7 +172,7 @@ orchestration:
     rollout_stages:
       shadow:
         description: "Log what threshold changes would do, don't apply them"
-        duration: "Minimum 7 days or 200 reviews, whichever comes first"
+        duration: "Minimum 7 days or 200 reviews, whichever comes last"
         metrics_tracked: ["would_have_filtered_count", "would_have_posted_count", "precision_impact_estimate"]
         exit_criteria: "No unexpected filtering spikes, estimated precision improvement positive"
       advisory:
