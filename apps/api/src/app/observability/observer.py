@@ -103,7 +103,7 @@ class LLMObserver:
             if count >= self._max_events_per_review:
                 return
             self._events_per_review[review_id] = count + 1
-        if self._sample_rate < 1.0 and random() > self._sample_rate:
+        if self._sample_rate < 1.0 and random() > self._sample_rate:  # nosec B311 — observability sampling, not security
             return
         for sink in self._sinks:
             try:
