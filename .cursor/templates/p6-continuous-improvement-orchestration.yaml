@@ -190,6 +190,7 @@ orchestration:
       rollback_threshold: 0.80
       evaluation_window_reviews: 100
       evaluation_window_days: 14
+      evaluation_window_logic: "whichever_comes_first"  # explicit: first condition reached triggers evaluation
       action: "Revert to previous threshold config, alert admin, log rollback event"
       cooldown: "No auto-apply for the affected category for 7 days after rollback"
 
