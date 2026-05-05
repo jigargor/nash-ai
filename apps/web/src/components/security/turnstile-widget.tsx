@@ -10,7 +10,14 @@ declare global {
         container: HTMLElement,
         options: {
           callback: (token: string) => void;
-          "error-callback"?: () => void;
+          "error-callback"?: (errorCode?: string | number) => void;
+          "expired-callback"?: () => void;
+          "timeout-callback"?: () => void;
+          "unsupported-callback"?: () => void;
+          "refresh-expired"?: "auto" | "manual" | "never";
+          "refresh-timeout"?: "auto" | "manual" | "never";
+          retry?: "auto" | "never";
+          size?: "normal" | "flexible" | "compact";
           sitekey: string;
           theme?: "light" | "dark" | "auto";
         },
@@ -23,12 +30,15 @@ const TURNSTILE_SCRIPT_ID = "cf-turnstile-script";
 const TURNSTILE_SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
 interface TurnstileWidgetProps {
-  onError?: () => void;
+  onError?: (errorCode?: string | number) => void;
+  onExpired?: () => void;
   onToken: (token: string) => void;
+  onTimeout?: () => void;
+  onUnsupported?: () => void;
   siteKey: string;
 }
 
-export function TurnstileWidget({ onError, onToken, siteKey }: TurnstileWidgetProps) {
+export function TurnstileWidget({ onError, onExpired, onTimeout, onToken, onUnsupported, siteKey }: TurnstileWidgetProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
   const [isScriptReady, setIsScriptReady] = useState(() => typeof window !== "undefined" && Boolean(window.turnstile));
@@ -67,8 +77,15 @@ export function TurnstileWidget({ onError, onToken, siteKey }: TurnstileWidgetPr
     widgetIdRef.current = window.turnstile.render(containerRef.current, {
       sitekey: siteKey,
       callback: onToken,
-      "error-callback": () => onError?.(),
-      theme: "auto",
+      "error-callback": onError,
+      "expired-callback": onExpired,
+      "refresh-expired": "auto",
+      "refresh-timeout": "auto",
+      "timeout-callback": onTimeout,
+      "unsupported-callback": onUnsupported,
+      retry: "auto",
+      size: "flexible",
+      theme: "dark",
     });
 
     return () => {
@@ -77,7 +94,7 @@ export function TurnstileWidget({ onError, onToken, siteKey }: TurnstileWidgetPr
         widgetIdRef.current = null;
       }
     };
-  }, [isScriptReady, onError, onToken, siteKey]);
+  }, [isScriptReady, onError, onExpired, onTimeout, onToken, onUnsupported, siteKey]);
 
   return (
     <div style={{ minHeight: "72px" }}>
