@@ -15,14 +15,14 @@
   "dependencies": {
     "@ai-code-review/shared-types": "workspace:*",
     "@next/env": "16.2.4",
-    "@tanstack/react-query": "^5.100.7",
+    "@tanstack/react-query": "^5.100.9",
     "@upstash/ratelimit": "^2.0.8",
-    "@upstash/redis": "^1.37.0",
+    "@upstash/redis": "^1.38.0",
     "next": "16.2.4",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "server-only": "^0.0.1",
-    "zustand": "^5.0.12"
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
@@ -31,7 +31,7 @@
     "@types/node": "^25",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "eslint": "^9.17.0",
+    "eslint": "^10.3.0",
     "eslint-config-next": "16.2.4",
     "jsdom": "^29.1.1",
     "typescript": "^6",
