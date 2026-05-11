@@ -15,6 +15,7 @@ from app.agent.tools import TOOLS, execute_tool
 from app.llm.errors import coerce_quota_error
 from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
 from app.observability import create_async_anthropic_client
+from app.observability.deepeval_tracing import observe_span, update_deepeval_span
 from app.observability.events import LLMUsage as ObserverLLMUsage
 from app.observability.observer import StageSpan, get_observer
 
@@ -37,6 +38,7 @@ def _get_stage_span(context: dict[str, Any]) -> StageSpan | None:
     return span if isinstance(span, StageSpan) else None
 
 
+@observe_span("llm")
 async def run_agent(
     system_prompt: str,
     initial_user_message: str,
@@ -45,6 +47,14 @@ async def run_agent(
     model_name: str = DEFAULT_MODEL_NAME,
     provider: ModelProvider = "anthropic",
 ) -> list[dict[str, Any]]:
+    update_deepeval_span(
+        metadata={
+            "provider": provider,
+            "model_name": model_name,
+            "review_id": context.get("review_id"),
+            "run_id": context.get("run_id"),
+        }
+    )
     if provider in {"openai", "gemini"}:
         return await _run_agent_openai_compatible(
             system_prompt, initial_user_message, context, model_name=model_name, provider=provider

@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from app.config import settings
+from app.observability.deepeval_tracing import configure_deepeval_runtime
 from app.observability.observer import configure_observer
 from app.observability.sinks import DBSink, LangfuseSink, ObservabilitySink, StructuredLogSink
 
@@ -28,6 +29,7 @@ _SENTRY_READY = False
 
 def init_observability(service_name: str) -> None:
     """Initialise Sentry and Langfuse.  Safe to call multiple times."""
+    configure_deepeval_runtime()
     _init_sentry(service_name)
     _init_langfuse()
     _init_observer_sinks()

@@ -7,6 +7,7 @@ import httpx
 
 from app.agent.normalization import normalize_file_content
 from app.github.client import GitHubClient
+from app.observability.deepeval_tracing import observe_span
 
 TOOLS = [
     {
@@ -75,6 +76,7 @@ def _normalize_repo_path(raw_path: object) -> str:
     return path
 
 
+@observe_span("tool")
 async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str, Any]) -> str:
     try:
         maybe_offline_executor = context.get("offline_tool_executor")

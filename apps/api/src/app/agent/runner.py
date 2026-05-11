@@ -87,6 +87,7 @@ from app.llm.errors import LLMQuotaOrRateLimitError
 from app.llm.rate_limit_backoff import sleep_after_llm_rate_limit
 from app.llm.types import ModelProvider
 from app.observability import ObservationContext, get_observer, record_review_trace
+from app.observability.deepeval_tracing import observe_span, update_deepeval_span
 from app.observability.events import TerminalStatus
 from app.observability.observer import ReviewTrace
 from app.agent.snapshot import SnapshotPayload, store_snapshot
@@ -765,6 +766,7 @@ async def _capture_context_snapshot(
         )
 
 
+@observe_span("agent")
 async def run_review(
     review_id: int,
     installation_id: int,
@@ -797,6 +799,16 @@ async def run_review(
         "user_github_id": user_github_id,
         "_redis": redis,
     }
+    update_deepeval_span(
+        metadata={
+            "review_id": review_id,
+            "installation_id": installation_id,
+            "repo": f"{owner}/{repo}",
+            "pr_number": pr_number,
+            "head_sha": head_sha,
+            "prompt_version": PROMPT_VERSION,
+        }
+    )
     observer = get_observer()
     trace = observer.start_review_trace(
         review_id=review_id,

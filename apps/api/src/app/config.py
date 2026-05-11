@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    confident_api_key: str | None = None
+    deepeval_tracing_enabled: bool = False
     observability_enabled: bool = False
     observability_sinks: str = "disabled"
     observability_payload_mode: str = "metadata_only"
