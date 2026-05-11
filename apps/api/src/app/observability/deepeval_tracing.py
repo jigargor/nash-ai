@@ -8,6 +8,7 @@ This module keeps DeepEval runtime integration strictly best-effort:
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 from collections.abc import Callable
@@ -20,15 +21,27 @@ logger = logging.getLogger(__name__)
 P = ParamSpec("P")
 R = TypeVar("R")
 
-_observe: Callable[..., Callable[[Callable[P, R]], Callable[P, R]]] | None = None
-_update_current_span: Callable[..., None] | None = None
+ObserveFn = Callable[..., Callable[[Callable[P, R]], Callable[P, R]]]
+UpdateSpanFn = Callable[..., None]
 
-try:
-    from deepeval.tracing import observe as _observe  # type: ignore[assignment]
-    from deepeval.tracing import update_current_span as _update_current_span  # type: ignore[assignment]
-except Exception:
-    _observe = None
-    _update_current_span = None
+
+def _load_deepeval_tracing() -> tuple[ObserveFn | None, UpdateSpanFn | None]:
+    """Load DeepEval tracing helpers when the optional extra is installed.
+
+    Uses importlib so mypy/CI do not require ``deepeval`` to be installed.
+    """
+    try:
+        mod = importlib.import_module("deepeval.tracing")
+    except Exception:
+        return None, None
+    observe_raw = getattr(mod, "observe", None)
+    update_raw = getattr(mod, "update_current_span", None)
+    if not callable(observe_raw) or not callable(update_raw):
+        return None, None
+    return cast(ObserveFn, observe_raw), cast(UpdateSpanFn, update_raw)
+
+
+_observe, _update_current_span = _load_deepeval_tracing()
 
 
 def is_deepeval_tracing_enabled() -> bool:
@@ -54,10 +67,11 @@ def observe_span(span_type: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
     def _decorator(func: Callable[P, R]) -> Callable[P, R]:
         if not is_deepeval_tracing_enabled():
             return func
-        if _observe is None:
+        observe = _observe
+        if observe is None:
             return func
         try:
-            return cast(Callable[P, R], _observe(type=span_type)(func))
+            return cast(Callable[P, R], observe(type=span_type)(func))
         except Exception:
             logger.exception("Failed to apply DeepEval observe decorator")
             return func
