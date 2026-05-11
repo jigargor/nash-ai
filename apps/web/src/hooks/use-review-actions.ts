@@ -67,7 +67,8 @@ export function useDismissFinding() {
       installationId: number;
     }) => actionDismissFinding(reviewId, findingIndex, installationId),
     onSuccess: (_data, variables) => {
-      void queryClient.invalidateQueries({ queryKey: ["review", variables.reviewId] });
+      void queryClient.invalidateQueries({ queryKey: ["review", variables.reviewId, variables.installationId] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews"] });
     },
   });
 }

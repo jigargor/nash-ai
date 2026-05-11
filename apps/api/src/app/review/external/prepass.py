@@ -29,10 +29,18 @@ from app.review.external.sources.base import RepoSource
 _PROMPT_INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
+        r"prompt\s+injection",
         r"ignore\s+previous\s+instructions",
+        r"ignore\s+(all\s+)?(prior|earlier|above)\s+instructions",
+        r"disregard\s+(all\s+)?(prior|earlier|previous|above)\s+instructions",
+        r"do\s+not\s+follow\s+(the\s+)?(system|developer)\s+instructions",
         r"system\s+prompt",
         r"developer\s+message",
         r"you\s+must\s+obey",
+        r"you\s+are\s+now\s+(the\s+)?(system|developer|assistant|root|admin)",
+        r"you\s+are\s+now\s+in\s+developer\s+mode",
+        r"act\s+as\s+(the\s+)?(system|developer|assistant|root|admin)",
+        r"jailbreak",
         r"bypass\s+safety",
         r"disable\s+guardrail",
     )
@@ -112,6 +120,26 @@ def looks_like_filler(text: str) -> bool:
     return False
 
 
+def prepass_target_priority(path: str) -> int:
+    """Lower values are sampled earlier by the heuristic prepass."""
+    normalized = path.strip().lower()
+    basename = normalized.rsplit("/", 1)[-1]
+    if is_risky_path(normalized):
+        return 0
+    if basename in {
+        ".cursorrules",
+        "agents.md",
+        "claude.md",
+        "copilot-instructions.md",
+        "cursor-instructions.md",
+        "readme.md",
+    }:
+        return 1
+    if normalized.startswith(".cursor/rules/") or normalized.startswith(".github/instructions/"):
+        return 1
+    return 2
+
+
 def partition_files(
     files: Iterable[FileDescriptor],
 ) -> tuple[list[FileDescriptor], list[str], list[str]]:
@@ -187,7 +215,13 @@ async def run_prepass(
         inspected_file_count=min(len(inspectable), sample_limit),
     )
 
-    targets = inspectable[:sample_limit]
+    targets = sorted(
+        inspectable,
+        key=lambda descriptor: (
+            prepass_target_priority(descriptor.path),
+            descriptor.path.lower(),
+        ),
+    )[:sample_limit]
     if targets:
         semaphore = asyncio.Semaphore(max(1, concurrency))
 

@@ -139,13 +139,9 @@ async def run_external_eval_prepass(
             "ignored_paths_count": signals.ignored_paths_count,
             "file_count": len(files),
             "target_ref": repo_ref.ref,
+            "estimated_tokens": int(evaluation.estimated_tokens),
+            "estimated_cost_usd": str(evaluation.estimated_cost_usd),
         }
-        evaluation.estimated_tokens = max(len(files) * 220, 800)
-        evaluation.estimated_cost_usd = float(
-            (Decimal(evaluation.estimated_tokens) * Decimal("0.00000015")).quantize(
-                Decimal("0.000001")
-            )
-        )
 
         shard_rows: list[ExternalEvaluationShard] = []
         path_lookup = {descriptor.path: descriptor for descriptor in files}

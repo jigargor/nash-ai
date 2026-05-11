@@ -21,6 +21,14 @@ function formatCurrency(value: string): string {
   return `$${numeric.toFixed(4)}`;
 }
 
+function budgetCapsFromEstimate(estimatedTokens: number, estimatedCostUsd: string): { tokenBudgetCap: number; costBudgetCapUsd: number } {
+  const cost = Number(estimatedCostUsd);
+  return {
+    tokenBudgetCap: Math.min(30_000_000, Math.max(10_000, estimatedTokens)),
+    costBudgetCapUsd: Math.min(500, Math.max(0.5, Number.isFinite(cost) ? cost : 0.5)),
+  };
+}
+
 function extractApiErrorMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return "Request failed. Please retry.";
   try {
@@ -114,11 +122,20 @@ export default function CodeTourPage() {
 
   const handleEstimate = () => {
     if (!installationId) return;
-    estimateMutation.mutate({
-      installation_id: installationId,
-      repo_url: repoUrl.trim(),
-      target_ref: targetRef.trim() || undefined,
-    });
+    estimateMutation.mutate(
+      {
+        installation_id: installationId,
+        repo_url: repoUrl.trim(),
+        target_ref: targetRef.trim() || undefined,
+      },
+      {
+        onSuccess: (estimate) => {
+          const caps = budgetCapsFromEstimate(estimate.estimated_tokens, estimate.estimated_cost_usd);
+          setTokenBudgetCap(caps.tokenBudgetCap);
+          setCostBudgetCapUsd(caps.costBudgetCapUsd);
+        },
+      },
+    );
   };
 
   const handleCreate = () => {
@@ -198,7 +215,7 @@ export default function CodeTourPage() {
 
           <div style={{ display: "grid", gap: "0.25rem", gridTemplateColumns: "1fr 1fr" }}>
             <label style={{ display: "grid", gap: "0.25rem" }}>
-              <span style={{ color: "var(--text-muted)" }}>Token budget cap</span>
+              <span style={{ color: "var(--text-muted)" }}>Token budget cap (from estimate)</span>
               <input
                 className="app-search"
                 type="number"
@@ -209,11 +226,11 @@ export default function CodeTourPage() {
             </label>
             {formErrors.tokenBudgetCap ? <p className="form-error-text">{formErrors.tokenBudgetCap}</p> : null}
             <label style={{ display: "grid", gap: "0.25rem" }}>
-              <span style={{ color: "var(--text-muted)" }}>Cost budget cap (USD)</span>
+              <span style={{ color: "var(--text-muted)" }}>Cost budget cap (USD, from estimate)</span>
               <input
                 className="app-search"
                 type="number"
-                step="0.5"
+                step="0.000001"
                 value={costBudgetCapUsd}
                 min={0.5}
                 onChange={(event) => setCostBudgetCapUsd(Number(event.target.value))}
@@ -322,8 +339,8 @@ export default function CodeTourPage() {
                   {isSelected ? "▼" : "▶"} #{row.id} · {row.owner}/{row.repo}@{row.target_ref}
                 </button>
                 <span style={{ color: "var(--text-muted)" }}>
-                  {row.status} · findings {row.findings_count} · cost {formatCurrency(row.cost_usd)} /{" "}
-                  {formatCurrency(row.cost_budget_cap_usd)}
+                  {row.status} · findings {row.findings_count} · used {row.tokens_used} / est. {row.estimated_tokens} tokens · cost{" "}
+                  {formatCurrency(row.cost_usd)} / est. {formatCurrency(row.estimated_cost_usd)}
                 </span>
                 {row.status !== "complete" && row.status !== "failed" && row.status !== "canceled" ? (
                   <button

@@ -18,6 +18,7 @@ export function useReviews(installationId?: number, filters?: ReviewListFilters)
     ],
     queryFn: () => actionFetchReviews(installationId, filters),
     ...dashboardListMetricsQueryOptions,
+    refetchOnMount: "always",
     refetchInterval: (query) => {
       const list = query.state.data;
       if (!list?.length) return false;
