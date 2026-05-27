@@ -14,43 +14,43 @@ name = "api"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-  "fastapi>=0.136.1",
-  "uvicorn[standard]>=0.46.0",
+  "fastapi>=0.136.3",
+  "uvicorn[standard]>=0.48.0",
   "httpx>=0.28.1",
-  "pyjwt[crypto]>=2.12.1",
-  "sqlalchemy[asyncio]>=2.0.49",
+  "pyjwt[crypto]>=2.13.0",
+  "sqlalchemy[asyncio]>=2.0.50",
   "asyncpg>=0.31.0",
   "alembic>=1.18.4",
   "arq>=0.28.0",
   # redis-py <6 required by arq; 5.x clients work with Redis server 7+
-  "redis>=5.0.0,<6",
-  "pydantic>=2.13.3",
-  "pydantic-settings>=2.14.0",
-  "cryptography>=47.0.0",
-  "tiktoken>=0.12.0",
-  "anthropic>=0.97.0",
+  "redis>=7.4.0,<8",
+  "pydantic>=2.13.4",
+  "pydantic-settings>=2.14.1",
+  "cryptography>=48.0.0",
+  "tiktoken>=0.13.0",
+  "anthropic>=0.104.1",
   "unidiff>=0.7.5",
   "pyyaml>=6.0.3",
-  "tree-sitter-language-pack>=1.6.3,<1.6.4",
-  "langfuse>=4.5.1",
-  "sentry-sdk[fastapi]>=2.58.0",
-  "openai>=2.33.0",
-  "boto3>=1.43.1",
-  "mcp>=1.27.0",
+  "tree-sitter-language-pack>=1.8.1,<1.8.2",
+  "langfuse>=4.6.1",
+  "sentry-sdk[fastapi]>=2.60.0",
+  "openai>=2.38.0",
+  "boto3>=1.43.15",
+  "mcp>=1.27.1",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=9.0.3",
   "pytest-cov>=7.1.0",
-  "mypy>=1.20.2",
+  "mypy>=2.1.0",
   "bandit>=1.9.4",
-  "types-PyYAML>=6.0.12.20260408",
-  "types-unidiff>=0.7.0.20260408",
+  "types-PyYAML>=6.0.12.20260518",
+  "types-unidiff>=0.7.0.20260518",
   "pip-audit>=2.10.0",
 ]
 deepeval = [
-  "deepeval>=3.9.9",
+  "deepeval>=4.0.4",
 ]
 
 [tool.pytest.ini_options]
