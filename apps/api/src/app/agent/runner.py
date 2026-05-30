@@ -1528,6 +1528,32 @@ async def run_review(
             int((monotonic() - started_at) * 1000),
             context.get("first_model_call_latency_ms", 0),
         )
+    except asyncio.CancelledError as exc:
+        logger.warning("Review job cancelled review_id=%s", review_id)
+        debug_artifacts = context.get("debug_artifacts")
+        context["debug_artifacts"] = {
+            **(debug_artifacts if isinstance(debug_artifacts, dict) else {}),
+            "terminal_error": {
+                "failure_class": "cancelled_or_timed_out",
+                "exception_type": exc.__class__.__name__,
+            },
+        }
+        await _mark_review_done(
+            session_data=ReviewResult(
+                findings=[],
+                summary="Review failed: job was cancelled or timed out before completion.",
+            ),
+            context=context,
+            status="failed",
+            review_config=review_config if "review_config" in locals() else None,
+        )
+        observer.record_error(
+            trace,
+            error_type=exc.__class__.__name__,
+            message="Review job was cancelled or timed out",
+            recoverable=False,
+        )
+        raise
     except Exception as exc:
         logger.exception("Review job failed review_id=%s", review_id)
         debug_artifacts = context.get("debug_artifacts")

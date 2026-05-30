@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { useReviewModelAudits } from "@/hooks/use-review-model-audits";
-import { useDismissFinding, useRerunReview } from "@/hooks/use-review-actions";
+import { useDismissFinding, useForceRecoverReview, useRerunReview } from "@/hooks/use-review-actions";
 import { useReview } from "@/hooks/use-review";
 import { useReviewStream } from "@/hooks/use-review-stream";
 import type { ReviewModelAudit } from "@/lib/api/reviews";
@@ -93,6 +93,13 @@ interface RunOutputSnapshot {
   summary?: string;
   findings?: Finding[];
   cost_usd?: string;
+}
+
+function mutationErrorMessage(error: unknown, fallback: string): string {
+  if (!error || typeof error !== "object") return fallback;
+  if ("message" in error && typeof (error as { message?: unknown }).message === "string")
+    return (error as { message: string }).message;
+  return fallback;
 }
 
 function stageLooksFailed(audit: ReviewModelAudit): boolean {
@@ -304,6 +311,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const prUrl = `${repoUrl}/pull/${encodeURIComponent(prNumber)}`;
   const reviewQuery = useReview(reviewId, installationId);
   const rerunMutation = useRerunReview();
+  const forceRecoverMutation = useForceRecoverReview();
   const dismissMutation = useDismissFinding();
   const modelAudits = useReviewModelAudits(reviewId, installationId);
   const selectedFindingIndex = useReviewUiStore((state) => state.selectedFindingIndex);
@@ -502,6 +510,14 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     rerunMutation.mutate({ reviewId, installationId });
   }
 
+  function submitForceMarkFailed(): void {
+    forceRecoverMutation.mutate({ reviewId, installationId, action: "mark_failed" });
+  }
+
+  function submitForceRequeue(): void {
+    forceRecoverMutation.mutate({ reviewId, installationId, action: "force_requeue" });
+  }
+
   return (
     <section className="pr-review-page" style={{ display: "grid", gap: "1rem" }}>
       <div style={{ marginBottom: "-0.35rem" }}>
@@ -641,7 +657,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
           </div>
           <Button
             variant={isFailedReview ? "danger" : "ghost"}
-            disabled={isInFlight}
+            disabled={isInFlight || forceRecoverMutation.isPending}
             onClick={() => {
               setUserSelectedRunId(null);
               setHistoryOpen(false);
@@ -650,7 +666,32 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
           >
             {isInFlight ? "Review in progress…" : isFailedReview ? "Retry review" : "Re-run review"}
           </Button>
+          <Button
+            variant="ghost"
+            disabled={!isInFlight || forceRecoverMutation.isPending}
+            onClick={submitForceMarkFailed}
+          >
+            Mark failed
+          </Button>
+          <Button
+            variant="ghost"
+            disabled={forceRecoverMutation.isPending}
+            onClick={submitForceRequeue}
+          >
+            Force requeue
+          </Button>
         </div>
+        {rerunMutation.isError ? (
+          <p style={{ marginTop: "0.5rem", marginBottom: 0, color: "var(--severity-critical)", fontSize: "0.85rem" }}>
+            Rerun failed: {mutationErrorMessage(rerunMutation.error, "Unable to rerun review.")}
+          </p>
+        ) : null}
+        {forceRecoverMutation.isError ? (
+          <p style={{ marginTop: "0.4rem", marginBottom: 0, color: "var(--severity-critical)", fontSize: "0.85rem" }}>
+            Recovery action failed:{" "}
+            {mutationErrorMessage(forceRecoverMutation.error, "Unable to perform recovery action.")}
+          </p>
+        ) : null}
       </Panel>
 
       <ReviewPipeline

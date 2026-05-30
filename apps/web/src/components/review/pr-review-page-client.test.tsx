@@ -8,6 +8,9 @@ import { useReviewUiStore } from "@/stores/review-ui-store";
 const rerunState = {
   isPending: false,
 };
+const forceRecoverState = {
+  isPending: false,
+};
 
 const useReviewMock = vi.fn(
   (_reviewId: number, _installationId: number, _options?: { enabled?: boolean }) => ({
@@ -90,6 +93,12 @@ vi.mock("@/hooks/use-review-actions", () => ({
     mutate: vi.fn(),
     isPending: rerunState.isPending,
   }),
+  useForceRecoverReview: () => ({
+    mutate: vi.fn(),
+    isPending: forceRecoverState.isPending,
+    isError: false,
+    error: null,
+  }),
   useDismissFinding: () => ({
     mutateAsync: vi.fn(),
   }),
@@ -98,6 +107,7 @@ vi.mock("@/hooks/use-review-actions", () => ({
 describe("PrReviewPageClient", () => {
   beforeEach(() => {
     rerunState.isPending = false;
+    forceRecoverState.isPending = false;
     useReviewMock.mockClear();
     useReviewModelAuditsMock.mockClear();
     delete process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;

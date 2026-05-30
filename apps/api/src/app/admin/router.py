@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 _ADMIN_RATE_LIMIT = 5
 _ADMIN_RATE_WINDOW = 60
+_REVIEW_SUBMISSION_LOCK_MINUTES = 15
+
+
+def _review_submission_conflict_detail() -> str:
+    return (
+        "Review submission already in progress for this PR head. "
+        f"Retry after {_REVIEW_SUBMISSION_LOCK_MINUTES} minutes or force-fail the stale run first."
+    )
 
 
 def _require_admin_key(x_admin_api_key: str | None) -> None:
@@ -107,7 +115,7 @@ async def retry_review(
         if not lock_acquired:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Review submission already in progress for this PR head",
+                detail=_review_submission_conflict_detail(),
             )
         job = await redis.enqueue_job(
             "review_pr",

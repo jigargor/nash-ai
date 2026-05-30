@@ -7,7 +7,7 @@ from app.config import settings
 from app.observability import init_observability
 from app.storage.r2_rotation import assert_r2_credentials_within_rotation_policy
 from app.queue.connection import format_redis_target
-from app.queue.recovery import recover_stale_running_reviews
+from app.queue.recovery import recover_stale_reviews
 from arq.connections import RedisSettings
 from arq.constants import default_queue_name
 from arq.cron import cron
@@ -112,11 +112,35 @@ async def external_eval_synthesize(ctx: dict[str, Any], external_eval_id: int) -
     await run_external_eval_synthesize(eval_id=external_eval_id)
 
 
+async def reconcile_stale_reviews(ctx: dict[str, Any]) -> None:
+    if not settings.stale_review_recovery_enabled:
+        ctx["recovered_stale_reviews"] = {
+            "running_recovered": 0,
+            "queued_recovered": 0,
+            "total_recovered": 0,
+        }
+        return
+    stats = await recover_stale_reviews(
+        running_max_age_minutes=settings.stale_review_recovery_running_max_age_minutes,
+        recover_queued=settings.stale_review_recovery_queued_enabled,
+        queued_max_age_minutes=settings.stale_review_recovery_queued_max_age_minutes,
+    )
+    ctx["recovered_stale_reviews"] = stats
+
+
+def _stale_recovery_cron_minutes() -> set[int]:
+    interval = settings.stale_review_recovery_cron_minutes
+    if interval <= 0:
+        return {0}
+    if interval > 59:
+        return {0}
+    return set(range(0, 60, interval))
+
+
 async def worker_startup(ctx: dict[str, Any]) -> None:
     init_observability("worker")
     assert_r2_credentials_within_rotation_policy(settings)
-    recovered = await recover_stale_running_reviews()
-    ctx["recovered_stale_reviews"] = recovered
+    await reconcile_stale_reviews(ctx)
 
 
 class WorkerSettings:
@@ -130,6 +154,7 @@ class WorkerSettings:
         external_eval_prepass,
         external_eval_shard,
         external_eval_synthesize,
+        reconcile_stale_reviews,
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = default_queue_name
@@ -143,4 +168,5 @@ class WorkerSettings:
         cron(tune_fast_path_thresholds, minute=10),
         cron(archive_review_snapshots, weekday="sun", hour=4, minute=15),
         cron(refresh_llm_catalog, hour=2, minute=30),
+        cron(reconcile_stale_reviews, minute=_stale_recovery_cron_minutes()),
     ]

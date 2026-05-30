@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 SKIP_REVIEW_TAG = "[skip-nash-review]"
 FORCE_REVIEW_TAG = "[force-nash-review]"
+_REVIEW_ENQUEUE_FAILURE_SUMMARY = (
+    "Review failed before execution because the worker job could not be enqueued."
+)
 
 
 async def _resolve_byok_user_for_installation(installation_id: int) -> int | None:
@@ -285,6 +288,28 @@ async def queue_pull_request_review(
         head_sha,
         user_github_id=byok_user_github_id,
     )
+    if job is None:
+        async with AsyncSessionLocal() as session:
+            await set_installation_context(session, installation_id)
+            review = await session.get(Review, review_id)
+            if review is not None:
+                review.status = "failed"
+                review.completed_at = datetime.now(UTC)
+                review.findings = {"findings": [], "summary": _REVIEW_ENQUEUE_FAILURE_SUMMARY}
+                existing_artifacts = dict(review.debug_artifacts or {})
+                existing_artifacts["terminal_error"] = {
+                    "failure_class": "enqueue_failed",
+                    "exception_type": "EnqueueJobReturnedNone",
+                }
+                review.debug_artifacts = existing_artifacts
+                await session.commit()
+        logger.error(
+            "Failed to enqueue review job review_id=%s repo=%s pr_number=%s",
+            review_id,
+            repo_full_name,
+            pr_number,
+        )
+        return
     logger.warning(
         "Queued review job review_id=%s job_id=%s repo=%s pr_number=%s",
         review_id,

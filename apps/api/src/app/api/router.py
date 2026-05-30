@@ -77,6 +77,7 @@ router = APIRouter(
     dependencies=[Depends(_verify_api_access), Depends(get_current_dashboard_user)],
 )
 logger = logging.getLogger(__name__)
+_REVIEW_SUBMISSION_LOCK_MINUTES = 15
 
 
 def _require_turnstile_clearance_for_rerun(
@@ -325,6 +326,13 @@ def _as_int_or_none(value: object) -> int | None:
     return None
 
 
+def _review_submission_conflict_detail() -> str:
+    return (
+        "Review submission already in progress for this PR head. "
+        f"Retry after {_REVIEW_SUBMISSION_LOCK_MINUTES} minutes or mark the in-flight review as failed."
+    )
+
+
 def _diff_stats_from_debug_artifacts(review: Review) -> tuple[int | None, int | None]:
     artifacts = review.debug_artifacts
     if not isinstance(artifacts, dict):
@@ -335,6 +343,20 @@ def _diff_stats_from_debug_artifacts(review: Review) -> tuple[int | None, int | 
     changed_files = _as_int_or_none(fast_path.get("changed_file_count"))
     changed_lines = _as_int_or_none(fast_path.get("changed_line_count"))
     return changed_files, changed_lines
+
+
+async def _is_installation_admin(
+    session: AsyncSession, *, installation_id: int, github_id: int
+) -> bool:
+    role = await session.scalar(
+        select(InstallationUser.role)
+        .join(User, User.id == InstallationUser.user_id)
+        .where(InstallationUser.installation_id == installation_id)
+        .where(User.github_id == github_id)
+        .where(User.deleted_at.is_(None))
+        .limit(1)
+    )
+    return isinstance(role, str) and role.lower() == "admin"
 
 
 def _ensure_utc(dt: datetime) -> datetime:
@@ -992,6 +1014,14 @@ async def rerun_review(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
             )
+        if review.status in {"queued", "running"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Review status is '{review.status}'. "
+                    "Wait for completion or use the force recovery controls."
+                ),
+            )
 
         if (
             not settings.has_llm_api_key_configured()
@@ -1012,7 +1042,7 @@ async def rerun_review(
         if not lock_acquired:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Review submission already in progress for this PR head",
+                detail=_review_submission_conflict_detail(),
             )
         job = await redis.enqueue_job(
             "review_pr",
@@ -1024,6 +1054,11 @@ async def rerun_review(
             review.pr_head_sha,
             user_github_id=current_user.github_id,
         )
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to enqueue rerun job",
+            )
         review.status = "queued"
         review.started_at = None
         review.completed_at = None
@@ -1037,6 +1072,111 @@ async def rerun_review(
         await session.commit()
 
     return {"ok": True, "review_id": review_id, "job_id": job.job_id if job else None}
+
+
+@router.post("/reviews/{review_id}/force-recover")
+async def force_recover_review(
+    request: Request,
+    review_id: int,
+    action: Annotated[str, Query(pattern="^(mark_failed|force_requeue)$")] = "mark_failed",
+    installation_id: int | None = Query(default=None, ge=1),
+    current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
+) -> dict[str, object]:
+    if not settings.review_force_actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Force recovery actions are disabled by configuration.",
+        )
+    async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
+        if installation_id is not None:
+            _require_installation_access(allowed_installation_ids, installation_id)
+            await set_installation_context(session, installation_id)
+        review = await session.get(Review, review_id)
+        if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if int(review.installation_id) not in allowed_installation_ids:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if installation_id is None:
+            installation_id = int(review.installation_id)
+            await set_installation_context(session, installation_id)
+        elif int(review.installation_id) != installation_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
+        is_admin = await _is_installation_admin(
+            session, installation_id=installation_id, github_id=current_user.github_id
+        )
+        if not is_admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only installation admins can use force recovery actions.",
+            )
+
+        if action == "mark_failed":
+            review.status = "failed"
+            review.completed_at = datetime.now(timezone.utc)
+            review.findings = {
+                "findings": [],
+                "summary": "Review manually marked as failed for stale-job recovery.",
+            }
+            existing_artifacts = dict(review.debug_artifacts or {})
+            existing_artifacts["manual_recovery"] = {
+                "action": "mark_failed",
+                "actor_github_id": current_user.github_id,
+                "acted_at": datetime.now(timezone.utc).isoformat(),
+            }
+            review.debug_artifacts = existing_artifacts
+            await session.commit()
+            return {"ok": True, "review_id": review_id, "action": action}
+
+        owner, repo = _split_repo_full_name(review.repo_full_name)
+        redis = require_app_redis(request)
+        lock_acquired = await acquire_review_submission_lock(
+            redis,
+            installation_id=int(review.installation_id),
+            pr_number=int(review.pr_number),
+            head_sha=review.pr_head_sha,
+        )
+        if not lock_acquired:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=_review_submission_conflict_detail(),
+            )
+        job = await redis.enqueue_job(
+            "review_pr",
+            int(review.id),
+            int(review.installation_id),
+            owner,
+            repo,
+            int(review.pr_number),
+            review.pr_head_sha,
+            user_github_id=current_user.github_id,
+        )
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to enqueue force-requeue job",
+            )
+        review.status = "queued"
+        review.started_at = None
+        review.completed_at = None
+        trigger_user_id = await session.scalar(
+            select(User.id)
+            .where(User.github_id == current_user.github_id)
+            .where(User.deleted_at.is_(None))
+            .limit(1)
+        )
+        review.triggered_by_user_id = int(trigger_user_id) if trigger_user_id is not None else None
+        existing_artifacts = dict(review.debug_artifacts or {})
+        existing_artifacts["manual_recovery"] = {
+            "action": "force_requeue",
+            "actor_github_id": current_user.github_id,
+            "acted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        review.debug_artifacts = existing_artifacts
+        await session.commit()
+        return {"ok": True, "review_id": review_id, "action": action, "job_id": job.job_id}
 
 
 @router.post("/reviews/{review_id}/findings/{finding_index}/dismiss")
@@ -1115,7 +1255,7 @@ async def stream_review_events(
                     yield f"data: {json.dumps({'type': 'status', 'status': review.status})}\n\n"
                     previous_status = review.status
 
-                if review.status in {"done", "failed"}:
+                if review.status in {"done", "failed", "skipped", "canceled", "partial", "rate_limited", "budget_exhausted"}:
                     yield f"data: {json.dumps({'type': 'complete', 'status': review.status})}\n\n"
                     return
 
