@@ -1,15 +1,13 @@
 from typing import Any
+from importlib import import_module
 
 from app.agent.normalization import normalize_file_content
 from app.agent.schema import DropReason, Finding
 
 get_parser: Any = None
 try:
-    from tree_sitter_language_pack import (  # type: ignore[import-not-found]
-        get_parser as _tree_sitter_get_parser,
-    )
-
-    get_parser = _tree_sitter_get_parser
+    _tree_sitter_module = import_module("tree_sitter_language_pack")
+    get_parser = getattr(_tree_sitter_module, "get_parser", None)
 except Exception:  # pragma: no cover - import fallback for constrained environments
     get_parser = None
 
@@ -110,8 +108,13 @@ class FindingValidator:
                 return True
 
         parser = self._parsers[language]
-        tree = parser.parse(bytes(content, "utf-8"))
-        return not self._has_error(tree.root_node)
+        try:
+            tree = parser.parse(content)
+        except TypeError:
+            # Older parser wrappers accept bytes instead of str.
+            tree = parser.parse(content.encode("utf-8"))
+        root_node = tree.root_node() if callable(tree.root_node) else tree.root_node
+        return not self._has_error(root_node)
 
     @staticmethod
     def _detect_language(path: str) -> str | None:
@@ -129,9 +132,25 @@ class FindingValidator:
 
     @classmethod
     def _has_error(cls, node: Any) -> bool:
-        if node.type == "ERROR" or node.is_missing:
+        node_type = getattr(node, "type", None)
+        if callable(node_type):
+            node_type = node_type()
+
+        is_missing = getattr(node, "is_missing", False)
+        if callable(is_missing):
+            is_missing = is_missing()
+
+        has_error = getattr(node, "has_error", False)
+        if callable(has_error):
+            has_error = has_error()
+
+        if node_type == "ERROR" or bool(is_missing) or bool(has_error):
             return True
-        return any(cls._has_error(child) for child in node.children)
+
+        children = getattr(node, "children", ())
+        if callable(children):
+            children = children()
+        return any(cls._has_error(child) for child in children)
 
     @staticmethod
     def _suggestion_is_coherent(replaced: str, suggestion: str, message: str) -> bool:

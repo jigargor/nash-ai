@@ -97,6 +97,29 @@ models:
       deprecations_url: https://docs.anthropic.com/en/docs/about-claude/model-deprecations
       pricing_url: https://www.anthropic.com/pricing
       caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+  - provider: anthropic
+    model: claude-opus-4-8
+    family: claude
+    tier: frontier
+    status: unknown
+    replacement_candidates:
+      - claude-sonnet-4-6
+    shutdown_at: null
+    score: 98
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: explicit_breakpoint
+      max_context_tokens: 200000
+    pricing:
+      input_per_1m: null
+      cached_input_per_1m: null
+      output_per_1m: null
+    sources:
+      models_url: https://docs.anthropic.com/en/docs/about-claude/models/overview
+      deprecations_url: https://docs.anthropic.com/en/docs/about-claude/model-deprecations
+      pricing_url: https://www.anthropic.com/pricing
+      caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
   - provider: openai
     model: gpt-5.2
     family: gpt
