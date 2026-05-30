@@ -1,5 +1,6 @@
 "use server";
 
+import { ApiError } from "@/lib/api/client";
 import { serverBffFetch } from "@/lib/api/server-bff-fetch";
 import type { AuthMeResponse, TermsStatusResponse } from "@/lib/api/auth";
 import type {
@@ -21,6 +22,38 @@ import type {
 } from "@/lib/api/reviews";
 import type { KeyStatus } from "@/lib/api/user-keys";
 import type { UsageSummary } from "@/lib/api/usage";
+
+interface ActionErrorPayload {
+  status: number;
+  message: string;
+  code?: string;
+}
+
+interface ActionResult<T> {
+  ok: boolean;
+  data?: T;
+  error?: ActionErrorPayload;
+}
+
+function actionErrorResult(error: unknown, fallbackMessage: string): ActionResult<never> {
+  if (error instanceof ApiError) {
+    return {
+      ok: false,
+      error: {
+        status: error.status,
+        message: error.message,
+        code: error.code,
+      },
+    };
+  }
+  return {
+    ok: false,
+    error: {
+      status: 500,
+      message: fallbackMessage,
+    },
+  };
+}
 
 export async function actionFetchInstallations(): Promise<RepoInstallation[]> {
   return serverBffFetch<RepoInstallation[]>("/api/v1/installations");
@@ -100,13 +133,38 @@ export async function actionFetchOutcomeSummary(
 export async function actionRerunReview(
   reviewId: number,
   installationId: number,
-): Promise<{ ok: boolean; review_id: number }> {
-  return serverBffFetch<{ ok: boolean; review_id: number }>(
-    `/api/v1/reviews/${reviewId}/rerun?installation_id=${installationId}`,
-    {
+): Promise<ActionResult<{ review_id: number; job_id?: string }>> {
+  try {
+    const payload = await serverBffFetch<{ ok: boolean; review_id: number; job_id?: string }>(
+      `/api/v1/reviews/${reviewId}/rerun?installation_id=${installationId}`,
+      {
+        method: "POST",
+      },
+    );
+    return { ok: true, data: { review_id: payload.review_id, job_id: payload.job_id } };
+  } catch (error) {
+    return actionErrorResult(error, "Unable to rerun review.");
+  }
+}
+
+export async function actionForceRecoverReview(
+  reviewId: number,
+  installationId: number,
+  action: "mark_failed" | "force_requeue",
+): Promise<ActionResult<{ review_id: number; action: string; job_id?: string }>> {
+  try {
+    const payload = await serverBffFetch<{
+      ok: boolean;
+      review_id: number;
+      action: string;
+      job_id?: string;
+    }>(`/api/v1/reviews/${reviewId}/force-recover?installation_id=${installationId}&action=${action}`, {
       method: "POST",
-    },
-  );
+    });
+    return { ok: true, data: { review_id: payload.review_id, action: payload.action, job_id: payload.job_id } };
+  } catch (error) {
+    return actionErrorResult(error, "Unable to perform recovery action.");
+  }
 }
 
 export async function actionDismissFinding(

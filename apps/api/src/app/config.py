@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     enable_reviews: bool = True
     reviews_per_hour_limit: int = 30
     daily_token_budget_per_installation: int = 10_000_000
+    stale_review_recovery_enabled: bool = True
+    stale_review_recovery_running_max_age_minutes: int = 10
+    stale_review_recovery_queued_enabled: bool = False
+    stale_review_recovery_queued_max_age_minutes: int = 30
+    stale_review_recovery_cron_minutes: int = 5
+    review_force_actions_enabled: bool = False
     sentry_dsn: str | None = None
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
@@ -171,6 +177,18 @@ class Settings(BaseSettings):
     def validate_observability_sample_rate(cls, v: float) -> float:
         if v < 0 or v > 1:
             raise ValueError("OBSERVABILITY_SAMPLE_RATE must be between 0 and 1")
+        return v
+
+    @field_validator(
+        "stale_review_recovery_running_max_age_minutes",
+        "stale_review_recovery_queued_max_age_minutes",
+        "stale_review_recovery_cron_minutes",
+        mode="after",
+    )
+    @classmethod
+    def validate_positive_recovery_minutes(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("stale review recovery minute values must be > 0")
         return v
 
     @field_validator("fernet_key", mode="after")

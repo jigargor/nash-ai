@@ -2,7 +2,7 @@
 
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
-import { actionDismissFinding, actionRerunReview } from "@/app/actions/dashboard-api";
+import { actionDismissFinding, actionForceRecoverReview, actionRerunReview } from "@/app/actions/dashboard-api";
 import type { ReviewDetail, ReviewListItem } from "@/lib/api/reviews";
 
 interface RerunContext {
@@ -20,7 +20,12 @@ export function useRerunReview() {
     }: {
       reviewId: number;
       installationId: number;
-    }) => actionRerunReview(reviewId, installationId),
+    }) => {
+      return actionRerunReview(reviewId, installationId).then((result) => {
+        if (!result.ok || !result.data) throw new Error(result.error?.message ?? "Unable to rerun review.");
+        return result.data;
+      });
+    },
     onMutate: async ({ reviewId, installationId }) => {
       const reviewQueryKey = ["review", reviewId, installationId] as const;
       await queryClient.cancelQueries({ queryKey: reviewQueryKey });
@@ -44,6 +49,32 @@ export function useRerunReview() {
       for (const [key, data] of context.previousReviewLists) {
         queryClient.setQueryData(key, data);
       }
+    },
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ["review", variables.reviewId, variables.installationId] });
+      void queryClient.invalidateQueries({ queryKey: ["review-model-audits", variables.reviewId, variables.installationId] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews", variables.installationId] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews"] });
+    },
+  });
+}
+
+export function useForceRecoverReview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      reviewId,
+      installationId,
+      action,
+    }: {
+      reviewId: number;
+      installationId: number;
+      action: "mark_failed" | "force_requeue";
+    }) => {
+      return actionForceRecoverReview(reviewId, installationId, action).then((result) => {
+        if (!result.ok || !result.data) throw new Error(result.error?.message ?? "Unable to perform recovery action.");
+        return result.data;
+      });
     },
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["review", variables.reviewId, variables.installationId] });

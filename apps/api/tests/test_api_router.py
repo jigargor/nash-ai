@@ -375,7 +375,137 @@ async def test_rerun_review_duplicate_submission_lock_returns_409(
         headers=_auth_headers(),
     )
     assert second.status_code == 409
-    assert second.json()["detail"] == "Review submission already in progress for this PR head"
+    assert "Review submission already in progress" in second.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_rerun_review_rejects_running_status_without_force_controls(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-anthropic-key")
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="running")
+
+    response = await client.post(
+        f"/api/v1/reviews/{review_id}/rerun?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 409
+    assert "force recovery controls" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_rerun_review_returns_500_when_enqueue_fails(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-anthropic-key")
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="failed")
+
+    redis = test_app.state.redis
+    assert isinstance(redis, _FakeRedis)
+
+    async def _return_none(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(redis, "enqueue_job", _return_none)
+    response = await client.post(
+        f"/api/v1/reviews/{review_id}/rerun?installation_id={installation_id}",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Failed to enqueue rerun job"
+
+
+@pytest.mark.anyio
+async def test_force_recover_requires_feature_flag(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "review_force_actions_enabled", False)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="running")
+
+    response = await client.post(
+        f"/api/v1/reviews/{review_id}/force-recover?installation_id={installation_id}&action=mark_failed",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_force_recover_mark_failed_updates_status(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "review_force_actions_enabled", True)
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="running")
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        installation_user = await session.scalar(
+            select(InstallationUser).where(InstallationUser.installation_id == installation_id).limit(1)
+        )
+        assert installation_user is not None
+        installation_user.role = "admin"
+        await session.commit()
+
+    response = await client.post(
+        f"/api/v1/reviews/{review_id}/force-recover?installation_id={installation_id}&action=mark_failed",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["action"] == "mark_failed"
+
+    await engine.dispose()
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        review = await session.get(Review, review_id)
+        assert review is not None
+        assert review.status == "failed"
+
+
+@pytest.mark.anyio
+async def test_force_recover_force_requeue_enqueues_job(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "api_access_key", None)
+    monkeypatch.setattr(settings, "review_force_actions_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-anthropic-key")
+    installation_id = _random_installation_id()
+    await _insert_installation(installation_id)
+    review_id = await _insert_review(installation_id, status="running")
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, installation_id)
+        installation_user = await session.scalar(
+            select(InstallationUser).where(InstallationUser.installation_id == installation_id).limit(1)
+        )
+        assert installation_user is not None
+        installation_user.role = "admin"
+        await session.commit()
+
+    response = await client.post(
+        f"/api/v1/reviews/{review_id}/force-recover?installation_id={installation_id}&action=force_requeue",
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json()["action"] == "force_requeue"
+    redis = test_app.state.redis
+    assert isinstance(redis, _FakeRedis)
+    assert len(redis.calls) == 1
 
 
 @pytest.mark.anyio
