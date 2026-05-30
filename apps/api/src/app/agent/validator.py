@@ -1,15 +1,13 @@
 from typing import Any
+from importlib import import_module
 
 from app.agent.normalization import normalize_file_content
 from app.agent.schema import DropReason, Finding
 
 get_parser: Any = None
 try:
-    from tree_sitter_language_pack import (  # type: ignore[import-not-found]
-        get_parser as _tree_sitter_get_parser,
-    )
-
-    get_parser = _tree_sitter_get_parser
+    _tree_sitter_module = import_module("tree_sitter_language_pack")
+    get_parser = getattr(_tree_sitter_module, "get_parser", None)
 except Exception:  # pragma: no cover - import fallback for constrained environments
     get_parser = None
 
@@ -110,7 +108,11 @@ class FindingValidator:
                 return True
 
         parser = self._parsers[language]
-        tree = parser.parse(bytes(content, "utf-8"))
+        try:
+            tree = parser.parse(content)
+        except TypeError:
+            # Older parser wrappers accept bytes instead of str.
+            tree = parser.parse(content.encode("utf-8"))
         return not self._has_error(tree.root_node)
 
     @staticmethod

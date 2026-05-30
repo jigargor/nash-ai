@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from importlib import import_module
 from collections.abc import Callable
 from typing import ParamSpec, TypeVar, cast
 
@@ -22,13 +23,22 @@ R = TypeVar("R")
 
 _observe: Callable[..., Callable[[Callable[P, R]], Callable[P, R]]] | None = None
 _update_current_span: Callable[..., None] | None = None
+_deepeval_tracing: object | None = None
 
 try:
-    from deepeval.tracing import observe as _observe  # type: ignore[assignment]
-    from deepeval.tracing import update_current_span as _update_current_span  # type: ignore[assignment]
+    _deepeval_tracing = import_module("deepeval.tracing")
 except Exception:
-    _observe = None
-    _update_current_span = None
+    pass
+
+if _deepeval_tracing is not None:
+    _observe = cast(
+        Callable[..., Callable[[Callable[P, R]], Callable[P, R]]],
+        getattr(_deepeval_tracing, "observe", None),
+    )
+    _update_current_span = cast(
+        Callable[..., None] | None,
+        getattr(_deepeval_tracing, "update_current_span", None),
+    )
 
 
 def is_deepeval_tracing_enabled() -> bool:
