@@ -132,9 +132,25 @@ class FindingValidator:
 
     @classmethod
     def _has_error(cls, node: Any) -> bool:
-        if node.type == "ERROR" or node.is_missing:
+        node_type = getattr(node, "type", None)
+        if callable(node_type):
+            node_type = node_type()
+
+        is_missing = getattr(node, "is_missing", False)
+        if callable(is_missing):
+            is_missing = is_missing()
+
+        has_error = getattr(node, "has_error", False)
+        if callable(has_error):
+            has_error = has_error()
+
+        if node_type == "ERROR" or bool(is_missing) or bool(has_error):
             return True
-        return any(cls._has_error(child) for child in node.children)
+
+        children = getattr(node, "children", ())
+        if callable(children):
+            children = children()
+        return any(cls._has_error(child) for child in children)
 
     @staticmethod
     def _suggestion_is_coherent(replaced: str, suggestion: str, message: str) -> bool:
