@@ -28,7 +28,7 @@ _deepeval_tracing: object | None = None
 try:
     _deepeval_tracing = import_module("deepeval.tracing")
 except Exception:
-    pass
+    _deepeval_tracing = None
 
 if _deepeval_tracing is not None:
     _observe = cast(
