@@ -291,17 +291,17 @@ async def queue_pull_request_review(
     if job is None:
         async with AsyncSessionLocal() as session:
             await set_installation_context(session, installation_id)
-            review = await session.get(Review, review_id)
-            if review is not None:
-                review.status = "failed"
-                review.completed_at = datetime.now(UTC)
-                review.findings = {"findings": [], "summary": _REVIEW_ENQUEUE_FAILURE_SUMMARY}
-                existing_artifacts = dict(review.debug_artifacts or {})
+            review_row = await session.get(Review, review_id)
+            if review_row is not None:
+                review_row.status = "failed"
+                review_row.completed_at = datetime.now(UTC)
+                review_row.findings = {"findings": [], "summary": _REVIEW_ENQUEUE_FAILURE_SUMMARY}
+                existing_artifacts = dict(review_row.debug_artifacts or {})
                 existing_artifacts["terminal_error"] = {
                     "failure_class": "enqueue_failed",
                     "exception_type": "EnqueueJobReturnedNone",
                 }
-                review.debug_artifacts = existing_artifacts
+                review_row.debug_artifacts = existing_artifacts
                 await session.commit()
         logger.error(
             "Failed to enqueue review job review_id=%s repo=%s pr_number=%s",
