@@ -113,7 +113,8 @@ class FindingValidator:
         except TypeError:
             # Older parser wrappers accept bytes instead of str.
             tree = parser.parse(content.encode("utf-8"))
-        return not self._has_error(tree.root_node)
+        root_node = tree.root_node() if callable(tree.root_node) else tree.root_node
+        return not self._has_error(root_node)
 
     @staticmethod
     def _detect_language(path: str) -> str | None:
