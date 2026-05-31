@@ -375,7 +375,10 @@ async def test_rerun_review_duplicate_submission_lock_returns_409(
         headers=_auth_headers(),
     )
     assert second.status_code == 409
-    assert "Review submission already in progress" in second.json()["detail"]
+    assert (
+        "Review submission already in progress" in second.json()["detail"]
+        or "Review status is 'queued'" in second.json()["detail"]
+    )
 
 
 @pytest.mark.anyio

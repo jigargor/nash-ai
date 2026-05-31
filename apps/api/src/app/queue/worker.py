@@ -7,7 +7,7 @@ from app.config import settings
 from app.observability import init_observability
 from app.storage.r2_rotation import assert_r2_credentials_within_rotation_policy
 from app.queue.connection import format_redis_target
-from app.queue.recovery import recover_stale_reviews
+from app.queue.recovery import recover_stale_reviews, recover_stale_running_reviews
 from arq.connections import RedisSettings
 from arq.constants import default_queue_name
 from arq.cron import cron
@@ -120,11 +120,21 @@ async def reconcile_stale_reviews(ctx: dict[str, Any]) -> None:
             "total_recovered": 0,
         }
         return
-    stats = await recover_stale_reviews(
-        running_max_age_minutes=settings.stale_review_recovery_running_max_age_minutes,
-        recover_queued=settings.stale_review_recovery_queued_enabled,
-        queued_max_age_minutes=settings.stale_review_recovery_queued_max_age_minutes,
-    )
+    if settings.stale_review_recovery_queued_enabled:
+        stats = await recover_stale_reviews(
+            running_max_age_minutes=settings.stale_review_recovery_running_max_age_minutes,
+            recover_queued=True,
+            queued_max_age_minutes=settings.stale_review_recovery_queued_max_age_minutes,
+        )
+    else:
+        running_recovered = await recover_stale_running_reviews(
+            max_age_minutes=settings.stale_review_recovery_running_max_age_minutes
+        )
+        stats = {
+            "running_recovered": running_recovered,
+            "queued_recovered": 0,
+            "total_recovered": running_recovered,
+        }
     ctx["recovered_stale_reviews"] = stats
 
 
