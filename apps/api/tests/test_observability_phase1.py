@@ -135,7 +135,8 @@ async def test_worker_startup_configures_observer(monkeypatch: pytest.MonkeyPatc
     reset_observer()
     monkeypatch.setattr(worker_module, "assert_r2_credentials_within_rotation_policy", lambda _: None)
 
-    async def _fake_recover() -> int:
+    async def _fake_recover(max_age_minutes: int = 10) -> int:
+        _ = max_age_minutes
         return 0
 
     monkeypatch.setattr(worker_module, "recover_stale_running_reviews", _fake_recover)
