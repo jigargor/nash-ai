@@ -19,6 +19,7 @@ from app.db.session import AsyncSessionLocal, set_user_context
 logger = logging.getLogger(__name__)
 
 SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "gemini"})
+_SYNCED_INSTALLATION_ROLE = "admin"
 
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
@@ -332,9 +333,20 @@ async def sync_current_user_installations(
         for row in existing_rows:
             if int(row.installation_id) not in target_ids:
                 await session.delete(row)
+                continue
+            # The OAuth installation sync is the only self-serve linkage path for dashboard users.
+            # Keep synced links admin-capable so force recovery actions are usable.
+            if row.role.lower() != _SYNCED_INSTALLATION_ROLE:
+                row.role = _SYNCED_INSTALLATION_ROLE
 
         for installation_id in sorted(target_ids - existing_ids):
-            session.add(InstallationUser(installation_id=installation_id, user_id=user.id, role="member"))
+            session.add(
+                InstallationUser(
+                    installation_id=installation_id,
+                    user_id=user.id,
+                    role=_SYNCED_INSTALLATION_ROLE,
+                )
+            )
 
         await session.commit()
 

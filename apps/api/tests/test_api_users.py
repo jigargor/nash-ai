@@ -394,6 +394,7 @@ async def test_sync_user_installations_upserts_membership(client: httpx.AsyncCli
             )
         ).scalar_one_or_none()
         assert link is not None
+        assert link.role == "admin"
 
 
 @pytest.mark.anyio
@@ -479,8 +480,17 @@ async def test_sync_installations_direct_covers_existing_installation_update() -
                 select(Installation).where(Installation.installation_id == installation_id)
             )
         ).scalar_one()
+        link = (
+            await session.execute(
+                select(InstallationUser).where(
+                    InstallationUser.installation_id == installation_id,
+                    InstallationUser.user_id == user_id,
+                )
+            )
+        ).scalar_one()
         assert installation.account_login == "acme-new-login"
         assert installation.account_type == "Organization"
+        assert link.role == "admin"
 
 
 @pytest.mark.anyio
