@@ -14,27 +14,27 @@
   },
   "dependencies": {
     "@ai-code-review/shared-types": "workspace:*",
-    "@next/env": "16.2.6",
-    "@tanstack/react-query": "^5.100.11",
+    "@next/env": "16.2.7",
+    "@tanstack/react-query": "^5.101.0",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
-    "next": "16.2.6",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6",
+    "next": "16.2.7",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "server-only": "^0.0.1",
-    "zustand": "^5.0.13"
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^25",
-    "@types/react": "^19.2.15",
+    "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
-    "eslint": "^9.39.0",
-    "eslint-config-next": "16.2.6",
+    "eslint": "^10.4.1",
+    "eslint-config-next": "16.2.7",
     "jsdom": "^29.1.1",
     "typescript": "^6",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.8"
   }
 }
