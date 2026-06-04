@@ -15,31 +15,31 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.15"
 dependencies = [
   "fastapi>=0.136.3",
-  "uvicorn[standard]>=0.48.0",
+  "uvicorn[standard]>=0.49.0",
   "httpx>=0.28.1",
-  "idna>=3.15",
+  "idna>=3.18",
   "mako>=1.3.12",
   "pyjwt[crypto]>=2.13.0",
-  "starlette>=1.0.1",
+  "starlette>=1.2.1",
   "sqlalchemy[asyncio]>=2.0.50",
   "asyncpg>=0.31.0",
   "alembic>=1.18.4",
   "arq>=0.28.0",
   # redis-py <6 required by arq; 5.x clients work with Redis server 7+
-  "redis>=5.0.0,<6",
+  "redis>=8.0.0,<9",
   "pydantic>=2.13.4",
   "pydantic-settings>=2.14.1",
   "cryptography>=48.0.0",
   "tiktoken>=0.13.0",
-  "anthropic>=0.104.1",
+  "anthropic>=0.105.2",
   "unidiff>=0.7.5",
   "pyyaml>=6.0.3",
   "tree-sitter-language-pack>=1.8.1,<1.8.2",
-  "langfuse>=4.6.1",
-  "sentry-sdk[fastapi]>=2.60.0",
-  "openai>=2.38.0",
-  "boto3>=1.43.15",
-  "mcp>=1.27.1",
+  "langfuse>=4.7.1",
+  "sentry-sdk[fastapi]>=2.61.1",
+  "openai>=2.41.0",
+  "boto3>=1.43.22",
+  "mcp>=1.27.2",
 ]
 
 [project.optional-dependencies]
@@ -53,7 +53,7 @@ dev = [
   "pip-audit>=2.10.0",
 ]
 deepeval = [
-  "deepeval>=4.0.4",
+  "deepeval>=4.0.5",
 ]
 
 [tool.pytest.ini_options]
