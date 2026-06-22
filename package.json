@@ -5,5 +5,11 @@
   "scripts": {
     "lint:web": "pnpm --filter web lint",
     "typecheck:web": "pnpm --filter web typecheck"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici": "7.28.0",
+      "vite": "7.3.5"
+    }
   }
 }
