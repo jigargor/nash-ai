@@ -8,6 +8,11 @@ dev-dependencies = [
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.0",
 ]
+override-dependencies = [
+  "msgpack>=1.2.1",
+  "python-multipart>=0.0.31",
+  "pip>=26.1.2",
+]
 
 [tool.ruff]
 line-length = 100
