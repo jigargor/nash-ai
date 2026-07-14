@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=82.0.1"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -14,8 +14,8 @@ name = "api"
 version = "0.1.0"
 requires-python = ">=3.12,<3.15"
 dependencies = [
-  "fastapi>=0.137.1",
-  "uvicorn[standard]>=0.49.0",
+  "fastapi>=0.139.0",
+  "uvicorn[standard]>=0.51.0",
   "httpx>=0.28.1",
   "idna>=3.18",
   "mako>=1.3.12",
@@ -23,37 +23,37 @@ dependencies = [
   "starlette>=1.3.1",
   "sqlalchemy[asyncio]>=2.0.51",
   "asyncpg>=0.31.0",
-  "alembic>=1.18.4",
+  "alembic>=1.18.5",
   "arq>=0.28.0",
   # redis-py <6 required by arq; 5.x clients work with Redis server 7+
-  "redis>=5.0.0,<6",
+  "redis>=8.0.1,<9",
   "pydantic>=2.13.4",
   "pydantic-settings>=2.14.2",
   "cryptography>=49.0.0",
   "tiktoken>=0.13.0",
-  "anthropic>=0.109.2",
+  "anthropic>=0.116.0",
   "unidiff>=0.7.5",
   "pyyaml>=6.0.3",
-  "tree-sitter-language-pack>=1.8.1,<1.8.2",
-  "langfuse>=4.9.0",
-  "sentry-sdk[fastapi]>=2.63.0",
-  "openai>=2.42.0",
-  "boto3>=1.43.31",
-  "mcp>=1.28.0",
+  "tree-sitter-language-pack>=1.12.5,<1.12.6",
+  "langfuse>=4.14.0",
+  "sentry-sdk[fastapi]>=2.65.0",
+  "openai>=2.45.0",
+  "boto3>=1.43.48",
+  "mcp>=1.28.1",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=9.1.0",
+  "pytest>=9.1.1",
   "pytest-cov>=7.1.0",
-  "mypy>=2.1.0",
+  "mypy>=2.3.0",
   "bandit>=1.9.4",
   "types-PyYAML>=6.0.12.20260518",
   "types-unidiff>=0.7.0.20260518",
   "pip-audit>=2.10.1",
 ]
 deepeval = [
-  "deepeval>=4.0.6",
+  "deepeval>=4.1.0",
 ]
 
 [tool.pytest.ini_options]
