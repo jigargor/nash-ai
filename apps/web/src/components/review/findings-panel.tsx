@@ -2,6 +2,7 @@
 
 import type { Finding, FindingOutcome } from "@ai-code-review/shared-types";
 
+import { FindingLabelControl } from "@/components/review/finding-label-control";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useReviewUiStore } from "@/stores/review-ui-store";
@@ -13,6 +14,9 @@ interface FindingsPanelProps {
   onSelectFinding: (index: number) => void;
   onDismiss: (index: number) => void;
   onCopySuggestion: (index: number) => void;
+  /** When provided, each finding shows a human quality-label control (writes to finding_labels). */
+  reviewId?: number;
+  findingLabels?: Record<number, string>;
 }
 
 export function FindingsPanel({
@@ -22,6 +26,8 @@ export function FindingsPanel({
   onSelectFinding,
   onDismiss,
   onCopySuggestion,
+  reviewId,
+  findingLabels,
 }: FindingsPanelProps) {
   const severityFilters = useReviewUiStore((state) => state.severityFilters);
   const categoryFilters = useReviewUiStore((state) => state.categoryFilters);
@@ -128,6 +134,9 @@ export function FindingsPanel({
               Dismiss
             </Button>
           </div>
+          {typeof reviewId === "number" ? (
+            <FindingLabelControl reviewId={reviewId} findingIndex={index} currentLabel={findingLabels?.[index] ?? null} />
+          ) : null}
         </article>
       ))}
     </section>

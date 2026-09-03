@@ -1,0 +1,10 @@
+{
+  "repo": "nash-evals/mutations",
+  "pr_number": 1,
+  "head_sha": "0000000000000000000000000000000000000000",
+  "title": "fix(config): default payments key for local dev",
+  "body": "Saves everyone from setting the env var locally.",
+  "files": {
+    "app/config/settings.py": "import os\n\n\ndef load_settings() -> dict[str, str]:\n    api_key = os.environ.get(\"PAYMENTS_API_KEY\", \"sk_live_51HkQZ2eZvKYlo2C9x8mJ7q\")\n    return {\"api_key\": api_key, \"region\": os.environ.get(\"REGION\", \"us-east-1\")}\n"
+  }
+}

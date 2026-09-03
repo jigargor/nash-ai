@@ -1,0 +1,495 @@
+{
+  "drop_reasons": [
+    "target_line_mismatch",
+    "line_out_of_range",
+    "syntax_invalid_suggestion",
+    "incoherent_suggestion",
+    "line_not_in_diff",
+    "file_not_in_context",
+    "validator_error"
+  ],
+  "finding": {
+    "properties": {
+      "category": {
+        "enum": [
+          "security",
+          "performance",
+          "correctness",
+          "style",
+          "maintainability",
+          "best-practice"
+        ],
+        "title": "Category",
+        "type": "string"
+      },
+      "confidence": {
+        "description": "Calibrated confidence this finding is correct and actionable. 95-100: verified via tool call, no plausible counter-argument. 80-94: strong evidence from diff + context. 60-79: plausible but unverified. 40-59: speculative (only submit if severity is critical). Below 40: do not submit.",
+        "maximum": 100,
+        "minimum": 0,
+        "title": "Confidence",
+        "type": "integer"
+      },
+      "evidence": {
+        "enum": [
+          "tool_verified",
+          "diff_visible",
+          "verified_fact",
+          "inference"
+        ],
+        "title": "Evidence",
+        "type": "string"
+      },
+      "evidence_fact_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "ID from verified_facts.yaml. Required when evidence == 'verified_fact'.",
+        "title": "Evidence Fact Id"
+      },
+      "evidence_tool_calls": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tool names called to verify this finding. Required when evidence == 'tool_verified'.",
+        "title": "Evidence Tool Calls"
+      },
+      "file_path": {
+        "title": "File Path",
+        "type": "string"
+      },
+      "finding_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Stable id for delivery markers and outcome tracking (optional).",
+        "title": "Finding Id"
+      },
+      "is_vendor_claim": {
+        "default": false,
+        "description": "True if the finding's correctness depends on external vendor, platform, framework, or library behavior. See vendor-claim rules.",
+        "title": "Is Vendor Claim",
+        "type": "boolean"
+      },
+      "line_end": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Line End"
+      },
+      "line_start": {
+        "minimum": 1,
+        "title": "Line Start",
+        "type": "integer"
+      },
+      "message": {
+        "maxLength": 500,
+        "title": "Message",
+        "type": "string"
+      },
+      "new_line_no": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "New Line No"
+      },
+      "old_line_no": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Old Line No"
+      },
+      "patch_hunk": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Best-effort diff hunk identifier used for anchor diagnostics.",
+        "title": "Patch Hunk"
+      },
+      "severity": {
+        "enum": [
+          "critical",
+          "high",
+          "medium",
+          "low"
+        ],
+        "title": "Severity",
+        "type": "string"
+      },
+      "side": {
+        "default": "RIGHT",
+        "description": "GitHub diff side anchor for line.",
+        "enum": [
+          "RIGHT",
+          "LEFT"
+        ],
+        "title": "Side",
+        "type": "string"
+      },
+      "start_side": {
+        "anyOf": [
+          {
+            "enum": [
+              "RIGHT",
+              "LEFT"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "GitHub diff side anchor for start_line in multi-line comments.",
+        "title": "Start Side"
+      },
+      "suggestion": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Code block to replace lines with",
+        "title": "Suggestion"
+      },
+      "target_line_content": {
+        "description": "The exact content of line_start as it appears in the file at HEAD.",
+        "maxLength": 2000,
+        "title": "Target Line Content",
+        "type": "string"
+      },
+      "verified_via_tool": {
+        "default": false,
+        "description": "True if a tool call was made that touched this file during the review.",
+        "title": "Verified Via Tool",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "severity",
+      "category",
+      "message",
+      "file_path",
+      "line_start",
+      "target_line_content",
+      "confidence",
+      "evidence"
+    ],
+    "title": "Finding",
+    "type": "object"
+  },
+  "review_result": {
+    "$defs": {
+      "Finding": {
+        "properties": {
+          "category": {
+            "enum": [
+              "security",
+              "performance",
+              "correctness",
+              "style",
+              "maintainability",
+              "best-practice"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "Calibrated confidence this finding is correct and actionable. 95-100: verified via tool call, no plausible counter-argument. 80-94: strong evidence from diff + context. 60-79: plausible but unverified. 40-59: speculative (only submit if severity is critical). Below 40: do not submit.",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Confidence",
+            "type": "integer"
+          },
+          "evidence": {
+            "enum": [
+              "tool_verified",
+              "diff_visible",
+              "verified_fact",
+              "inference"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "evidence_fact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ID from verified_facts.yaml. Required when evidence == 'verified_fact'.",
+            "title": "Evidence Fact Id"
+          },
+          "evidence_tool_calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Tool names called to verify this finding. Required when evidence == 'tool_verified'.",
+            "title": "Evidence Tool Calls"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "finding_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable id for delivery markers and outcome tracking (optional).",
+            "title": "Finding Id"
+          },
+          "is_vendor_claim": {
+            "default": false,
+            "description": "True if the finding's correctness depends on external vendor, platform, framework, or library behavior. See vendor-claim rules.",
+            "title": "Is Vendor Claim",
+            "type": "boolean"
+          },
+          "line_end": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Line End"
+          },
+          "line_start": {
+            "minimum": 1,
+            "title": "Line Start",
+            "type": "integer"
+          },
+          "message": {
+            "maxLength": 500,
+            "title": "Message",
+            "type": "string"
+          },
+          "new_line_no": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "New Line No"
+          },
+          "old_line_no": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Old Line No"
+          },
+          "patch_hunk": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Best-effort diff hunk identifier used for anchor diagnostics.",
+            "title": "Patch Hunk"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Severity",
+            "type": "string"
+          },
+          "side": {
+            "default": "RIGHT",
+            "description": "GitHub diff side anchor for line.",
+            "enum": [
+              "RIGHT",
+              "LEFT"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "start_side": {
+            "anyOf": [
+              {
+                "enum": [
+                  "RIGHT",
+                  "LEFT"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "GitHub diff side anchor for start_line in multi-line comments.",
+            "title": "Start Side"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Code block to replace lines with",
+            "title": "Suggestion"
+          },
+          "target_line_content": {
+            "description": "The exact content of line_start as it appears in the file at HEAD.",
+            "maxLength": 2000,
+            "title": "Target Line Content",
+            "type": "string"
+          },
+          "verified_via_tool": {
+            "default": false,
+            "description": "True if a tool call was made that touched this file during the review.",
+            "title": "Verified Via Tool",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "severity",
+          "category",
+          "message",
+          "file_path",
+          "line_start",
+          "target_line_content",
+          "confidence",
+          "evidence"
+        ],
+        "title": "Finding",
+        "type": "object"
+      }
+    },
+    "properties": {
+      "findings": {
+        "items": {
+          "$ref": "#/$defs/Finding"
+        },
+        "title": "Findings",
+        "type": "array"
+      },
+      "summary": {
+        "maxLength": 800,
+        "title": "Summary",
+        "type": "string"
+      }
+    },
+    "required": [
+      "findings",
+      "summary"
+    ],
+    "title": "ReviewResult",
+    "type": "object"
+  },
+  "review_statuses": [
+    "queued",
+    "running",
+    "done",
+    "failed",
+    "skipped",
+    "canceled",
+    "partial",
+    "rate_limited",
+    "budget_exhausted"
+  ],
+  "terminal_statuses": [
+    "success",
+    "skipped",
+    "failed",
+    "canceled",
+    "partial",
+    "rate_limited",
+    "budget_exhausted"
+  ]
+}

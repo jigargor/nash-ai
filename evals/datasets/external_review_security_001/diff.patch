@@ -1,0 +1,10 @@
+diff --git a/src/auth/run.py b/src/auth/run.py
+new file mode 100644
+index 0000000..c0ffee1
+--- /dev/null
++++ b/src/auth/run.py
+@@ -0,0 +1,4 @@
++def run(user_input: str) -> dict:
++    # insecure: executes untrusted input
++    eval(user_input)
++    return {"ok": True}

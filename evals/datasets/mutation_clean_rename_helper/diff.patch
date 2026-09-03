@@ -1,0 +1,9 @@
+diff --git a/app/webhooks/verify.py b/app/webhooks/verify.py
+--- a/app/webhooks/verify.py
++++ b/app/webhooks/verify.py
+@@ -8,4 +8,5 @@
+ 
+ 
+ def parse_event(headers: dict[str, str]) -> str:
++    """Return the GitHub event name (empty when missing)."""
+     return headers.get("X-GitHub-Event", "")

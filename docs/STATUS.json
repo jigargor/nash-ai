@@ -1,0 +1,328 @@
+{
+  "version": 1,
+  "overhaul": "nash-ai-review-overhaul",
+  "branch": "feat/w1-review-overhaul",
+  "started_at": "2026-09-02T17:02:00-07:00",
+  "current_wave": 4,
+  "current_round": 3,
+  "assumptions": {
+    "primary_model": "claude-sonnet-5",
+    "primary_effort": "medium",
+    "fast_path_model": "claude-haiku-4-5",
+    "critic_judge_model": "claude-opus-5",
+    "legacy_anthropic_fallback": "claude-sonnet-4-6",
+    "openai_balanced": "gpt-5.6-terra",
+    "openai_frontier": "gpt-5.6-sol",
+    "openai_economy": "gpt-5.6-luna",
+    "gemini_fallback": "gemini-3.1-pro-preview",
+    "gemini_economy": "gemini-3.6-flash",
+    "claude_sonnet_4_5_shutdown_at": "2026-09-29",
+    "gemini_2_5_shutdown_at": "2026-10-16",
+    "anthropic_pricing_source": "platform.claude.com docs (verified 2026-09-02)",
+    "openai_gemini_pricing_source": "unverified \u2014 confirm from first-party pages in Wave 1 infra",
+    "determinism": "pinned IDs + fixed effort + LLM response cache; temperature=0 only where provider accepts",
+    "pr_corpus": "jigargor/gentle-stream",
+    "tuning_pr_count_target": 20,
+    "heldout_pr_count_target": 10,
+    "heldout_selection": "deterministic hash of PR number -> evals/datasets/heldout.json",
+    "judges": [
+      "claude-opus-5",
+      "gpt-5.6-sol (optional second)"
+    ],
+    "human_style_delivery": "no confidence % in bodies; optional severity label; hidden <!-- nash:f:<id> --> marker",
+    "brownfield_layout": "ownership map in ARCHITECTURE.md; physical moves only on rewrite",
+    "spend_soft_cap_usd": 200,
+    "round_budget_usd": 25,
+    "cached_reruns_cost_usd": 0
+  },
+  "budget": {
+    "soft_cap_usd": 200,
+    "round_1_allocated_usd": 25,
+    "round_1_spent_usd": 0,
+    "total_spent_usd": 0,
+    "remaining_usd": 200,
+    "note": "Write round budget before spending. Harness aborts when projected uncached spend exceeds remaining.",
+    "round_allocated_usd": 0.0,
+    "round_spent_usd": 0.0,
+    "round_2_allocated_usd": 0.0,
+    "round_3_allocated_usd": 0.0
+  },
+  "modules": {
+    "ingestion": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\ingestion\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:35.098280+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "context-packaging": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\context-packaging\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:35.351315+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "agent-core": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\agent-core\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:35.603580+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "validation": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\validation\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:35.854795+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "prompts": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\prompts\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:36.113271+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "delivery": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\delivery\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:36.386444+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "infra": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\infra\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:34.599537+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "frontend": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\frontend\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:36.647064+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "evals": {
+      "score": null,
+      "rounds": 2,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\evals\\round-2.json"
+      ],
+      "last_round_at": "2026-09-03T01:18:56.529198+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "telemetry": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\telemetry\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:34.361217+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    },
+    "pipeline": {
+      "score": null,
+      "rounds": 1,
+      "open_issues": [
+        "golden misses (fn)=1"
+      ],
+      "status": "smoke_only_blocked_no_llm_keys",
+      "method": "metrics_proxy_critic",
+      "artifacts": [
+        "C:\\Users\\gorji\\Documents\\2026\\nash-ai\\evals\\critic\\pipeline\\round-1.json"
+      ],
+      "last_round_at": "2026-09-03T01:17:34.839848+00:00",
+      "evidence_llm_backed": false,
+      "proxy_score": 9.07
+    }
+  },
+  "baseline": {
+    "status": "harness_smoke_complete__model_baseline_blocked",
+    "recorded_at": "2026-09-03T01:17:29.275993+00:00",
+    "llm_mode": "stub",
+    "why_blocked": "No ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY and no GITHUB_TOKEN exist in this environment (.env.local has none). Every model-dependent number below is therefore absent, not estimated.",
+    "wave1_exit_criteria": {
+      "harness_runs_real_pipeline_dry_run_on_gte_5_gentle_stream_prs": {
+        "met": true,
+        "prs_run": [
+          76,
+          74,
+          73,
+          72,
+          71,
+          69
+        ],
+        "pipeline_error_runs": 0
+      },
+      "cached_rerun_costs_zero": {
+        "met": true,
+        "evidence": "54 GitHub cache hits / 0 network calls; total_cost_usd 0.0"
+      },
+      "fixture_cases_zero_pipeline_errors": {
+        "met": true,
+        "runs": 14
+      },
+      "real_model_numbers_in_status": {
+        "met": false,
+        "blocked_on": [
+          "ANTHROPIC_API_KEY"
+        ]
+      }
+    },
+    "fixtures": {
+      "runs": 14,
+      "pipeline_error_runs": 0,
+      "findings_total": 9,
+      "drop_reasons": {},
+      "proxy_critic_mean": 9.07,
+      "proxy_critic_sd": 1.71,
+      "note": "stub reviewer pattern-matches added lines; proxy critic measures anchoring/suggestion/golden plumbing only"
+    },
+    "gentle_stream": {
+      "runs": 6,
+      "pipeline_error_runs": 0,
+      "files_api_cross_check_warnings": 0,
+      "note": "Files API vs unidiff added-line sets agreed on all 6 PRs: ingestion line numbering is not the anchoring root cause",
+      "heldout_prs": [
+        1,
+        50,
+        58,
+        60,
+        64,
+        65,
+        70,
+        75,
+        77,
+        78
+      ],
+      "heldout_selection": "sha256('{repo}#{number}') first 8 hex digits % 3 == 0; frozen at first listing"
+    },
+    "bugs_found_by_harness_before_any_model_call": [
+      "DroppedFinding re-validated rejected Finding instances, turning routine drops into a validation-stage failure (fixed: JSON snapshot)",
+      "vendor_detect flagged the ordinary words 'render' and 'lambda' as vendor claims and rejected valid findings (fixed)",
+      "4 legacy eval fixtures had malformed unified diffs that unidiff rejects; run_eval never parsed them (fixed)",
+      "3 legacy fixtures had no diff.patch at all, so nothing was commentable (fixed)"
+    ]
+  },
+  "final_gate": {
+    "status": "blocked_no_llm_keys",
+    "reason": "ANTHROPIC_API_KEY not configured in this environment; final gate needs live Sonnet 5 runs (N=3 uncached) and an Opus 5 judge.",
+    "required": [
+      "ANTHROPIC_API_KEY",
+      "GITHUB_TOKEN (recommended for rate limits)"
+    ],
+    "command": "python evals/harness/final_gate.py"
+  },
+  "pairwise": {
+    "status": "blocked_no_llm_keys"
+  },
+  "notes": [
+    "score is reserved for LLM-backed critic verdicts over real model output; proxy_score is offline plumbing evidence only.",
+    "Wave 1 exit criteria met except real model numbers: blocked on ANTHROPIC_API_KEY in this environment.",
+    "Waves 2-4 code landed (pipeline stages + isolation, ingestion cross-check, validation, prompts, delivery, frontend, outcomes); their quality remains unscored until a live run.",
+    "To unblock: set ANTHROPIC_API_KEY (+ GITHUB_TOKEN) and run `python evals/harness/run.py --label live-r1`, then `python evals/harness/critic.py --module <m> --round 1 --label live-r1`, then `python evals/harness/final_gate.py`.",
+    "loop ran in offline stub mode: no provider API key in this environment, so module scores are smoke-only and cannot pass the >=8.5 critic gate honestly.",
+    "prompts: mandated content fixes landed (untrusted-content clause, forced 70-range finding removed, `info` severity removed, evidence_tool_calls wording aligned with schema). reviewer_system.md is ~4.7k tokens (tiktoken estimate); trimming toward the 2k rule is deferred because every prompt change must show a harness delta, which needs a live run.",
+    "agent-core: the blind challenger now sees the diff + tool trace (diff-aware verifier) and challenger/tie-break/editor all degrade to the validated draft; whether each stage earns its cost is unmeasured until live runs (max_mode stays opt-in via .codereview.yml).",
+    "loop: one offline iteration executed end to end (harness -> critic -> STATUS). The driver stops after one stub iteration on purpose: repeated rounds without model output would be fake rounds."
+  ],
+  "updated_at": "2026-09-03T01:18:56.589478+00:00",
+  "loop_history": [
+    {
+      "iteration": 1,
+      "module": "evals",
+      "round": 2,
+      "harness_rc": 0,
+      "critic_rc": 0,
+      "score": null,
+      "status": "smoke_only_blocked_no_llm_keys",
+      "open_issues": [
+        "golden misses (fn)=1"
+      ]
+    }
+  ],
+  "loop": {
+    "iteration": 1,
+    "module": "evals",
+    "round": 2,
+    "live": false
+  }
+}

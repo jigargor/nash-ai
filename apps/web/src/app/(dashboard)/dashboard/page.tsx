@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { OutcomeScorecard } from "@/components/dashboard/outcome-scorecard";
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
 import { useUsageSummary } from "@/hooks/use-usage-summary";
@@ -85,6 +86,8 @@ export default function DashboardHomePage() {
           <p className="metric-value">{capLabel}</p>
         </article>
       </div>
+
+      <OutcomeScorecard installationId={installationId} />
 
       <Panel elevated>
         <h1 style={{ marginTop: 0, marginBottom: "0.4rem", fontFamily: "var(--font-instrument-serif)" }}>

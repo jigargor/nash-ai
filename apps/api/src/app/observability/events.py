@@ -6,11 +6,37 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 TerminalStatus = Literal[
     "success", "skipped", "failed", "canceled", "partial", "rate_limited", "budget_exhausted"
 ]
+
+CANONICAL_EVENT_NAMES: dict[str, str] = {
+    "review_start": "review.started",
+    "review_end": "review.finished",
+    "stage_start": "stage.started",
+    "stage_end": "stage.finished",
+    "generation": "llm.generation",
+    "tool_call": "tool.called",
+    "validation": "validation.rejected",
+    "context_build": "stage.finished",
+    "error": "review.failed",
+    "finding_dropped": "finding.dropped",
+    "finding_generated": "finding.generated",
+    "finding_repaired": "finding.repaired",
+    "provider_fallback": "provider.fallback",
+    "llm_cache_hit": "llm.cache_hit",
+    "review_posted": "review.posted",
+    "delivery_rejected": "delivery.rejected",
+    "budget_exceeded": "budget.exceeded",
+    "suggestion_accepted": "suggestion.accepted",
+    "suggestion_edited": "suggestion.edited",
+    "suggestion_dismissed": "suggestion.dismissed",
+    "finding_resolved": "finding.resolved",
+    "finding_ignored": "finding.ignored",
+    "outcome": "finding.resolved",
+}
 
 
 def _now() -> datetime:
@@ -36,6 +62,11 @@ class EventBase(BaseModel):
     model: str = ""
     prompt_version: str = ""
     ts: datetime = Field(default_factory=_now)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def canonical_name(self) -> str:
+        return CANONICAL_EVENT_NAMES.get(self.event_type, self.event_type)
 
 
 class LLMUsage(BaseModel):
@@ -122,3 +153,33 @@ class ErrorEvent(EventBase):
     error_type: str
     message: str
     recoverable: bool = True
+
+
+class FindingDroppedEvent(EventBase):
+    event_type: str = "finding_dropped"
+    reason: str
+    detail: str = ""
+    file_path: str = ""
+    line_start: int = 0
+    finding_id: str | None = None
+
+
+class OutcomeEvent(EventBase):
+    event_type: str = "outcome"
+    outcome: str
+    canonical_outcome: str = ""
+    finding_index: int = 0
+    github_comment_id: int | None = None
+
+
+class DeliveryRejectedEvent(EventBase):
+    event_type: str = "delivery_rejected"
+    file_path: str = ""
+    line_start: int = 0
+    error_class: str = ""
+
+
+class BudgetExceededEvent(EventBase):
+    event_type: str = "budget_exceeded"
+    remaining_usd: float = 0.0
+    projected_usd: float = 0.0

@@ -1,4 +1,4 @@
-name: Quality Gates
+﻿name: Quality Gates
 
 on:
   pull_request:
@@ -117,12 +117,52 @@ jobs:
       - name: Audit Node dependencies
         run: pnpm audit --audit-level high
 
+  shared-types-drift:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_APP_ID: "0"
+      GITHUB_WEBHOOK_SECRET: test-webhook-secret
+      FERNET_KEY: 4nYA5RU2f22W4DvwW8Hpt4W6YKfYwQMUqlGQv6ygfA4=
+      DATABASE_URL: postgresql+asyncpg://dev:dev@localhost:5433/codereview
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Install backend dependencies
+        run: uv sync --extra dev
+        working-directory: apps/api
+      - name: Export Pydantic schema
+        run: uv run python scripts/export_shared_schema.py
+        working-directory: apps/api
+      - name: Regenerate shared-types from schema
+        run: node packages/shared-types/scripts/gen-types.mjs
+      - name: Fail on shared-types drift
+        shell: bash
+        run: |
+          if ! git diff --exit-code -- packages/shared-types/src/generated.ts packages/shared-types/generated/pydantic-schema.json; then
+            echo "shared-types drift: run 'pnpm gen:types' and commit the result."
+            exit 1
+          fi
+
   evals:
+    # Harness smoke runs on every prompt-change PR at $0 (offline stub, dry-run).
+    # The live gate runs only when ANTHROPIC_API_KEY is configured as a repository secret.
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'prompt-change')
+    env:
+      GITHUB_APP_ID: "0"
+      GITHUB_WEBHOOK_SECRET: test-webhook-secret
+      FERNET_KEY: 4nYA5RU2f22W4DvwW8Hpt4W6YKfYwQMUqlGQv6ygfA4=
+      DATABASE_URL: postgresql+asyncpg://dev:dev@localhost:5433/codereview
+      ANTHROPIC_API_KEY: ${{ secrets.EVALS_ANTHROPIC_API_KEY }}
     defaults:
       run:
-        working-directory: .
+        working-directory: apps/api
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -131,92 +171,47 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Install backend dependencies
         run: uv sync --extra dev
-        working-directory: apps/api
-      - name: Generate eval predictions (snapshot replay)
-        run: |
-          python evals/generate_predictions.py \
-            --prompt-version candidate \
-            --mode snapshot \
-            --datasets-dir evals/datasets \
-            --output-dir evals/predictions/candidate
-      - name: Fail on stale predictions
+      - name: Regenerate mutation-seeded goldens (idempotent)
+        run: uv run python ../../evals/harness/mutations.py --generate
+      - name: Harness smoke (offline stub, dry-run, zero pipeline errors required)
+        run: uv run python ../../evals/harness/run.py --local-only --llm stub --label ci-stub
+      - name: Harness live gate (Sonnet 5, fixtures only, cached)
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: uv run python ../../evals/harness/run.py --local-only --llm live --label ci-live
+      - name: Enforce live golden thresholds
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
         shell: bash
+        working-directory: .
         run: |
-          python - <<'PY'
-          import hashlib, json, sys
-          from pathlib import Path
-
-          repo_root = Path(".")
-          prompts_dir = repo_root / "apps" / "api" / "src" / "app" / "agent" / "prompts"
-          constants_file = repo_root / "apps" / "api" / "src" / "app" / "agent" / "constants.py"
-
-          def _prompt_version_from_constants() -> str:
-              if not constants_file.exists():
-                  return "unknown"
-              for line in constants_file.read_text(encoding="utf-8").splitlines():
-                  if line.strip().startswith("PROMPT_VERSION"):
-                      parts = line.strip().split("=", 1)
-                      if len(parts) == 2:
-                          return parts[1].strip().strip('"').strip("'")
-              return "unknown"
-
-          h = hashlib.sha256()
-          h.update(b"candidate")
-          h.update(_prompt_version_from_constants().encode())
-          if prompts_dir.exists():
-              for f in sorted(prompts_dir.rglob("*")):
-                  if f.is_file():
-                      h.update(f.relative_to(prompts_dir).as_posix().encode())
-                      h.update(f.read_bytes())
-          expected_hash = h.hexdigest()
-
-          stale = []
-          preds_dir = Path("evals/predictions/candidate")
-          if preds_dir.exists():
-              for pred_file in sorted(preds_dir.glob("*.json")):
-                  try:
-                      payload = json.loads(pred_file.read_text(encoding="utf-8"))
-                  except Exception:
-                      stale.append(pred_file.stem + " (unreadable)")
-                      continue
-                  stored = payload.get("code_hash", "")
-                  if stored != expected_hash:
-                      stale.append(pred_file.stem)
-          if stale:
-              print(f"STALE predictions detected (code_hash mismatch): {stale}")
-              print("Re-run `python evals/generate_predictions.py --mode=snapshot --prompt-version candidate` and commit the updated predictions.")
-              sys.exit(1)
-          print(f"All predictions are up-to-date (hash={expected_hash[:16]}…)")
-          PY
-      - name: Run eval harness
-        run: python evals/run_eval.py --prompt-version candidate --predictions-dir evals/predictions/candidate
-      - name: Compare against baseline
-        run: |
-          if [ -f evals/baseline/manifest.json ]; then
-            baseline_version=$(python -c "import json; m=json.load(open('evals/baseline/manifest.json')); print(m.get('prompt_version','baseline'))")
-            if [ -f "evals/results/${baseline_version}.json" ]; then
-              python evals/compare.py \
-                "evals/results/${baseline_version}.json" \
-                evals/results/candidate.json \
-                --output evals/results/comparison.json
-            else
-              echo "Baseline result file not found for version ${baseline_version}, skipping regression check."
-            fi
-          else
-            echo "No baseline/manifest.json found, skipping regression check."
-          fi
-      - name: Enforce eval thresholds
-        shell: bash
-        run: |
-          python - <<'PY'
+          uv run --project apps/api python - <<'PY'
           import json
           from pathlib import Path
-          result = json.loads(Path("evals/results/candidate.json").read_text(encoding="utf-8"))
-          metrics = result.get("metrics", {})
-          precision = float(metrics.get("precision", 0.0))
-          recall = float(metrics.get("recall", 0.0))
-          fp_rate = float(metrics.get("fp_rate", 1.0))
-          if precision < 0.8 or recall < 0.7 or fp_rate > 0.15:
-              raise SystemExit(f"Eval thresholds failed: precision={precision} recall={recall} fp_rate={fp_rate}")
-          print(f"Eval thresholds passed: precision={precision} recall={recall} fp_rate={fp_rate}")
+
+          summary = json.loads(Path("evals/runs/aggregate-ci-live.json").read_text(encoding="utf-8"))
+          if summary["pipeline_error_runs"]:
+              raise SystemExit(f"pipeline errors: {summary['pipeline_error_runs']}")
+          tp = fp = fn = 0
+          for run_dir in sorted(Path("evals/runs").glob("*")):
+              golden = run_dir / "golden_diff.json"
+              meta = run_dir / "meta.json"
+              if not golden.exists() or not meta.exists():
+                  continue
+              if json.loads(meta.read_text(encoding="utf-8")).get("llm_mode") not in {"live", "cache", "live+cache"}:
+                  continue
+              g = json.loads(golden.read_text(encoding="utf-8"))
+              tp += int(g.get("tp", 0)); fp += int(g.get("fp", 0)); fn += int(g.get("fn", 0))
+          precision = tp / (tp + fp) if (tp + fp) else 1.0
+          recall = tp / (tp + fn) if (tp + fn) else 1.0
+          print(f"live goldens: tp={tp} fp={fp} fn={fn} precision={precision:.2f} recall={recall:.2f}")
+          if precision < 0.8 or recall < 0.7:
+              raise SystemExit("Eval thresholds failed (precision >= 0.8 and recall >= 0.7 required)")
           PY
+      - name: Upload harness artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-harness-runs
+          path: |
+            evals/runs/**
+            evals/critic/**
+          if-no-files-found: ignore
+

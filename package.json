@@ -4,7 +4,9 @@
   "packageManager": "pnpm@10.33.2",
   "scripts": {
     "lint:web": "pnpm --filter web lint",
-    "typecheck:web": "pnpm --filter web typecheck"
+    "typecheck:web": "pnpm --filter web typecheck",
+    "gen:types": "cd apps/api && uv run python scripts/export_shared_schema.py && cd ../.. && node packages/shared-types/scripts/gen-types.mjs",
+    "check:types-drift": "node packages/shared-types/scripts/gen-types.mjs && git diff --exit-code -- packages/shared-types/src/generated.ts"
   },
   "pnpm": {
     "overrides": {

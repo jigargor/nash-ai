@@ -73,7 +73,19 @@ from app.agent.schema import (
     ReviewResult,
 )
 from app.agent.validator import FindingValidator
-from app.agent.vendor_detect import auto_tag_vendor_claims
+from app.agent.policy import (  # noqa: F401 — re-exported for tests and legacy callers
+    apply_confidence_threshold as _apply_confidence_threshold,
+    apply_policy_filters as _apply_policy_filters,
+    cross_check_fact_ids,
+    cross_check_tool_evidence,
+)
+from app.agent.repair import (  # noqa: F401 — re-exported for tests and legacy callers
+    _find_normalized_line,
+    _is_commentable_range,
+    repair_finding as _repair_finding,
+    repair_findings_from_files as _repair_findings_from_files,
+)
+from app.agent.tool_trace import extract_tool_call_history, extract_tool_usage_by_file
 from app.config import settings
 from app.crypto import decrypt_secret
 from app.db.models import Review, ReviewModelAudit, User, UserProviderKey
@@ -1085,6 +1097,16 @@ async def run_review(
                     rate_limit_reset_hint=exc.rate_limit_reset_hint,
                 )
                 continue
+            except Exception as exc:
+                last_primary_error = exc
+                logger.warning(
+                    "Primary provider error fallback review_id=%s provider=%s model=%s err=%s",
+                    review_id,
+                    attempt.provider,
+                    attempt.model,
+                    exc,
+                )
+                continue
         else:
             if primary_span is not None:
                 observer.finish_stage(primary_span, status="rate_limited")
@@ -1127,7 +1149,8 @@ async def run_review(
             commentable_lines=commentable_lines,
             window=REPAIR_SEARCH_WINDOW,
         )
-        result, validator_dropped, generated = _validate_result(result, validator)
+        result.findings = attach_anchor_metadata(result.findings, files_in_diff)
+        result, validator_dropped, generated = _validate_result(result, validator, context)
         if primary_span is not None:
             observer.record_validation(
                 primary_span,
@@ -1183,7 +1206,7 @@ async def run_review(
                     commentable_lines=commentable_lines,
                     window=REPAIR_SEARCH_WINDOW,
                 )
-                repaired_validated, repaired_dropped, _ = _validate_result(repaired, validator)
+                repaired_validated, repaired_dropped, _ = _validate_result(repaired, validator, context)
                 retry_recovered = len(repaired_validated.findings)
                 recovery_ratio = retry_recovered / retry_attempted if retry_attempted else 0.0
                 if recovery_ratio >= MIN_RECOVERY_RATIO_FOR_SUCCESS:
@@ -1218,7 +1241,7 @@ async def run_review(
                     commentable_lines=commentable_lines,
                     window=REPAIR_SEARCH_WINDOW,
                 )
-                result, validator_dropped, generated = _validate_result(retried, validator)
+                result, validator_dropped, generated = _validate_result(retried, validator, context)
                 retry_recovered = len(result.findings)
                 mismatch_subtypes = _summarize_target_line_mismatch_subtypes(
                     validator_dropped,
@@ -1246,30 +1269,40 @@ async def run_review(
             and fast_path_decision.decision != "light_review"
             and draft_result.findings
         ):
+            tool_trace_text = json.dumps(tool_call_history[:40], default=str)
+            challenger_prompt = _build_challenger_prompt(
+                draft_result,
+                final_summary_hint=result.summary,
+                diff_excerpt=diff_text,
+                tool_trace=tool_trace_text,
+            )
             challenger_resolution = _resolve_runtime_model(
                 context,
                 review_config,
                 "challenger",
-                context_tokens=count_tokens(system_prompt)
-                + count_tokens(
-                    _build_challenger_prompt(draft_result, final_summary_hint=result.summary)
-                ),
+                context_tokens=count_tokens(system_prompt) + count_tokens(challenger_prompt),
                 previous_provider=primary_resolution.provider,
-            )
-            challenger_prompt = _build_challenger_prompt(
-                draft_result, final_summary_hint=result.summary
             )
             challenger_messages = [{"role": "user", "content": challenger_prompt}]
             challenger_stage_started_at = monotonic()
             challenger_snapshot = _token_snapshot(context)
-            challenger_result = await finalize_review(
-                system_prompt,
-                challenger_messages,
-                context,
-                model_name=challenger_resolution.model,
-                provider=challenger_resolution.provider,
-                allow_retry=False,
-            )
+            try:
+                challenger_result = await finalize_review(
+                    system_prompt,
+                    challenger_messages,
+                    context,
+                    model_name=challenger_resolution.model,
+                    provider=challenger_resolution.provider,
+                    allow_retry=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Challenger degraded; posting validated draft review_id=%s err=%s",
+                    review_id,
+                    exc,
+                )
+                challenger_result = draft_result
+                debate_conflict_score = 0
             debate_conflict_score = _calculate_conflict_score(
                 draft_result.findings, challenger_result.findings
             )
@@ -1298,38 +1331,53 @@ async def run_review(
                 )
             )
             if should_tie_break:
+                tie_break_prompt = _build_tie_break_prompt(
+                    draft_result, challenger_result, diff_excerpt=diff_text
+                )
                 tie_break_resolution = _resolve_runtime_model(
                     context,
                     review_config,
                     "tie_break",
-                    context_tokens=count_tokens(system_prompt)
-                    + count_tokens(_build_tie_break_prompt(draft_result, challenger_result)),
+                    context_tokens=count_tokens(system_prompt) + count_tokens(tie_break_prompt),
                     previous_provider=challenger_resolution.provider,
                 )
-                tie_break_prompt = _build_tie_break_prompt(draft_result, challenger_result)
                 tie_break_stage_started_at = monotonic()
                 tie_break_snapshot = _token_snapshot(context)
-                tie_break_result = await finalize_review(
-                    system_prompt,
-                    [{"role": "user", "content": tie_break_prompt}],
-                    context,
-                    model_name=tie_break_resolution.model,
-                    provider=tie_break_resolution.provider,
-                    allow_retry=False,
-                )
+                try:
+                    tie_break_result = await finalize_review(
+                        system_prompt,
+                        [{"role": "user", "content": tie_break_prompt}],
+                        context,
+                        model_name=tie_break_resolution.model,
+                        provider=tie_break_resolution.provider,
+                        allow_retry=False,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Tie-break degraded; using primary+challenger merge review_id=%s err=%s",
+                        review_id,
+                        exc,
+                    )
+                    tie_break_result = None
                 await _record_model_audit(
                     context=context,
                     stage="tie_break",
                     provider=tie_break_resolution.provider,
                     model=tie_break_resolution.model,
                     token_before=tie_break_snapshot,
-                    findings_count=len(tie_break_result.findings),
+                    findings_count=(
+                        len(tie_break_result.findings) if tie_break_result is not None else 0
+                    ),
                     conflict_score=debate_conflict_score,
-                    decision="tie_break",
+                    decision="tie_break" if tie_break_result is not None else "tie_break_degraded",
                     model_resolution=tie_break_resolution,
                     stage_started_at=tie_break_stage_started_at,
                     extra_metadata={
-                        "conflict_resolution": "tie_break_accepted",
+                        "conflict_resolution": (
+                            "tie_break_accepted"
+                            if tie_break_result is not None
+                            else "tie_break_failed_using_merge"
+                        ),
                     },
                 )
             draft_result = _merge_debate_results(
@@ -1389,9 +1437,26 @@ async def run_review(
                         rate_limit_reset_hint=exc.rate_limit_reset_hint,
                     )
                     continue
+                except Exception as exc:
+                    last_editor_error = exc
+                    logger.warning(
+                        "Editor provider error fallback review_id=%s provider=%s model=%s err=%s",
+                        review_id,
+                        attempt.provider,
+                        attempt.model,
+                        exc,
+                    )
+                    continue
             else:
-                raise RuntimeError(
-                    f"All editor provider attempts failed due to quota/rate-limit: {last_editor_error}"
+                logger.warning(
+                    "All editor attempts failed; posting validated draft review_id=%s err=%s",
+                    review_id,
+                    last_editor_error,
+                )
+                edited_result = EditedReview(
+                    findings=list(draft_result.findings),
+                    summary=draft_result.summary,
+                    decisions=[],
                 )
             _editor_actions = Counter(d.action for d in edited_result.decisions)
             await _record_model_audit(
@@ -1510,7 +1575,31 @@ async def run_review(
             context_telemetry=context_bundle.telemetry,
         )
 
-        review_post_response = await post_review(gh, owner, repo, pr_number, head_sha, final_result)
+        try:
+            existing_bot_comments: list[dict[str, Any]] | None = None
+            try:
+                existing_bot_comments = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+            except Exception as exc:
+                logger.info("synchronize: could not list existing bot comments: %s", exc)
+            review_post_response = await post_review(
+                gh,
+                owner,
+                repo,
+                pr_number,
+                head_sha,
+                final_result,
+                request_changes_policy=review_config.request_changes_policy,
+                existing_comments=existing_bot_comments,
+                review_id=review_id,
+                installation_id=installation_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Delivery degraded; persisting findings without GitHub post review_id=%s err=%s",
+                review_id,
+                exc,
+            )
+            review_post_response = {}
         context["github_review_node_id"] = extract_review_node_id(review_post_response)
         comment_ids = extract_review_comment_ids(review_post_response)
         await seed_pending_finding_outcomes(
@@ -2264,10 +2353,12 @@ def _apply_review_config_filters(result: ReviewResult, review_config: ReviewConf
 def _validate_result(
     result: ReviewResult,
     validator: FindingValidator,
+    context: dict[str, Any] | None = None,
 ) -> tuple[ReviewResult, list[tuple[Finding, DropReason, str]], int]:
     valid_findings: list[Finding] = []
     dropped: list[tuple[Finding, DropReason, str]] = []
     generated = len(result.findings)
+    observer = get_observer()
     for finding in result.findings:
         is_valid, reason, detail = validator.validate(finding)
         if is_valid:
@@ -2277,53 +2368,20 @@ def _validate_result(
         dropped_detail = detail or "Unknown validation error"
         dropped.append((finding, dropped_reason, dropped_detail))
         logger.warning("Dropped finding: %s — %s", dropped_reason, dropped_detail)
+        if context is not None:
+            span = context.get("_observation_stage_span")
+            observer.record_finding_dropped(
+                span if hasattr(span, "review_id") else None,
+                review_id=int(context.get("review_id") or 0),
+                installation_id=int(context.get("installation_id") or 0),
+                reason=str(dropped_reason),
+                detail=dropped_detail,
+                file_path=finding.file_path,
+                line_start=finding.line_start,
+                finding_id=finding.finding_id,
+            )
     result.findings = valid_findings
     return result, dropped, generated
-
-
-def _apply_confidence_threshold(
-    result: ReviewResult, threshold: int
-) -> tuple[ReviewResult, list[dict[str, object]]]:
-    kept_findings: list[Finding] = []
-    dropped: list[dict[str, object]] = []
-    for finding in result.findings:
-        if finding.confidence >= threshold:
-            kept_findings.append(finding)
-            continue
-        dropped.append(
-            {
-                "file_path": finding.file_path,
-                "line_start": finding.line_start,
-                "line_end": finding.line_end or finding.line_start,
-                "confidence": finding.confidence,
-                "threshold": threshold,
-                "message_excerpt": finding.message[:120],
-            }
-        )
-    result.findings = kept_findings
-    return result, dropped
-
-
-def _apply_policy_filters(
-    result: ReviewResult,
-    *,
-    threshold: int,
-    tool_call_history: list[dict[str, object]],
-    known_fact_ids: set[str],
-) -> tuple[ReviewResult, list[dict[str, object]], list[tuple[Finding, str]], Counter[str]]:
-    result, confidence_dropped = _apply_confidence_threshold(result, threshold)
-    result.findings, auto_tag_vendor_rejected = auto_tag_vendor_claims(result.findings)
-    result.findings, evidence_tool_rejected = cross_check_tool_evidence(
-        result.findings, tool_call_history
-    )
-    result.findings, evidence_fact_rejected = cross_check_fact_ids(result.findings, known_fact_ids)
-    evidence_rejections = [
-        *auto_tag_vendor_rejected,
-        *evidence_tool_rejected,
-        *evidence_fact_rejected,
-    ]
-    evidence_rejection_reasons = Counter(reason for _, reason in evidence_rejections)
-    return result, confidence_dropped, evidence_rejections, evidence_rejection_reasons
 
 
 def _validation_feedback(dropped: list[tuple[Finding, DropReason, str]]) -> str:
@@ -2586,25 +2644,39 @@ async def _record_model_audit(
         await session.commit()
 
 
-def _build_challenger_prompt(primary: ReviewResult, *, final_summary_hint: str) -> str:
+def _build_challenger_prompt(
+    primary: ReviewResult,
+    *,
+    final_summary_hint: str,
+    diff_excerpt: str = "",
+    tool_trace: str = "",
+) -> str:
     payload = primary.model_dump(mode="json")
     return (
-        "You are a challenger reviewer. Verify whether each finding is valid and significant.\n"
-        "Drop weak findings, keep strong findings, and optionally refine wording.\n"
+        "You are a diff-aware verifier. Check whether each finding is valid and significant.\n"
+        "You can see the pull request diff and tool trace. Drop weak findings, keep strong findings.\n"
         "Return your full result with the submit_review tool.\n\n"
         f"Original summary hint: {final_summary_hint}\n\n"
+        f"Untrusted diff excerpt:\n<untrusted_diff>\n{diff_excerpt[:40_000]}\n</untrusted_diff>\n\n"
+        f"Tool trace:\n{tool_trace[:8_000]}\n\n"
         f"Primary findings JSON:\n{payload}"
     )
 
 
-def _build_tie_break_prompt(primary: ReviewResult, challenger: ReviewResult) -> str:
+def _build_tie_break_prompt(
+    primary: ReviewResult,
+    challenger: ReviewResult,
+    *,
+    diff_excerpt: str = "",
+) -> str:
     primary_json = primary.model_dump(mode="json")
     challenger_json = challenger.model_dump(mode="json")
     return (
         "You are a tie-break adjudicator.\n"
-        "Compare primary and challenger findings and return the best final set.\n"
+        "Compare primary and challenger findings against the diff and return the best final set.\n"
         "Prioritize correctness and evidence quality over quantity.\n"
         "Return your result with submit_review.\n\n"
+        f"Untrusted diff excerpt:\n<untrusted_diff>\n{diff_excerpt[:40_000]}\n</untrusted_diff>\n\n"
         f"Primary:\n{primary_json}\n\n"
         f"Challenger:\n{challenger_json}"
     )
@@ -2662,118 +2734,6 @@ def _merge_debate_results(
     return ReviewResult(findings=merged, summary=summary)
 
 
-def extract_tool_usage_by_file(messages: list[dict[str, object]]) -> set[str]:
-    touched_paths: set[str] = set()
-    for message in messages:
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            block_type: str | None = None
-            tool_input: dict[str, object] | None = None
-            if isinstance(block, dict):
-                block_type = str(block.get("type", ""))
-                maybe_input = block.get("input")
-                if isinstance(maybe_input, dict):
-                    tool_input = maybe_input
-            else:
-                block_type = str(getattr(block, "type", ""))
-                maybe_input = getattr(block, "input", None)
-                if isinstance(maybe_input, dict):
-                    tool_input = maybe_input
-            if block_type != "tool_use" or tool_input is None:
-                continue
-            candidate = tool_input.get("path") or tool_input.get("file_path")
-            if isinstance(candidate, str) and candidate.strip():
-                touched_paths.add(candidate.strip())
-    return touched_paths
-
-
-def extract_tool_call_history(messages: list[dict[str, object]]) -> list[dict[str, object]]:
-    history: list[dict[str, object]] = []
-    for message in messages:
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            block_type: str | None = None
-            block_name: str | None = None
-            tool_input: dict[str, object] | None = None
-            if isinstance(block, dict):
-                block_type = str(block.get("type", ""))
-                block_name = str(block.get("name", "")) if block.get("name") is not None else None
-                maybe_input = block.get("input")
-                if isinstance(maybe_input, dict):
-                    tool_input = maybe_input
-            else:
-                block_type = str(getattr(block, "type", ""))
-                name_value = getattr(block, "name", None)
-                block_name = str(name_value) if isinstance(name_value, str) else None
-                maybe_input = getattr(block, "input", None)
-                if isinstance(maybe_input, dict):
-                    tool_input = maybe_input
-            if block_type != "tool_use" or not block_name or tool_input is None:
-                continue
-            history.append({"name": block_name, "input": tool_input})
-    return history
-
-
-def cross_check_tool_evidence(
-    findings: list[Finding],
-    tool_call_history: list[dict[str, object]],
-) -> tuple[list[Finding], list[tuple[Finding, str]]]:
-    actual_tool_names = {
-        str(call.get("name")) for call in tool_call_history if isinstance(call.get("name"), str)
-    }
-    actual_tool_signatures = {
-        f"{call.get('name')}:{_stable_tool_input_repr(call.get('input'))}"
-        for call in tool_call_history
-        if isinstance(call.get("name"), str)
-    }
-
-    accepted: list[Finding] = []
-    rejected: list[tuple[Finding, str]] = []
-    for finding in findings:
-        if finding.evidence != "tool_verified":
-            accepted.append(finding)
-            continue
-        claimed_calls = set(finding.evidence_tool_calls or [])
-        if not claimed_calls:
-            rejected.append((finding, "missing claimed tool calls"))
-            continue
-        missing = {
-            claim
-            for claim in claimed_calls
-            if claim not in actual_tool_names and claim not in actual_tool_signatures
-        }
-        if missing:
-            rejected.append((finding, f"claimed tool calls not in history: {sorted(missing)}"))
-            continue
-        accepted.append(finding)
-    return accepted, rejected
-
-
-def cross_check_fact_ids(
-    findings: list[Finding],
-    known_fact_ids: set[str],
-) -> tuple[list[Finding], list[tuple[Finding, str]]]:
-    accepted: list[Finding] = []
-    rejected: list[tuple[Finding, str]] = []
-    for finding in findings:
-        if finding.evidence == "verified_fact" and finding.evidence_fact_id not in known_fact_ids:
-            rejected.append((finding, f"unknown fact id: {finding.evidence_fact_id}"))
-            continue
-        accepted.append(finding)
-    return accepted, rejected
-
-
-def _stable_tool_input_repr(raw_input: object) -> str:
-    if not isinstance(raw_input, dict):
-        return "{}"
-    parts = [f"{key}={raw_input[key]}" for key in sorted(raw_input.keys())]
-    return ",".join(parts)
-
-
 def _confidence_bucket(value: int) -> str:
     if value >= 95:
         return "95-100"
@@ -2795,86 +2755,6 @@ def _warn_if_carriage_returns(fetched_files: dict[str, str]) -> None:
         )
 
 
-def _repair_findings_from_files(
-    findings: list[Finding],
-    fetched_files: dict[str, str],
-    *,
-    commentable_lines: set[tuple[str, int]] | None,
-    window: int,
-) -> list[Finding]:
-    repaired: list[Finding] = []
-    for finding in findings:
-        repaired.append(
-            _repair_finding(
-                finding,
-                fetched_files,
-                commentable_lines=commentable_lines,
-                window=window,
-            )
-        )
-    return repaired
-
-
-def _repair_finding(
-    finding: Finding,
-    fetched_files: dict[str, str],
-    *,
-    commentable_lines: set[tuple[str, int]] | None,
-    window: int,
-) -> Finding:
-    file_content = fetched_files.get(finding.file_path)
-    if file_content is None:
-        return finding
-
-    lines = file_content.split("\n")
-    start_line = finding.line_start
-    end_line = finding.line_end or finding.line_start
-    if not (1 <= start_line <= len(lines)):
-        return finding
-
-    actual = lines[start_line - 1]
-    if normalize_for_match(actual) == normalize_for_match(finding.target_line_content):
-        finding.target_line_content = actual
-        return finding
-
-    line_span = max(0, end_line - start_line)
-    search_start = max(1, start_line - window)
-    search_end = min(len(lines), end_line + window)
-    matched_line = _find_normalized_line(
-        lines, finding.target_line_content, search_start, search_end
-    )
-    if matched_line is None:
-        return finding
-
-    new_end_line = min(len(lines), matched_line + line_span)
-    if commentable_lines is not None and not _is_commentable_range(
-        finding.file_path, matched_line, new_end_line, commentable_lines
-    ):
-        return finding
-
-    finding.line_start = matched_line
-    finding.line_end = new_end_line
-    finding.target_line_content = lines[matched_line - 1]
-    return finding
-
-
-def _find_normalized_line(
-    lines: list[str], target_line_content: str, start_line: int, end_line: int
-) -> int | None:
-    normalized_target = normalize_for_match(target_line_content)
-    for line_no in range(start_line, end_line + 1):
-        if normalize_for_match(lines[line_no - 1]) == normalized_target:
-            return line_no
-    return None
-
-
-def _is_commentable_range(
-    path: str,
-    start_line: int,
-    end_line: int,
-    commentable_lines: set[tuple[str, int]],
-) -> bool:
-    return all((path, line_no) in commentable_lines for line_no in range(start_line, end_line + 1))
 
 
 def _summarize_target_line_mismatch_subtypes(

@@ -57,9 +57,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
-    anthropic_default_model: str = "claude-sonnet-4-5"
-    openai_default_model: str = "gpt-5.5"
-    gemini_default_model: str = "gemini-2.5-pro"
+    anthropic_default_model: str = "claude-sonnet-5"
+    openai_default_model: str = "gpt-5.6-terra"
+    gemini_default_model: str = "gemini-3.1-pro-preview"
     environment: str = "development"
     log_webhook_payloads: bool = False
     admin_retry_api_key: str | None = None

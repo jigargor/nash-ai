@@ -268,9 +268,10 @@ async def test_queue_pull_request_review_skips_when_rate_limited(
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_enqueues_when_skip_tag_in_title(
+async def test_queue_pull_request_review_skips_when_skip_tag_in_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """[skip-nash-review] is enforced: no job is enqueued and no review row is created."""
     redis = _FakeRedis()
     payload = _payload(title="chore: deps [skip-nash-review]")
 
@@ -285,8 +286,7 @@ async def test_queue_pull_request_review_enqueues_when_skip_tag_in_title(
 
     await queue_pull_request_review(redis, payload)
 
-    assert len(redis.calls) == 1
-    assert redis.calls[0][0] == "review_pr"
+    assert redis.calls == []
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, payload.installation.id)
         count = await session.scalar(
@@ -295,11 +295,11 @@ async def test_queue_pull_request_review_enqueues_when_skip_tag_in_title(
             .where(Review.pr_number == payload.pull_request.number)
             .where(Review.pr_head_sha == payload.pull_request.head.sha)
         )
-    assert count == 1
+    assert count == 0
 
 
 @pytest.mark.anyio
-async def test_queue_pull_request_review_enqueues_when_skip_tag_in_body(
+async def test_queue_pull_request_review_skips_when_skip_tag_in_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     redis = _FakeRedis()
@@ -315,8 +315,7 @@ async def test_queue_pull_request_review_enqueues_when_skip_tag_in_body(
     monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
 
     await queue_pull_request_review(redis, payload)
-    assert len(redis.calls) == 1
-    assert redis.calls[0][0] == "review_pr"
+    assert redis.calls == []
 
 
 @pytest.mark.anyio
@@ -357,8 +356,7 @@ async def test_queue_pull_request_review_skip_tag_case_insensitive(
     monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
 
     await queue_pull_request_review(redis, payload)
-    assert len(redis.calls) == 1
-    assert redis.calls[0][0] == "review_pr"
+    assert redis.calls == []
 
 
 @pytest.mark.anyio

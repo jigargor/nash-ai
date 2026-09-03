@@ -64,7 +64,8 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
     pathname.startsWith("/repos") ||
     pathname.startsWith("/reviews") ||
     pathname.startsWith("/code-tour") ||
-    pathname.startsWith("/settings");
+    pathname.startsWith("/settings") ||
+    pathname.startsWith("/models");
   if (!isDashboardRoute) return NextResponse.next();
 
   const token = request.cookies.get(AUTH_COOKIE_NAME)?.value;
@@ -84,5 +85,7 @@ export const config = {
     "/reviews/:path*",
     "/code-tour/:path*",
     "/settings/:path*",
+    "/models/:path*",
+    "/models",
   ],
 };

@@ -1,0 +1,12 @@
+diff --git a/web/src/components/card.tsx b/web/src/components/card.tsx
+--- a/web/src/components/card.tsx
++++ b/web/src/components/card.tsx
+@@ -10,7 +10,7 @@
+   return (
+     <section className="card">
+       <h3>{title}</h3>
+-      <p>{body}</p>
++      <p dangerouslySetInnerHTML={{ __html: body }} />
+       {children}
+     </section>
+   );

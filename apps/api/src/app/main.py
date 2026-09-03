@@ -35,9 +35,33 @@ from app.webhooks.router import router as webhook_router
 logger = logging.getLogger(__name__)
 
 
+async def _verify_model_catalog_at_startup() -> None:
+    """Fail loud on a broken catalog; live model-list drift is logged, never fatal."""
+    from app.llm.catalog.loader import load_baseline_catalog
+    from app.llm.catalog.verify import verify_catalog, verify_live_models
+
+    catalog = load_baseline_catalog()
+    static_errors = verify_catalog(catalog)
+    if static_errors:
+        message = "LLM catalog verification failed: " + "; ".join(static_errors)
+        if settings.environment.lower() == "production":
+            raise RuntimeError(message)
+        logger.error(message)
+    try:
+        live_errors, summaries = await asyncio.wait_for(verify_live_models(catalog), timeout=10.0)
+    except Exception as exc:  # network / SDK issues must not block startup
+        logger.warning("Live model-list verification skipped: %s", exc.__class__.__name__)
+        return
+    for summary in summaries:
+        logger.info("Model catalog: %s", summary)
+    for error in live_errors:
+        logger.error("Model catalog drift: %s", error)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_observability("api")
+    await _verify_model_catalog_at_startup()
     try:
         assert_r2_credentials_within_rotation_policy(settings)
     except RuntimeError:

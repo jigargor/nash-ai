@@ -1,0 +1,10 @@
+{
+  "repo": "nash-evals/mutations",
+  "pr_number": 1,
+  "head_sha": "0000000000000000000000000000000000000000",
+  "title": "chore(tools): use shell for formatter invocation",
+  "body": "Lets us pass through shell globs.",
+  "files": {
+    "app/tools/runner.py": "import subprocess\n\n\ndef run_formatter(path: str) -> int:\n    completed = subprocess.run(\"ruff format \" + path, shell=True, check=False)\n    return completed.returncode\n\n\ndef run_tests(path: str) -> int:\n    completed = subprocess.run([\"pytest\", path], check=False)\n    return completed.returncode\n"
+  }
+}

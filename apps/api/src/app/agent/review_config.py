@@ -18,7 +18,7 @@ class _GitHubFileReader(Protocol):
 
 DEFAULT_CONFIDENCE_THRESHOLD = 85
 DEFAULT_MODEL_PROVIDER: ModelProvider = "anthropic"
-DEFAULT_MODEL_NAME = "claude-sonnet-4-5"
+DEFAULT_MODEL_NAME = "claude-sonnet-5"
 DEFAULT_SEVERITY_THRESHOLD = "low"
 DEFAULT_MAX_FINDINGS_PER_PR = 50
 ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
@@ -30,9 +30,9 @@ ALLOWED_MODEL_PROVIDERS: set[ModelProvider] = load_baseline_catalog().provider_i
 class ReviewModelConfig:
     provider: ModelProvider = DEFAULT_MODEL_PROVIDER
     name: str = DEFAULT_MODEL_NAME
-    input_per_1m_usd: Decimal = Decimal("3.00")
-    output_per_1m_usd: Decimal = Decimal("15.00")
-    cached_input_per_1m_usd: Decimal | None = None
+    input_per_1m_usd: Decimal = Decimal("2.00")
+    output_per_1m_usd: Decimal = Decimal("10.00")
+    cached_input_per_1m_usd: Decimal | None = Decimal("0.20")
     explicit: bool = False
 
 
@@ -40,9 +40,9 @@ class ReviewModelConfig:
 class MaxModeConfig:
     enabled: bool = False
     challenger_provider: ModelProvider = "openai"
-    challenger_model: str = "gpt-5.5"
-    tie_break_provider: ModelProvider = "gemini"
-    tie_break_model: str = "gemini-2.5-pro"
+    challenger_model: str = "gpt-5.6-terra"
+    tie_break_provider: ModelProvider = "anthropic"
+    tie_break_model: str = "claude-opus-5"
     conflict_threshold: int = 35
     high_risk_severity: str = "high"
 
@@ -122,6 +122,10 @@ class ConsistencyProbeConfig:
     daily_token_ceiling: int = 500_000
 
 
+DEFAULT_REQUEST_CHANGES_POLICY = "critical_only"
+ALLOWED_REQUEST_CHANGES_POLICIES = {"critical_only", "high_or_above", "never", "always"}
+
+
 @dataclass
 class ReviewConfig:
     confidence_threshold: int = DEFAULT_CONFIDENCE_THRESHOLD
@@ -131,6 +135,7 @@ class ReviewConfig:
     review_drafts: bool = False
     max_findings_per_pr: int = DEFAULT_MAX_FINDINGS_PER_PR
     prompt_additions: str | None = None
+    request_changes_policy: str = DEFAULT_REQUEST_CHANGES_POLICY
     model: ReviewModelConfig = field(default_factory=ReviewModelConfig)
     max_mode: MaxModeConfig = field(default_factory=MaxModeConfig)
     budgets: ContextBudgets = field(default_factory=ContextBudgets)
@@ -178,6 +183,7 @@ async def load_review_config(
     fast_path = _parse_fast_path(parsed.get("fast_path"))
     adaptive_threshold = _parse_adaptive_threshold(parsed.get("adaptive_threshold"))
     consistency_probe = _parse_consistency_probe(parsed.get("consistency_probe"))
+    request_changes_policy = _parse_request_changes_policy(parsed.get("delivery"))
     return ReviewConfig(
         confidence_threshold=threshold,
         severity_threshold=severity_threshold,
@@ -186,6 +192,7 @@ async def load_review_config(
         review_drafts=review_drafts,
         max_findings_per_pr=max_findings_per_pr,
         prompt_additions=prompt_additions,
+        request_changes_policy=request_changes_policy,
         model=model_config,
         max_mode=max_mode,
         models=models,
@@ -196,6 +203,17 @@ async def load_review_config(
         adaptive_threshold=adaptive_threshold,
         consistency_probe=consistency_probe,
     )
+
+
+def _parse_request_changes_policy(raw_value: object) -> str:
+    if not isinstance(raw_value, dict):
+        return DEFAULT_REQUEST_CHANGES_POLICY
+    policy = raw_value.get("request_changes")
+    if isinstance(policy, bool):
+        return "always" if policy else "never"
+    if isinstance(policy, str) and policy.strip().lower() in ALLOWED_REQUEST_CHANGES_POLICIES:
+        return policy.strip().lower()
+    return DEFAULT_REQUEST_CHANGES_POLICY
 
 
 def _normalize_threshold(raw_value: object) -> int:
@@ -290,12 +308,12 @@ def _parse_max_mode(raw_value: object) -> MaxModeConfig:
     conflict_threshold = _normalize_percentage(raw_value.get("conflict_threshold"), default=35)
     high_risk_severity = _parse_severity_threshold(raw_value.get("high_risk_severity"))
     challenger = _parse_model_ref(
-        raw_value.get("challenger"), default_provider="openai", default_name="gpt-5.5"
+        raw_value.get("challenger"), default_provider="openai", default_name="gpt-5.6-terra"
     )
     tie_break = _parse_model_ref(
         raw_value.get("tie_break"),
-        default_provider="gemini",
-        default_name="gemini-2.5-pro",
+        default_provider="anthropic",
+        default_name="claude-opus-5",
     )
     return MaxModeConfig(
         enabled=enabled,
@@ -331,6 +349,17 @@ def _normalize_provider(
 
 
 def _default_model_name_for_provider(provider: ModelProvider) -> str:
+    from app.config import settings
+
+    configured_defaults = {
+        "anthropic": settings.anthropic_default_model,
+        "openai": settings.openai_default_model,
+        "gemini": settings.gemini_default_model,
+    }
+    configured = configured_defaults.get(provider)
+    if configured:
+        return configured
+
     catalog = load_baseline_catalog()
     candidates = [
         record

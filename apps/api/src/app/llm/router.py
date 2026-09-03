@@ -157,8 +157,12 @@ def resolve_model_for_role(
     if candidate is not None:
         return _resolution_from_record(role, candidate, explicit_pin=False, catalog=active_catalog)
 
-    default_model = getattr(getattr(review_config, "model", None), "name", "claude-sonnet-4-5")
     default_provider = getattr(getattr(review_config, "model", None), "provider", "anthropic")
+    default_model = getattr(
+        getattr(review_config, "model", None),
+        "name",
+        _settings_default_model(str(default_provider)),
+    )
     return _resolution_from_unknown_pin(
         role,
         str(default_provider),
@@ -297,6 +301,8 @@ def _select_best_candidate(
             continue
         if role_config.provider and record.provider != role_config.provider:
             continue
+        if record.tier != desired_tier:
+            continue
         if (
             role_config.require_provider_diversity
             and previous_provider
@@ -353,7 +359,10 @@ def _model_usable(
         and context_tokens > record.capabilities.max_context_tokens
     ):
         return False
-    if record.shutdown_at and record.shutdown_at <= datetime.now(timezone.utc):
+    shutdown_at = record.shutdown_at
+    if shutdown_at is not None and shutdown_at.tzinfo is None:
+        shutdown_at = shutdown_at.replace(tzinfo=timezone.utc)
+    if shutdown_at and shutdown_at <= datetime.now(timezone.utc):
         return False
     return True
 
@@ -382,6 +391,17 @@ def _configured_provider_ids() -> set[str]:
     if settings.gemini_api_key:
         configured.add("gemini")
     return configured
+
+
+def _settings_default_model(provider: str) -> str:
+    from app.config import settings
+
+    defaults = {
+        "anthropic": settings.anthropic_default_model,
+        "openai": settings.openai_default_model,
+        "gemini": settings.gemini_default_model,
+    }
+    return defaults.get(provider, settings.anthropic_default_model)
 
 
 def _resolution_from_record(

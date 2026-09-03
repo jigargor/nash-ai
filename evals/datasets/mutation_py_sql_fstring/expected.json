@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "message": "SQL constructed with f-string interpolates untrusted input.",
+      "file_path": "app/db/users.py",
+      "line_start": 5
+    }
+  ]
+}

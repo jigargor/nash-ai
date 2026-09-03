@@ -23,7 +23,7 @@ apps/
       agent/         # ReAct loop, tools, schemas
       queue/         # ARQ workers
       db/            # SQLAlchemy models, session, migrations
-  web/               # Next.js 15 + TypeScript frontend
+  web/               # Next.js 16 + TypeScript frontend
     src/
       app/           # App Router pages
       components/    # Reusable UI components

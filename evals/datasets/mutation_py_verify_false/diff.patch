@@ -1,0 +1,12 @@
+diff --git a/app/http/fetch.py b/app/http/fetch.py
+--- a/app/http/fetch.py
++++ b/app/http/fetch.py
+@@ -2,7 +2,7 @@
+ 
+ 
+ def fetch_status(url: str, timeout: float = 5.0) -> int:
+-    response = requests.get(url, timeout=timeout)
++    response = requests.get(url, timeout=timeout, verify=False)
+     return response.status_code
+ 
+ 

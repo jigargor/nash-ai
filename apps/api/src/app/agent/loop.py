@@ -2,7 +2,7 @@ from time import monotonic
 from typing import Any
 from hashlib import sha256
 
-from app.agent.constants import MAX_ITERATIONS
+from app.agent.constants import MAX_ITERATIONS, MAX_INPUT_TOKENS
 from app.agent.context_builder import count_tokens
 from app.agent.provider_clients import (
     anthropic_tools_to_openai_tools,
@@ -11,7 +11,7 @@ from app.agent.provider_clients import (
     parse_openai_tool_arguments,
 )
 from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
-from app.agent.tools import TOOLS, execute_tool
+from app.agent.tools import TOOLS, execute_tool, tool_result_succeeded
 from app.llm.errors import coerce_quota_error
 from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
 from app.observability import create_async_anthropic_client
@@ -87,6 +87,8 @@ async def _run_agent_anthropic(
     for _ in range(MAX_ITERATIONS):
         if _contains_empty_user_message(messages):
             break
+        if _should_stop_loop(context, started_at):
+            break
         request_started = monotonic()
         try:
             response = await client.messages.create(
@@ -137,17 +139,13 @@ async def _run_agent_anthropic(
                 normalized = result if str(result).strip() else "Tool returned empty output."
                 tool_result_tokens_by_tool[block.name] = tool_result_tokens_by_tool.get(block.name, 0) + _result_token_count(normalized)
                 tool_result_calls_by_tool[block.name] = tool_result_calls_by_tool.get(block.name, 0) + 1
-                span = _get_stage_span(context)
-                if span is not None:
-                    get_observer().record_tool_call(
-                        span,
-                        tool_name=block.name,
-                        duration_ms=int((monotonic() - tool_started) * 1000),
-                        result_tokens=_result_token_count(normalized),
-                        success=True,
-                        input_hash=sha256(str(block.input).encode("utf-8")).hexdigest(),
-                        output_hash=sha256(str(normalized).encode("utf-8")).hexdigest(),
-                    )
+                _record_tool_observer(
+                    context,
+                    tool_name=block.name,
+                    duration_ms=int((monotonic() - tool_started) * 1000),
+                    result=normalized,
+                    input_hash=sha256(str(block.input).encode("utf-8")).hexdigest(),
+                )
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -203,6 +201,8 @@ async def _run_agent_openai_compatible(
     openai_tools = anthropic_tools_to_openai_tools(TOOLS)
 
     for _ in range(MAX_ITERATIONS):
+        if _should_stop_loop(context, started_at):
+            break
         openai_messages: Any = messages
         openai_tools_any: Any = openai_tools
         request_started = monotonic()
@@ -290,17 +290,13 @@ async def _run_agent_openai_compatible(
                 normalized = result if str(result).strip() else "Tool returned empty output."
                 tool_result_tokens_by_tool[function_name] = tool_result_tokens_by_tool.get(function_name, 0) + _result_token_count(normalized)
                 tool_result_calls_by_tool[function_name] = tool_result_calls_by_tool.get(function_name, 0) + 1
-                span = _get_stage_span(context)
-                if span is not None:
-                    get_observer().record_tool_call(
-                        span,
-                        tool_name=function_name,
-                        duration_ms=int((monotonic() - tool_started) * 1000),
-                        result_tokens=_result_token_count(normalized),
-                        success=True,
-                        input_hash=sha256(str(parsed_input).encode("utf-8")).hexdigest(),
-                        output_hash=sha256(str(normalized).encode("utf-8")).hexdigest(),
-                    )
+                _record_tool_observer(
+                    context,
+                    tool_name=function_name,
+                    duration_ms=int((monotonic() - tool_started) * 1000),
+                    result=normalized,
+                    input_hash=sha256(str(parsed_input).encode("utf-8")).hexdigest(),
+                )
                 messages.append(
                     {
                         "role": "tool",
@@ -350,3 +346,56 @@ def _optional_str(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _loop_deadline_s(context: dict[str, Any]) -> float:
+    raw = context.get("stage_deadline_s")
+    try:
+        return float(raw) if raw is not None else 180.0
+    except (TypeError, ValueError):
+        return 180.0
+
+
+def _should_stop_loop(context: dict[str, Any], started_at: float) -> bool:
+    if monotonic() - started_at >= _loop_deadline_s(context):
+        return True
+    tokens_used = int(context.get("tokens_used") or 0)
+    max_tokens = int(context.get("max_loop_tokens") or MAX_INPUT_TOKENS * 2)
+    return tokens_used >= max_tokens
+
+
+def _record_tool_observer(
+    context: dict[str, Any],
+    *,
+    tool_name: str,
+    duration_ms: int,
+    result: str,
+    input_hash: str,
+) -> None:
+    success = tool_result_succeeded(result)
+    output_hash = sha256(str(result).encode("utf-8")).hexdigest()
+    trace = context.setdefault("tool_trace", [])
+    if isinstance(trace, list):
+        trace.append(
+            {
+                "tool_name": tool_name,
+                "success": success,
+                "duration_ms": duration_ms,
+                "input_hash": input_hash,
+                "output_hash": output_hash,
+                "error": None if success else str(result)[:200],
+            }
+        )
+    span = _get_stage_span(context)
+    if span is None:
+        return
+    get_observer().record_tool_call(
+        span,
+        tool_name=tool_name,
+        duration_ms=duration_ms,
+        result_tokens=_result_token_count(result),
+        success=success,
+        error_class="" if success else "tool_failed",
+        input_hash=input_hash,
+        output_hash=output_hash,
+    )

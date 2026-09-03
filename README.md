@@ -14,7 +14,7 @@ Automated pull request reviews powered by multi-model LLM orchestration and the 
 ## Stack
 
 - **Backend**: Python 3.12 + FastAPI + SQLAlchemy 2.0 (async) + ARQ (Redis queue)
-- **Frontend**: Next.js 15 + TypeScript + Zustand + TanStack Query
+- **Frontend**: Next.js 16 + TypeScript + Zustand + TanStack Query
 - **AI**: Anthropic + OpenAI + Gemini (provider/model selectable per repository via `.codereview.yml`)
 - **Infra**: Postgres + Redis (docker-compose locally, Railway in prod)
 
@@ -30,14 +30,23 @@ Set these in `apps/api` (or repo-root) environment when you want telemetry; the 
 
 ## Evaluations
 
-Golden-style cases live under `evals/datasets/` (expected findings + optional diff/context fixtures). Run:
+The harness under `evals/harness/` runs the real review pipeline in dry-run mode (it never posts) over
+fixture cases in `evals/datasets/` and read-only public PRs, writing per-run artifacts to `evals/runs/<id>/`
+(`findings.json`, `trace.jsonl`, `metrics.json`, `rendered_comments.md`, `golden_diff.json`).
 
 ```bash
-python evals/run_eval.py --prompt-version <label> --predictions-dir evals/predictions/<label>
-python evals/compare.py evals/results/baseline.json evals/results/<label>.json
+cd apps/api
+uv run python ../../evals/harness/mutations.py --generate            # mutation-seeded goldens
+uv run python ../../evals/harness/run.py --local-only --label r1     # fixtures (stub when no API key)
+uv run python ../../evals/harness/run.py --limit-prs 6 --label r1    # + jigargor/gentle-stream PRs
+uv run python ../../evals/harness/critic.py --module validation --round 1 --label r1
+uv run python ../../evals/harness/final_gate.py                      # held-out N=3 + blind pairwise
+uv run python ../../evals/harness/show.py prompt --owner o --repo r --pr 1
 ```
 
-CI runs the harness on pull requests labeled **`prompt-change`** (see `.github/workflows/quality-gates.yml`).
+Scores, rounds, spend, and blockers are persisted in `docs/STATUS.json`. CI runs the offline smoke on
+pull requests labeled **`prompt-change`** and the live golden gate when `EVALS_ANTHROPIC_API_KEY` is set
+(see `.github/workflows/quality-gates.yml`). See `ARCHITECTURE.md` for the module ownership map.
 
 DeepEval-based agent replay evals are optional and separate from the dashboard `ExternalEvaluation` feature:
 
@@ -412,10 +421,10 @@ apps/
     app/            Next.js App Router pages
     lib/            API client utilities
 evals/
-  datasets/         Golden eval cases
-  predictions/      Model output fixtures for eval runs
-  run_eval.py       Precision / recall / FP-rate metrics
-  compare.py        Compare two eval result JSON files
+  datasets/         Golden eval cases (fixtures + mutation-seeded + heldout.json)
+  harness/          Dry-run harness: run.py, critic.py, final_gate.py, loop.py, show.py
+  runs/             Per-run artifacts (gitignored)
+  run_eval.py       Legacy prediction-file scorer (superseded by harness/)
 packages/
   shared-types/     TypeScript types shared across apps
 ```

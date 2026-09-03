@@ -11,6 +11,14 @@ import type {
   ExternalEvalListItem,
 } from "@/lib/api/external-evals";
 import type { ModelsCatalogResponse } from "@/lib/api/models";
+import type {
+  CostPerFindingSummary,
+  FastPathScorecard,
+  FindingLabelResponse,
+  FindingLabelValue,
+  MissedIssueCreateRequest,
+  MissedIssueResponse,
+} from "@/lib/api/quality";
 import type { CodeReviewConfigResult, GeneratedRepoTemplate, RepoInstallation, RepoSummary } from "@/lib/api/repos";
 import type {
   OutcomeSummary,
@@ -175,6 +183,57 @@ export async function actionDismissFinding(
   return serverBffFetch<{ ok: boolean; review_id: number; dismissed_finding_index: number }>(
     `/api/v1/reviews/${reviewId}/findings/${findingIndex}/dismiss?installation_id=${installationId}`,
     { method: "POST" },
+  );
+}
+
+export async function actionFetchFindingLabels(reviewId: number): Promise<FindingLabelResponse[]> {
+  return serverBffFetch<FindingLabelResponse[]>(`/api/v1/findings/${reviewId}/labels`);
+}
+
+export async function actionLabelFinding(
+  reviewId: number,
+  findingIndex: number,
+  label: FindingLabelValue,
+  notes?: string | null,
+): Promise<ActionResult<FindingLabelResponse>> {
+  try {
+    const payload = await serverBffFetch<FindingLabelResponse>(
+      `/api/v1/findings/${reviewId}/${findingIndex}/label`,
+      { method: "POST", body: JSON.stringify({ label, notes: notes ?? null }) },
+    );
+    return { ok: true, data: payload };
+  } catch (error) {
+    return actionErrorResult(error, "Unable to save finding label.");
+  }
+}
+
+export async function actionCreateMissedIssue(
+  body: MissedIssueCreateRequest,
+): Promise<ActionResult<MissedIssueResponse>> {
+  try {
+    const payload = await serverBffFetch<MissedIssueResponse>("/api/v1/missed-issues", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return { ok: true, data: payload };
+  } catch (error) {
+    return actionErrorResult(error, "Unable to record missed issue.");
+  }
+}
+
+export async function actionFetchScorecard(
+  installationId: number,
+  repoFullName?: string,
+  days = 14,
+): Promise<FastPathScorecard> {
+  const params = new URLSearchParams({ installation_id: String(installationId), days: String(days) });
+  if (repoFullName) params.set("repo_full_name", repoFullName);
+  return serverBffFetch<FastPathScorecard>(`/api/v1/usage/scorecard?${params.toString()}`);
+}
+
+export async function actionFetchCostPerFinding(installationId: number): Promise<CostPerFindingSummary> {
+  return serverBffFetch<CostPerFindingSummary>(
+    `/api/v1/telemetry/cost-per-finding?installation_id=${installationId}&limit=50`,
   );
 }
 

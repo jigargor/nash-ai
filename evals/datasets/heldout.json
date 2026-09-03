@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "repo": "jigargor/gentle-stream",
+  "selection": "sha256('{repo}#{number}') first 8 hex digits % 3 == 0; frozen at first listing",
+  "prs": [
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 1
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 50
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 58
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 60
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 64
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 65
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 70
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 75
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 77
+    },
+    {
+      "repo": "jigargor/gentle-stream",
+      "pr": 78
+    }
+  ]
+}

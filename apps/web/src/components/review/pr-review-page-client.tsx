@@ -6,9 +6,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ReviewPipeline } from "@/components/review/action-chain";
 import { DiffViewer } from "@/components/review/diff-viewer";
+import { DropReasonPanel } from "@/components/review/drop-reason-panel";
 import { FileTree } from "@/components/review/file-tree";
 import { FindingsPanel } from "@/components/review/findings-panel";
+import { MissedIssueForm } from "@/components/review/missed-issue-form";
+import { OutcomesPanel } from "@/components/review/outcomes-panel";
 import { StreamingStatus } from "@/components/review/streaming-status";
+import { useFindingLabels } from "@/hooks/use-finding-labels";
 import { Button } from "@/components/ui/button";
 import { Panel } from "@/components/ui/panel";
 import { StateBlock } from "@/components/ui/state-block";
@@ -328,6 +332,12 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   );
   const findingOutcomes = reviewQuery.data?.finding_outcomes ?? [];
   const isFailedReview = reviewQuery.data?.status === "failed";
+  const findingLabelsQuery = useFindingLabels(reviewId, Boolean(reviewQuery.data));
+  const findingLabelsByIndex = useMemo(() => {
+    const byIndex: Record<number, string> = {};
+    for (const item of findingLabelsQuery.data ?? []) byIndex[item.finding_index] = item.label;
+    return byIndex;
+  }, [findingLabelsQuery.data]);
 
   const audits = useMemo(() => modelAudits.data?.model_audits ?? [], [modelAudits.data]);
   const runHistory = useMemo(() => runHistoryFromAudits(audits), [audits]);
@@ -716,8 +726,26 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
             onSelectFinding={setSelectedFindingIndex}
             onDismiss={handleDismiss}
             onCopySuggestion={handleCopySuggestion}
+            reviewId={reviewId}
+            findingLabels={findingLabelsByIndex}
           />
         </div>
+      ) : null}
+
+      {!isInFlight ? (
+        <>
+          <OutcomesPanel findingOutcomes={displayedFindingOutcomes} postedFindings={postedFindingsCount} />
+          <DropReasonPanel
+            debugArtifacts={data.debug_artifacts ?? null}
+            generatedFindings={
+              typeof data.debug_artifacts?.generated_findings_count === "number"
+                ? data.debug_artifacts.generated_findings_count
+                : null
+            }
+            postedFindings={postedFindingsCount}
+          />
+          <MissedIssueForm reviewId={reviewId} />
+        </>
       ) : null}
 
     </section>

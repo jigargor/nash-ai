@@ -83,6 +83,15 @@ vi.mock("@/hooks/use-review-stream", () => ({
   }),
 }));
 
+vi.mock("@/hooks/use-finding-labels", () => ({
+  useFindingLabels: () => ({ data: [], isLoading: false, isError: false }),
+  useLabelFinding: () => ({ mutate: vi.fn(), isPending: false, isError: false, isSuccess: false, error: null }),
+}));
+
+vi.mock("@/hooks/use-missed-issues", () => ({
+  useCreateMissedIssue: () => ({ mutate: vi.fn(), isPending: false, isError: false, isSuccess: false, error: null }),
+}));
+
 vi.mock("@/hooks/use-review-model-audits", () => ({
   useReviewModelAudits: (reviewId: number, installationId: number, options?: { enabled?: boolean }) =>
     useReviewModelAuditsMock(reviewId, installationId, options),
