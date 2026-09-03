@@ -45,7 +45,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  # CI runs `uv sync --extra dev` inside apps/api; uv >=0.12 no longer pulls the
+  # workspace root's legacy tool.uv.dev-dependencies into a member sync, so the
+  # lint/test toolchain must be declared here.
+  "ruff>=0.4.0",
   "pytest>=9.1.0",
+  "pytest-asyncio>=0.23.0",
   "pytest-cov>=7.1.0",
   "mypy>=2.1.0",
   "bandit>=1.9.4",
