@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=82.0.1"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -29,7 +29,7 @@ dependencies = [
   "redis>=5.0.0,<6",
   "pydantic>=2.13.4",
   "pydantic-settings>=2.14.2",
-  "cryptography>=49.0.0",
+  "cryptography>=50.0.0",
   "tiktoken>=0.13.0",
   "anthropic>=0.109.2",
   "unidiff>=0.7.5",
@@ -39,7 +39,8 @@ dependencies = [
   "sentry-sdk[fastapi]>=2.63.0",
   "openai>=2.42.0",
   "boto3>=1.43.31",
-  "mcp>=1.28.0",
+  # 2.x moves FastMCP; stay on 1.x until app.mcp.server is migrated deliberately
+  "mcp>=1.28.1,<2",
 ]
 
 [project.optional-dependencies]
