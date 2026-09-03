@@ -11,7 +11,11 @@ dev-dependencies = [
 override-dependencies = [
   "msgpack>=1.2.1",
   "python-multipart>=0.0.31",
-  "pip>=26.1.2",
+  # Transitive advisories flagged by pip-audit (kept until upstream bumps land):
+  "pip>=26.2",                 # PYSEC-2026-3721
+  "aiohttp>=3.14.3",           # PYSEC-2026-3545/3546/3547
+  "click>=8.3.3",              # PYSEC-2026-2132
+  "setuptools>=83.0.0",        # PYSEC-2026-3447
 ]
 
 [tool.ruff]
