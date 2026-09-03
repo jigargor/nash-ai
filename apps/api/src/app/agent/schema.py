@@ -80,6 +80,7 @@ DropReason = Literal[
     "incoherent_suggestion",
     "line_not_in_diff",
     "file_not_in_context",
+    "validator_error",
 ]
 
 
@@ -90,6 +91,10 @@ class Finding(BaseModel):
     file_path: str
     line_start: int = Field(..., ge=1)
     line_end: int | None = None
+    finding_id: str | None = Field(
+        default=None,
+        description="Stable id for delivery markers and outcome tracking (optional).",
+    )
     target_line_content: str = Field(
         ...,
         max_length=2000,
@@ -278,3 +283,119 @@ class LayeredContextPackage(BaseModel):
 
     def all_segments(self) -> list[ContextSegment]:
         return [*self.project, *self.repo, *self.review]
+
+
+class CommitSummary(BaseModel):
+    sha: str | None = None
+    message: str = ""
+
+
+class PRContext(BaseModel):
+    """Shared PR input for worker and eval harness (extend, do not fork)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    owner: str
+    repo: str
+    pr_number: int = Field(ge=1)
+    head_sha: str
+    base_sha: str | None = None
+    title: str = ""
+    body: str = ""
+    draft: bool = False
+    commits: list[CommitSummary] = Field(default_factory=list)
+    diff_text: str = ""
+    files_at_head: dict[str, str] = Field(default_factory=dict)
+    commentable_lines: list[tuple[str, int]] = Field(default_factory=list)
+    ignore_paths: list[str] = Field(default_factory=list)
+    prompt_additions: str | None = None
+    installation_id: int | None = None
+    review_id: int | None = None
+    diff_cross_check_warnings: list[str] = Field(
+        default_factory=list,
+        description="Files API vs unidiff line-number disagreements (anchoring probe).",
+    )
+
+    @property
+    def repo_full_name(self) -> str:
+        return f"{self.owner}/{self.repo}"
+
+
+class DroppedFinding(BaseModel):
+    """A finding removed by some stage.
+
+    ``finding`` is a plain JSON snapshot (not a ``Finding``) on purpose: rejected findings
+    are often in a state that fails ``Finding`` validation (that is why they were dropped),
+    so re-validating them here would turn a routine drop into a stage failure.
+    """
+
+    finding: dict[str, Any] | None = None
+    reason: DropReason | str
+    detail: str | None = None
+    stage: str = "validation"
+
+    @classmethod
+    def from_finding(
+        cls,
+        finding: Finding | None,
+        *,
+        reason: DropReason | str,
+        detail: str | None = None,
+        stage: str = "validation",
+    ) -> "DroppedFinding":
+        snapshot: dict[str, Any] | None = None
+        if finding is not None:
+            snapshot = finding.model_dump(mode="json")
+        return cls(finding=snapshot, reason=reason, detail=detail, stage=stage)
+
+    @property
+    def file_path(self) -> str:
+        return str((self.finding or {}).get("file_path") or "")
+
+    @property
+    def line_start(self) -> int:
+        try:
+            return int((self.finding or {}).get("line_start") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def finding_id(self) -> str | None:
+        value = (self.finding or {}).get("finding_id")
+        return str(value) if value else None
+
+
+class ToolTraceEntry(BaseModel):
+    tool_name: str
+    success: bool
+    duration_ms: int = 0
+    input_hash: str = ""
+    output_hash: str = ""
+    error: str | None = None
+
+
+class ReviewRunReport(BaseModel):
+    """Full pipeline output for harness metrics and production debug."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    result: ReviewResult
+    drops: list[DroppedFinding] = Field(default_factory=list)
+    tool_trace: list[ToolTraceEntry] = Field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tokens_used: int = 0
+    cached_input_tokens: int = 0
+    cost_usd: float | None = None
+    latency_ms: int = 0
+    stage_latencies_ms: dict[str, int] = Field(default_factory=dict)
+    exceptions: list[str] = Field(default_factory=list)
+    pipeline_errors: list[str] = Field(default_factory=list)
+    models_served: list[str] = Field(default_factory=list)
+    providers_served: list[str] = Field(default_factory=list)
+    prompt_version: str | None = None
+    system_prompt: str | None = None
+    user_prompt: str | None = None
+    dry_run: bool = True
+    delivery: dict[str, object] = Field(default_factory=dict)
+    debug_artifacts: dict[str, object] = Field(default_factory=dict)

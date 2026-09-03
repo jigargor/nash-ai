@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from app.llm.types import LLMUsage, ModelProvider, ProviderHealthCheck
 
@@ -26,6 +26,7 @@ class StructuredOutputRequest:
     context: dict[str, Any]
     max_tokens: int
     temperature: float | None = None
+    effort: Literal["low", "medium", "high", "max"] | None = None
 
 
 @dataclass(frozen=True)
@@ -228,9 +229,13 @@ def _jsonable(value: object) -> Any:
 
 
 def record_usage(context: dict[str, Any], provider: str, model_name: str, usage: LLMUsage) -> None:
+    from app.llm.cost import estimate_usage_cost_usd
+
     context["input_tokens"] = int(context.get("input_tokens", 0)) + usage.input_tokens
     context["output_tokens"] = int(context.get("output_tokens", 0)) + usage.output_tokens
     context["tokens_used"] = int(context.get("tokens_used", 0)) + usage.total_tokens
+    generation_cost = estimate_usage_cost_usd(provider, model_name, usage)
+    context["cost_usd"] = float(context.get("cost_usd", 0.0) or 0.0) + generation_cost
 
     entries = context.setdefault("llm_usage", [])
     if isinstance(entries, list):
@@ -243,5 +248,6 @@ def record_usage(context: dict[str, Any], provider: str, model_name: str, usage:
                 "total_tokens": usage.total_tokens,
                 "cached_input_tokens": usage.cached_input_tokens,
                 "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+                "cost_usd": generation_cost,
             }
         )

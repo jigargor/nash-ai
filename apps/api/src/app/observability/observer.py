@@ -11,9 +11,12 @@ from uuid import uuid4
 from app.observability.context import ObservationContext
 from app.observability.events import (
     ContextBuildEvent,
+    DeliveryRejectedEvent,
     ErrorEvent,
+    FindingDroppedEvent,
     GenerationEvent,
     LLMUsage,
+    OutcomeEvent,
     ReviewEndEvent,
     ReviewStartEvent,
     StageEndEvent,
@@ -107,7 +110,10 @@ class LLMObserver:
             return
         for sink in self._sinks:
             try:
-                getattr(sink, method)(event)
+                handler = getattr(sink, method, None)
+                if handler is None:
+                    continue
+                handler(event)
             except Exception:
                 logger.exception("Sink %s.%s raised; skipping", type(sink).__name__, method)
 
@@ -346,6 +352,87 @@ class LLMObserver:
                 findings_before=findings_before,
                 findings_after=findings_after,
                 drop_reason=drop_reason,
+            ),
+        )
+
+    def record_finding_dropped(
+        self,
+        span: StageSpan | None,
+        *,
+        review_id: int,
+        installation_id: int,
+        reason: str,
+        detail: str = "",
+        file_path: str = "",
+        line_start: int = 0,
+        finding_id: str | None = None,
+        stage: str = "validation",
+        run_id: str = "",
+        prompt_version: str = "",
+    ) -> None:
+        self._dispatch(
+            "on_finding_dropped",
+            FindingDroppedEvent(
+                review_id=review_id,
+                installation_id=installation_id,
+                run_id=span.run_id if span is not None else run_id,
+                trace_id=span.trace_id if span is not None else "",
+                stage_id=span.stage_id if span is not None else "",
+                span_id=span.span_id if span is not None else "",
+                parent_span_id=span.parent_span_id if span is not None else "",
+                stage=span.stage if span is not None else stage,
+                prompt_version=span.prompt_version if span is not None else prompt_version,
+                reason=reason,
+                detail=detail,
+                file_path=file_path,
+                line_start=line_start,
+                finding_id=finding_id,
+            ),
+        )
+
+    def record_outcome(
+        self,
+        *,
+        review_id: int,
+        installation_id: int,
+        outcome: str,
+        canonical_outcome: str,
+        finding_index: int = 0,
+        github_comment_id: int | None = None,
+        run_id: str = "",
+    ) -> None:
+        self._dispatch(
+            "on_outcome",
+            OutcomeEvent(
+                review_id=review_id,
+                installation_id=installation_id,
+                run_id=run_id,
+                outcome=outcome,
+                canonical_outcome=canonical_outcome,
+                finding_index=finding_index,
+                github_comment_id=github_comment_id,
+            ),
+        )
+
+    def record_delivery_rejected(
+        self,
+        *,
+        review_id: int,
+        installation_id: int,
+        file_path: str,
+        line_start: int,
+        error_class: str = "",
+        run_id: str = "",
+    ) -> None:
+        self._dispatch(
+            "on_delivery_rejected",
+            DeliveryRejectedEvent(
+                review_id=review_id,
+                installation_id=installation_id,
+                run_id=run_id,
+                file_path=file_path,
+                line_start=line_start,
+                error_class=error_class,
             ),
         )
 

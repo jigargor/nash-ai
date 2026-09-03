@@ -40,27 +40,28 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
     data = json.loads(raw_value)
     model_data = dict(data.get("model") or {})
     model_provider = _provider_value(model_data.get("provider"), "anthropic")
+    cached_input_value = model_data.get("cached_input_per_1m_usd", "0.20")
     model = ReviewModelConfig(
         provider=model_provider,
         name=str(model_data.get("name", "")),
-        input_per_1m_usd=Decimal(str(model_data.get("input_per_1m_usd", "3.00"))),
-        output_per_1m_usd=Decimal(str(model_data.get("output_per_1m_usd", "15.00"))),
+        input_per_1m_usd=Decimal(str(model_data.get("input_per_1m_usd", "2.00"))),
+        output_per_1m_usd=Decimal(str(model_data.get("output_per_1m_usd", "10.00"))),
         cached_input_per_1m_usd=(
-            Decimal(str(model_data["cached_input_per_1m_usd"]))
-            if model_data.get("cached_input_per_1m_usd") is not None
+            Decimal(str(cached_input_value))
+            if cached_input_value is not None
             else None
         ),
         explicit=bool(model_data.get("explicit", False)),
     )
     max_mode_data = dict(data.get("max_mode") or {})
     challenger_provider = _provider_value(max_mode_data.get("challenger_provider"), "openai")
-    tie_break_provider = _provider_value(max_mode_data.get("tie_break_provider"), "gemini")
+    tie_break_provider = _provider_value(max_mode_data.get("tie_break_provider"), "anthropic")
     max_mode = MaxModeConfig(
         enabled=bool(max_mode_data.get("enabled", False)),
         challenger_provider=challenger_provider,
-        challenger_model=str(max_mode_data.get("challenger_model", "gpt-5.5")),
+        challenger_model=str(max_mode_data.get("challenger_model", "gpt-5.6-terra")),
         tie_break_provider=tie_break_provider,
-        tie_break_model=str(max_mode_data.get("tie_break_model", "gemini-2.5-pro")),
+        tie_break_model=str(max_mode_data.get("tie_break_model", "claude-opus-5")),
         conflict_threshold=int(max_mode_data.get("conflict_threshold", 35)),
         high_risk_severity=str(max_mode_data.get("high_risk_severity", "high")),
     )
