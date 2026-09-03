@@ -5,9 +5,10 @@ from pydantic import ValidationError
 from app.agent.schema import Finding
 
 VENDOR_PATTERNS = [
-    r"\b(vercel|netlify|cloudflare|fly\.io|railway|render)\b",
+    # "render" / "lambda" alone are ordinary programming words; require vendor context.
+    r"\b(vercel|netlify|cloudflare|fly\.io|railway|render\.com|on render)\b",
     r"\bx-(vercel|real|forwarded)-(for|ip)\b",
-    r"\b(aws|s3|ec2|lambda|iam|dynamodb|cloudfront)\b",
+    r"\b(aws|s3|ec2|aws\s+lambda|lambda@edge|iam|dynamodb|cloudfront)\b",
     r"\b(gcp|firebase|firestore)\b",
     r"\b(supabase|auth0|clerk|nextauth)\b",
     r"\brls\b|\brow level security\b",

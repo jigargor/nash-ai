@@ -32,18 +32,70 @@ providers:
       caching_url: https://ai.google.dev/gemini-api/docs/caching
 models:
   - provider: anthropic
-    model: claude-sonnet-4-5
+    model: claude-sonnet-5
     family: claude
     tier: balanced
     status: active
     replacement_candidates: []
     shutdown_at: null
+    score: 96
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: explicit_breakpoint
+      max_context_tokens: 1000000
+      rejects_sampling_params: true
+      supports_effort: true
+      structured_outputs_native: true
+    pricing:
+      input_per_1m: 2.00
+      cached_input_per_1m: 0.20
+      output_per_1m: 10.00
+    sources:
+      models_url: https://docs.anthropic.com/en/docs/about-claude/models/overview
+      deprecations_url: https://docs.anthropic.com/en/docs/about-claude/model-deprecations
+      pricing_url: https://www.anthropic.com/pricing
+      caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+  - provider: anthropic
+    model: claude-opus-5
+    family: claude
+    tier: frontier
+    status: active
+    replacement_candidates: []
+    shutdown_at: null
+    score: 99
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: explicit_breakpoint
+      max_context_tokens: 1000000
+      rejects_sampling_params: true
+      supports_effort: true
+      structured_outputs_native: true
+    pricing:
+      input_per_1m: 5.00
+      cached_input_per_1m: 0.50
+      output_per_1m: 25.00
+    sources:
+      models_url: https://docs.anthropic.com/en/docs/about-claude/models/overview
+      deprecations_url: https://docs.anthropic.com/en/docs/about-claude/model-deprecations
+      pricing_url: https://www.anthropic.com/pricing
+      caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+  - provider: anthropic
+    model: claude-sonnet-4-5
+    family: claude
+    tier: balanced
+    status: deprecated
+    replacement_candidates:
+      - claude-sonnet-5
+      - claude-sonnet-4-6
+    shutdown_at: 2026-09-29
     score: 92
     capabilities:
       tool_calling: true
       structured_output: true
       prompt_caching: explicit_breakpoint
-      max_context_tokens: 200000
+      max_context_tokens: 1000000
     pricing:
       input_per_1m: 3.00
       cached_input_per_1m: 0.30
@@ -57,7 +109,7 @@ models:
     model: claude-sonnet-4-6
     family: claude
     tier: balanced
-    status: active
+    status: legacy
     replacement_candidates: []
     shutdown_at: null
     score: 95
@@ -65,7 +117,7 @@ models:
       tool_calling: true
       structured_output: true
       prompt_caching: explicit_breakpoint
-      max_context_tokens: 200000
+      max_context_tokens: 1000000
     pricing:
       input_per_1m: 3.00
       cached_input_per_1m: 0.30
@@ -76,7 +128,7 @@ models:
       pricing_url: https://www.anthropic.com/pricing
       caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
   - provider: anthropic
-    model: claude-haiku-4-5-20251001
+    model: claude-haiku-4-5
     family: claude
     tier: economy
     status: active
@@ -87,11 +139,11 @@ models:
       tool_calling: true
       structured_output: true
       prompt_caching: explicit_breakpoint
-      max_context_tokens: 200000
+      max_context_tokens: 1000000
     pricing:
-      input_per_1m: 0.80
-      cached_input_per_1m: 0.08
-      output_per_1m: 4.00
+      input_per_1m: 1.00
+      cached_input_per_1m: 0.10
+      output_per_1m: 5.00
     sources:
       models_url: https://docs.anthropic.com/en/docs/about-claude/models/overview
       deprecations_url: https://docs.anthropic.com/en/docs/about-claude/model-deprecations
@@ -110,7 +162,7 @@ models:
       tool_calling: true
       structured_output: true
       prompt_caching: explicit_breakpoint
-      max_context_tokens: 200000
+      max_context_tokens: 1000000
     pricing:
       input_per_1m: null
       cached_input_per_1m: null
@@ -120,6 +172,81 @@ models:
       deprecations_url: https://docs.anthropic.com/en/docs/about-claude/model-deprecations
       pricing_url: https://www.anthropic.com/pricing
       caching_url: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
+  - provider: openai
+    model: gpt-5.6-terra
+    family: gpt
+    tier: balanced
+    status: active
+    replacement_candidates: []
+    shutdown_at: null
+    score: 96
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: automatic_prefix
+      max_context_tokens: 128000
+      rejects_sampling_params: true
+      supports_effort: true
+      structured_outputs_native: true
+    pricing:
+      input_per_1m: null
+      cached_input_per_1m: null
+      output_per_1m: null
+    sources:
+      models_url: https://platform.openai.com/docs/models
+      deprecations_url: https://platform.openai.com/docs/deprecations
+      pricing_url: https://platform.openai.com/docs/pricing
+      caching_url: https://platform.openai.com/docs/guides/prompt-caching
+  - provider: openai
+    model: gpt-5.6-sol
+    family: gpt
+    tier: frontier
+    status: active
+    replacement_candidates: []
+    shutdown_at: null
+    score: 99
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: automatic_prefix
+      max_context_tokens: 128000
+      rejects_sampling_params: true
+      supports_effort: true
+      structured_outputs_native: true
+    pricing:
+      input_per_1m: null
+      cached_input_per_1m: null
+      output_per_1m: null
+    sources:
+      models_url: https://platform.openai.com/docs/models
+      deprecations_url: https://platform.openai.com/docs/deprecations
+      pricing_url: https://platform.openai.com/docs/pricing
+      caching_url: https://platform.openai.com/docs/guides/prompt-caching
+  - provider: openai
+    model: gpt-5.6-luna
+    family: gpt
+    tier: economy
+    status: active
+    replacement_candidates: []
+    shutdown_at: null
+    score: 82
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: automatic_prefix
+      max_context_tokens: 128000
+      rejects_sampling_params: true
+      supports_effort: true
+      structured_outputs_native: true
+    pricing:
+      input_per_1m: null
+      cached_input_per_1m: null
+      output_per_1m: null
+    sources:
+      models_url: https://platform.openai.com/docs/models
+      deprecations_url: https://platform.openai.com/docs/deprecations
+      pricing_url: https://platform.openai.com/docs/pricing
+      caching_url: https://platform.openai.com/docs/guides/prompt-caching
   - provider: openai
     model: gpt-5.2
     family: gpt
@@ -146,8 +273,9 @@ models:
     model: gpt-5-mini
     family: gpt
     tier: economy
-    status: active
-    replacement_candidates: []
+    status: deprecated
+    replacement_candidates:
+      - gpt-5.6-luna
     shutdown_at: null
     score: 74
     capabilities:
@@ -168,9 +296,9 @@ models:
     model: gpt-5.5
     family: gpt
     tier: balanced
-    status: unknown
+    status: deprecated
     replacement_candidates:
-      - gpt-5.2
+      - gpt-5.6-terra
     shutdown_at: null
     score: 55
     capabilities:
@@ -188,13 +316,60 @@ models:
       pricing_url: https://platform.openai.com/docs/pricing
       caching_url: https://platform.openai.com/docs/guides/prompt-caching
   - provider: gemini
-    model: gemini-2.5-pro
+    model: gemini-3.1-pro-preview
     family: gemini
     tier: balanced
     status: active
-    replacement_candidates:
-      - gemini-3-pro
+    replacement_candidates: []
     shutdown_at: null
+    score: 94
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: implicit
+      max_context_tokens: 1048576
+      supports_effort: true
+      structured_outputs_native: true
+    pricing:
+      input_per_1m: null
+      cached_input_per_1m: null
+      output_per_1m: null
+    sources:
+      models_url: https://ai.google.dev/gemini-api/docs/models/gemini
+      deprecations_url: https://ai.google.dev/gemini-api/docs/deprecations
+      pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+      caching_url: https://ai.google.dev/gemini-api/docs/caching
+  - provider: gemini
+    model: gemini-3.6-flash
+    family: gemini
+    tier: economy
+    status: active
+    replacement_candidates: []
+    shutdown_at: null
+    score: 82
+    capabilities:
+      tool_calling: true
+      structured_output: true
+      prompt_caching: implicit
+      max_context_tokens: 1048576
+      structured_outputs_native: true
+    pricing:
+      input_per_1m: null
+      cached_input_per_1m: null
+      output_per_1m: null
+    sources:
+      models_url: https://ai.google.dev/gemini-api/docs/models/gemini
+      deprecations_url: https://ai.google.dev/gemini-api/docs/deprecations
+      pricing_url: https://ai.google.dev/gemini-api/docs/pricing
+      caching_url: https://ai.google.dev/gemini-api/docs/caching
+  - provider: gemini
+    model: gemini-2.5-pro
+    family: gemini
+    tier: balanced
+    status: deprecated
+    replacement_candidates:
+      - gemini-3.1-pro-preview
+    shutdown_at: 2026-10-16
     score: 86
     capabilities:
       tool_calling: true
@@ -214,9 +389,10 @@ models:
     model: gemini-2.5-flash
     family: gemini
     tier: economy
-    status: active
-    replacement_candidates: []
-    shutdown_at: null
+    status: deprecated
+    replacement_candidates:
+      - gemini-3.6-flash
+    shutdown_at: 2026-10-16
     score: 72
     capabilities:
       tool_calling: true
@@ -236,9 +412,10 @@ models:
     model: gemini-2.5-flash-lite
     family: gemini
     tier: economy
-    status: active
-    replacement_candidates: []
-    shutdown_at: null
+    status: deprecated
+    replacement_candidates:
+      - gemini-3.6-flash
+    shutdown_at: 2026-10-16
     score: 69
     capabilities:
       tool_calling: true

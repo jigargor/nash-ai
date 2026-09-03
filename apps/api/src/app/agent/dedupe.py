@@ -18,6 +18,36 @@ def finding_dedupe_key(finding: Finding) -> tuple[str, int, str, str, str]:
     )
 
 
+def near_dedupe_key(finding: Finding) -> tuple[str, str, str]:
+    normalized_title = normalize_for_match(finding.message[:80])
+    return (finding.file_path, finding.category, normalized_title)
+
+
+def near_dedupe_findings(findings: list[Finding], *, line_window: int = 2) -> list[Finding]:
+    """Collapse findings on the same file+category+message within a small line window."""
+    kept: list[Finding] = []
+    for finding in findings:
+        duplicate = False
+        for index, existing in enumerate(kept):
+            if near_dedupe_key(existing) != near_dedupe_key(finding):
+                continue
+            existing_line = existing.line_end or existing.line_start
+            finding_line = finding.line_end or finding.line_start
+            if abs(existing_line - finding_line) <= line_window:
+                duplicate = True
+                if SEVERITY_RANK[finding.severity] > SEVERITY_RANK[existing.severity]:
+                    kept[index] = finding
+                elif (
+                    finding.severity == existing.severity
+                    and finding.confidence > existing.confidence
+                ):
+                    kept[index] = finding
+                break
+        if not duplicate:
+            kept.append(finding)
+    return kept
+
+
 def dedupe_findings(findings: list[Finding]) -> list[Finding]:
     merged: dict[tuple[str, int, str, str, str], Finding] = {}
     for finding in findings:
@@ -31,8 +61,10 @@ def dedupe_findings(findings: list[Finding]) -> list[Finding]:
             continue
         if finding.confidence > existing.confidence:
             merged[key] = finding
+    exact = list(merged.values())
+    near = near_dedupe_findings(exact)
     return sorted(
-        merged.values(),
+        near,
         key=lambda item: (SEVERITY_RANK[item.severity], item.confidence),
         reverse=True,
     )

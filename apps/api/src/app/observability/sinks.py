@@ -7,9 +7,13 @@ import logging
 from typing import Any, Callable, Protocol, cast, runtime_checkable
 
 from app.observability.events import (
+    BudgetExceededEvent,
     ContextBuildEvent,
+    DeliveryRejectedEvent,
     ErrorEvent,
+    FindingDroppedEvent,
     GenerationEvent,
+    OutcomeEvent,
     ReviewEndEvent,
     ReviewStartEvent,
     StageEndEvent,
@@ -47,6 +51,14 @@ class ObservabilitySink(Protocol):
     def on_context_build(self, event: ContextBuildEvent) -> None: ...
 
     def on_error(self, event: ErrorEvent) -> None: ...
+
+    def on_finding_dropped(self, event: FindingDroppedEvent) -> None: ...
+
+    def on_outcome(self, event: OutcomeEvent) -> None: ...
+
+    def on_delivery_rejected(self, event: DeliveryRejectedEvent) -> None: ...
+
+    def on_budget_exceeded(self, event: BudgetExceededEvent) -> None: ...
 
     def flush(self) -> None: ...
 
@@ -112,6 +124,18 @@ class StructuredLogSink:
 
     def on_error(self, event: ErrorEvent) -> None:
         self._emit("error", event.model_dump(mode="json"))
+
+    def on_finding_dropped(self, event: FindingDroppedEvent) -> None:
+        self._emit("finding_dropped", event.model_dump(mode="json"))
+
+    def on_outcome(self, event: OutcomeEvent) -> None:
+        self._emit(event.canonical_outcome or "outcome", event.model_dump(mode="json"))
+
+    def on_delivery_rejected(self, event: DeliveryRejectedEvent) -> None:
+        self._emit("delivery_rejected", event.model_dump(mode="json"))
+
+    def on_budget_exceeded(self, event: BudgetExceededEvent) -> None:
+        self._emit("budget_exceeded", event.model_dump(mode="json"))
 
     def flush(self) -> None:
         pass
@@ -293,6 +317,18 @@ class DBSink:
         if self._session_factory is None:
             return
         self._schedule(self._persist_error(event))
+
+    def on_finding_dropped(self, event: FindingDroppedEvent) -> None:
+        return
+
+    def on_outcome(self, event: OutcomeEvent) -> None:
+        return
+
+    def on_delivery_rejected(self, event: DeliveryRejectedEvent) -> None:
+        return
+
+    def on_budget_exceeded(self, event: BudgetExceededEvent) -> None:
+        return
 
     async def _persist_error(self, event: ErrorEvent) -> None:
         from sqlalchemy import select
@@ -539,6 +575,48 @@ class LangfuseSink:
             },
         )
 
+    def on_finding_dropped(self, event: FindingDroppedEvent) -> None:
+        self._emit_child_event(
+            event,
+            "finding.dropped",
+            {
+                "reason": event.reason,
+                "detail": event.detail,
+                "file_path": event.file_path,
+                "line_start": event.line_start,
+                "finding_id": event.finding_id,
+            },
+        )
+
+    def on_outcome(self, event: OutcomeEvent) -> None:
+        self._emit_child_event(
+            event,
+            event.canonical_outcome or "outcome",
+            {
+                "outcome": event.outcome,
+                "finding_index": event.finding_index,
+                "github_comment_id": event.github_comment_id,
+            },
+        )
+
+    def on_delivery_rejected(self, event: DeliveryRejectedEvent) -> None:
+        self._emit_child_event(
+            event,
+            "delivery.rejected",
+            {
+                "file_path": event.file_path,
+                "line_start": event.line_start,
+                "error_class": event.error_class,
+            },
+        )
+
+    def on_budget_exceeded(self, event: BudgetExceededEvent) -> None:
+        self._emit_child_event(
+            event,
+            "budget.exceeded",
+            {"remaining_usd": event.remaining_usd, "projected_usd": event.projected_usd},
+        )
+
     def _emit_child_event(self, event: object, name: str, metadata: dict[str, object]) -> None:
         parent = self._span_or_trace(event)  # type: ignore[arg-type]
         self._call(parent, "event", name=name, metadata=self._event_metadata(event, metadata))
@@ -589,5 +667,75 @@ class InMemoryTestSink:
     def on_error(self, event: ErrorEvent) -> None:
         self._append("error", event)
 
+    def on_finding_dropped(self, event: FindingDroppedEvent) -> None:
+        self._append("finding_dropped", event)
+
+    def on_outcome(self, event: OutcomeEvent) -> None:
+        self._append("outcome", event)
+
+    def on_delivery_rejected(self, event: DeliveryRejectedEvent) -> None:
+        self._append("delivery_rejected", event)
+
+    def on_budget_exceeded(self, event: BudgetExceededEvent) -> None:
+        self._append("budget_exceeded", event)
+
     def flush(self) -> None:
         return
+
+
+class JsonlSink:
+    """Append-only JSONL sink for the eval harness and local traces."""
+
+    def __init__(self, path: str) -> None:
+        from pathlib import Path
+
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _write(self, event: object) -> None:
+        payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else {"raw": event}
+        with self._path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, default=str) + "\n")
+
+    def on_review_start(self, event: ReviewStartEvent) -> None:
+        self._write(event)
+
+    def on_review_end(self, event: ReviewEndEvent) -> None:
+        self._write(event)
+
+    def on_stage_start(self, event: StageStartEvent) -> None:
+        self._write(event)
+
+    def on_stage_end(self, event: StageEndEvent) -> None:
+        self._write(event)
+
+    def on_generation(self, event: GenerationEvent) -> None:
+        self._write(event)
+
+    def on_tool_call(self, event: ToolCallEvent) -> None:
+        self._write(event)
+
+    def on_validation(self, event: ValidationEvent) -> None:
+        self._write(event)
+
+    def on_context_build(self, event: ContextBuildEvent) -> None:
+        self._write(event)
+
+    def on_error(self, event: ErrorEvent) -> None:
+        self._write(event)
+
+    def on_finding_dropped(self, event: FindingDroppedEvent) -> None:
+        self._write(event)
+
+    def on_outcome(self, event: OutcomeEvent) -> None:
+        self._write(event)
+
+    def on_delivery_rejected(self, event: DeliveryRejectedEvent) -> None:
+        self._write(event)
+
+    def on_budget_exceeded(self, event: BudgetExceededEvent) -> None:
+        self._write(event)
+
+    def flush(self) -> None:
+        return
+

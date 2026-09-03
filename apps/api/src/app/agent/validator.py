@@ -1,6 +1,7 @@
 from typing import Any
 from importlib import import_module
 
+from app.agent.languages import language_for_path
 from app.agent.normalization import normalize_file_content
 from app.agent.schema import DropReason, Finding
 
@@ -29,7 +30,13 @@ class FindingValidator:
         self._parsers: dict[str, Any] = {}
 
     def validate(self, finding: Finding) -> tuple[bool, DropReason | None, str | None]:
-        """Return (is_valid, drop_reason, detail_if_invalid)."""
+        """Return (is_valid, drop_reason, detail_if_invalid). Never raises."""
+        try:
+            return self._validate_inner(finding)
+        except Exception as exc:
+            return False, "validator_error", f"validator exception: {exc}"
+
+    def _validate_inner(self, finding: Finding) -> tuple[bool, DropReason | None, str | None]:
         if finding.file_path not in self._files:
             return False, "file_not_in_context", f"File {finding.file_path} not in PR context"
 
@@ -74,10 +81,25 @@ class FindingValidator:
                     )
 
         if finding.suggestion:
-            new_lines = (
-                lines[: finding.line_start - 1] + finding.suggestion.split("\n") + lines[end_line:]
-            )
-            new_content = "\n".join(new_lines)
+            suggestion_lines = finding.suggestion.split("\n")
+            if len(suggestion_lines) > 20:
+                return (
+                    False,
+                    "incoherent_suggestion",
+                    "Suggestion exceeds 20 lines",
+                )
+            original_indent = actual_target_line[: len(actual_target_line) - len(actual_target_line.lstrip())]
+            suggestion_first = suggestion_lines[0]
+            suggestion_indent = suggestion_first[: len(suggestion_first) - len(suggestion_first.lstrip())]
+            if original_indent and suggestion_first.strip() and suggestion_indent != original_indent:
+                return (
+                    False,
+                    "incoherent_suggestion",
+                    "Suggestion indentation does not match target line",
+                )
+            new_content = apply_suggestion_github_exact(content, finding)
+            if new_content is None:
+                return False, "line_out_of_range", "Suggestion could not be applied to the target range"
             if not self._parses(finding.file_path, new_content):
                 return (
                     False,
@@ -118,17 +140,7 @@ class FindingValidator:
 
     @staticmethod
     def _detect_language(path: str) -> str | None:
-        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        return {
-            "py": "python",
-            "ts": "typescript",
-            "tsx": "tsx",
-            "js": "javascript",
-            "jsx": "javascript",
-            "go": "go",
-            "rs": "rust",
-            "sql": "sql",
-        }.get(ext)
+        return language_for_path(path)
 
     @classmethod
     def _has_error(cls, node: Any) -> bool:
@@ -181,3 +193,15 @@ def _find_line_by_content(lines: list[str], target_line_content: str) -> int | N
         if line == target_line_content:
             return index
     return None
+
+
+def apply_suggestion_github_exact(content: str, finding: Finding) -> str | None:
+    """Apply a GitHub suggestion block: replace line_start..line_end inclusive."""
+    lines = content.split("\n")
+    start = finding.line_start
+    end = finding.line_end or finding.line_start
+    if start < 1 or end < start or end > len(lines) or finding.suggestion is None:
+        return None
+    suggestion_lines = finding.suggestion.split("\n")
+    return "\n".join(lines[: start - 1] + suggestion_lines + lines[end:])
+
