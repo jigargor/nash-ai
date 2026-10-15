@@ -110,5 +110,7 @@ async def test_post_review_posts_when_findings_present() -> None:
 
     response = await post_review(gh, "acme", "repo", 8, "b" * 40, result)
 
-    assert response == {"id": 123}
+    assert response["id"] == 123
+    assert response["rejected"] == []
+    assert response["event"] == "COMMENT"
     assert len(gh.calls) == 1
