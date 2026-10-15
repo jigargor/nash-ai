@@ -16,6 +16,8 @@ override-dependencies = [
   "aiohttp>=3.14.3",           # PYSEC-2026-3545/3546/3547
   "click>=8.3.3",              # PYSEC-2026-2132
   "setuptools>=83.0.0",        # PYSEC-2026-3447
+  "anyio>=4.14.2",             # PYSEC-2026-4024/4025
+  "urllib3>=2.8.0",            # PYSEC-2026-4175/4176/4177
 ]
 
 [tool.ruff]
