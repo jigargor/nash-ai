@@ -62,13 +62,15 @@ async def _primary_provider_for_circuit_breaker(installation_id: int) -> str:
 
 
 def _pr_text_has_force_review_tag(title: str | None, body: str | None) -> bool:
-    combined = f"{title or ''}\n{body or ''}".lower()
-    return FORCE_REVIEW_TAG in combined
+    from app.ingestion import extract_review_control_tags
+
+    return extract_review_control_tags(f"{title or ''}\n{body or ''}")["force"]
 
 
 def _pr_text_has_skip_review_tag(title: str | None, body: str | None) -> bool:
-    combined = f"{title or ''}\n{body or ''}".lower()
-    return SKIP_REVIEW_TAG in combined
+    from app.ingestion import extract_review_control_tags
+
+    return extract_review_control_tags(f"{title or ''}\n{body or ''}")["skip"]
 
 
 async def sync_installation_from_webhook(payload: GitHubInstallationWebhookPayload) -> None:
@@ -140,6 +142,15 @@ async def queue_pull_request_review(
             repo_full_name,
             pr_number,
         )
+    if has_skip_tag and not has_force_tag:
+        logger.warning(
+            "Skipping review enqueue because %s is present installation_id=%s repo=%s pr_number=%s",
+            SKIP_REVIEW_TAG,
+            installation_id,
+            repo_full_name,
+            pr_number,
+        )
+        return
 
     provider_for_circuit = await _primary_provider_for_circuit_breaker(installation_id)
     # Check circuit breaker before doing any DB work or enqueue.
