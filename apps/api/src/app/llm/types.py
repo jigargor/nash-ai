@@ -19,6 +19,9 @@ class ModelCapabilities(BaseModel):
     structured_output: bool = False
     prompt_caching: PromptCachingStrategy = "none"
     max_context_tokens: int = Field(default=0, ge=0)
+    rejects_sampling_params: bool = False
+    supports_effort: bool = False
+    structured_outputs_native: bool = False
 
 
 class ModelPricing(BaseModel):

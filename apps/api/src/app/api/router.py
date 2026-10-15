@@ -178,6 +178,11 @@ def _serialize_review_config_yaml(config: ReviewConfig) -> str:
     payload = asdict(config)
     payload["model"]["input_per_1m_usd"] = float(config.model.input_per_1m_usd)
     payload["model"]["output_per_1m_usd"] = float(config.model.output_per_1m_usd)
+    payload["model"]["cached_input_per_1m_usd"] = (
+        float(config.model.cached_input_per_1m_usd)
+        if config.model.cached_input_per_1m_usd is not None
+        else None
+    )
     payload["budgets"] = config.budgets.model_dump(mode="json")
     payload["chunking"] = asdict(config.chunking)
     return yaml.safe_dump(payload, sort_keys=False)

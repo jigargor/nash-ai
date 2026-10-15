@@ -17,7 +17,7 @@ async def run_editor(
     pr_context: dict[str, Any],
     prior_reviews: list[dict[str, Any]],
     code_acknowledgments: list[CodeAcknowledgment],
-    model_name: str = "claude-sonnet-4-5",
+    model_name: str = "claude-sonnet-5",
     provider: ModelProvider = "anthropic",
     context: dict[str, Any] | None = None,
 ) -> EditedReview:

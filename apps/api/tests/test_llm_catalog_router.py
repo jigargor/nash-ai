@@ -14,8 +14,8 @@ def test_baseline_catalog_validates_and_hashes() -> None:
     catalog = load_baseline_catalog()
 
     assert {"anthropic", "openai", "gemini"}.issubset(catalog.provider_ids())
-    assert catalog.find_model("anthropic", "claude-sonnet-4-5") is not None
-    assert catalog.find_model("gemini", "gemini-2.5-flash-lite") is not None
+    assert catalog.find_model("anthropic", "claude-sonnet-5") is not None
+    assert catalog.find_model("gemini", "gemini-3.6-flash") is not None
     assert len(baseline_catalog_hash(catalog)) == 40
 
 
@@ -27,18 +27,18 @@ def test_router_resolves_default_primary_role_from_available_provider() -> None:
     )
 
     assert resolution.provider == "anthropic"
-    assert resolution.model == "claude-sonnet-4-6"
+    assert resolution.model == "claude-sonnet-5"
     assert resolution.role == "primary_review"
     assert resolution.explicit_pin is False
 
 
-def test_router_keeps_explicit_legacy_model_pin_when_usable() -> None:
+def test_router_keeps_explicit_active_model_pin_when_usable() -> None:
     config = ReviewConfig(
         model=ReviewModelConfig(
             provider="openai",
-            name="gpt-5.5",
-            input_per_1m_usd=Decimal("3.00"),
-            output_per_1m_usd=Decimal("12.00"),
+            name="gpt-5.2",
+            input_per_1m_usd=Decimal("1.75"),
+            output_per_1m_usd=Decimal("14.00"),
             explicit=True,
         )
     )
@@ -46,7 +46,7 @@ def test_router_keeps_explicit_legacy_model_pin_when_usable() -> None:
     resolution = resolve_model_for_role(config, "primary_review", available_providers={"openai"})
 
     assert resolution.provider == "openai"
-    assert resolution.model == "gpt-5.5"
+    assert resolution.model == "gpt-5.2"
     assert resolution.explicit_pin is True
 
 
@@ -96,8 +96,8 @@ def test_router_supports_role_tier_config_without_model_pin() -> None:
         config, "fast_path", available_providers={"openai", "anthropic"}
     )
 
-    assert resolution.provider == "openai"
-    assert resolution.model == "gpt-5-mini"
+    assert resolution.provider == "anthropic"
+    assert resolution.model == "claude-haiku-4-5"
     assert resolution.tier == "economy"
 
 
@@ -113,8 +113,8 @@ def test_fast_path_prefers_lowest_cost_economy_model() -> None:
         config, "fast_path", available_providers={"openai", "anthropic", "gemini"}
     )
 
-    assert resolution.provider == "gemini"
-    assert resolution.model == "gemini-2.5-flash-lite"
+    assert resolution.provider == "anthropic"
+    assert resolution.model == "claude-haiku-4-5"
 
 
 def test_resolve_model_attempt_chain_rotates_providers_then_lower_tiers() -> None:

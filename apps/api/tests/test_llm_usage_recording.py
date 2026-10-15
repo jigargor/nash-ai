@@ -74,7 +74,9 @@ def test_record_usage_entry_shape() -> None:
 
     record_usage(context, "anthropic", "claude-opus-4-5", usage)
 
-    entry = context["llm_usage"][0]
+    entry = dict(context["llm_usage"][0])
+    # Unknown catalog model -> cost attribution is 0.0 (never a guess), but the key is always present.
+    assert entry.pop("cost_usd") == 0.0
     assert entry == {
         "provider": "anthropic",
         "model": "claude-opus-4-5",

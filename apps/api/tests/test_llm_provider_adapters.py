@@ -2,8 +2,22 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.llm.cost import estimate_usage_cost_usd
 from app.llm.providers import StructuredOutputRequest
 from app.llm.providers import get_provider_adapter, record_usage
+
+
+def _usage_entries_without_cost(context: dict[str, object]) -> list[dict[str, object]]:
+    """Strip per-generation cost attribution so shape assertions stay pricing-agnostic."""
+    entries = context["llm_usage"]
+    assert isinstance(entries, list)
+    stripped: list[dict[str, object]] = []
+    for entry in entries:
+        assert isinstance(entry, dict)
+        copy = dict(entry)
+        assert isinstance(copy.pop("cost_usd"), float)
+        stripped.append(copy)
+    return stripped
 
 
 def test_anthropic_adapter_parses_cache_usage_and_renders_cache_control() -> None:
@@ -75,7 +89,11 @@ def test_record_usage_updates_context_and_preserves_cache_metrics() -> None:
     assert context["input_tokens"] == 100
     assert context["output_tokens"] == 25
     assert context["tokens_used"] == 125
-    assert context["llm_usage"] == [
+    expected_cost = estimate_usage_cost_usd("openai", "gpt-5.2", parsed)
+    assert expected_cost > 0
+    assert context["cost_usd"] == pytest.approx(expected_cost)
+    assert context["llm_usage"][0]["cost_usd"] == pytest.approx(expected_cost)  # type: ignore[index]
+    assert _usage_entries_without_cost(context) == [
         {
             "provider": "openai",
             "model": "gpt-5.2",
@@ -132,7 +150,7 @@ async def test_anthropic_structured_output_extracts_tool_payload(
         )
     )
     assert out.payload == {"summary": "ok", "findings": []}
-    assert context["llm_usage"] == [
+    assert _usage_entries_without_cost(context) == [
         {
             "provider": "anthropic",
             "model": "claude-sonnet-4-5",
@@ -143,6 +161,58 @@ async def test_anthropic_structured_output_extracts_tool_payload(
             "cache_creation_input_tokens": 0,
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_anthropic_claude_5_omits_sampling_and_sets_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.llm.providers import anthropic as anthropic_module
+
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        class _Messages:
+            @staticmethod
+            async def create(**kwargs: object) -> object:
+                captured.update(kwargs)
+                return SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=7, output_tokens=3, total_tokens=10),
+                    stop_reason="tool_use",
+                    content=[
+                        SimpleNamespace(
+                            type="tool_use",
+                            name="submit_review",
+                            input={"summary": "ok", "findings": []},
+                        )
+                    ],
+                )
+
+        messages = _Messages()
+
+    monkeypatch.setattr(
+        anthropic_module, "create_async_anthropic_client", lambda _api_key: _FakeClient()
+    )
+    monkeypatch.setattr(anthropic_module, "get_provider_api_key", lambda _provider: "test")
+
+    adapter = get_provider_adapter("anthropic")
+    await adapter.structured_output(
+        request=StructuredOutputRequest(
+            model_name="claude-sonnet-5",
+            system_prompt="system",
+            messages=[{"role": "user", "content": "go"}],
+            tool_name="submit_review",
+            tool_description="Submit review",
+            input_schema={"type": "object"},
+            context={"model_role": "primary_review"},
+            max_tokens=512,
+            temperature=0,
+        )
+    )
+
+    assert "temperature" not in captured
+    assert captured["output_config"] == {"effort": "medium"}
+    assert captured["timeout"] == 120.0
 
 
 @pytest.mark.anyio
@@ -199,7 +269,7 @@ async def test_openai_compatible_structured_output_extracts_tool_payload(
         )
     )
     assert out.payload == {"summary": "ok", "findings": []}
-    assert context["llm_usage"] == [
+    assert _usage_entries_without_cost(context) == [
         {
             "provider": provider,
             "model": "model",

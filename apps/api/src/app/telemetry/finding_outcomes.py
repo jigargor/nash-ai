@@ -49,6 +49,48 @@ class OutcomeDecision:
     signals: dict[str, object]
 
 
+# Canonical telemetry event per classifier outcome (see ARCHITECTURE.md events list).
+CANONICAL_OUTCOME_EVENTS: dict[str, str] = {
+    Outcome.APPLIED_DIRECTLY.value: "suggestion.accepted",
+    Outcome.APPLIED_MODIFIED.value: "suggestion.edited",
+    Outcome.DISMISSED.value: "suggestion.dismissed",
+    Outcome.ACKNOWLEDGED.value: "finding.resolved",
+    Outcome.IGNORED.value: "finding.ignored",
+    Outcome.ABANDONED.value: "finding.ignored",
+    Outcome.SUPERSEDED.value: "finding.resolved",
+}
+
+
+def canonical_outcome_event(outcome: str) -> str | None:
+    return CANONICAL_OUTCOME_EVENTS.get(outcome)
+
+
+def _emit_outcome_event(
+    *,
+    review_id: int,
+    installation_id: int,
+    finding_index: int,
+    outcome: str,
+    github_comment_id: int | None,
+) -> None:
+    canonical = canonical_outcome_event(outcome)
+    if canonical is None:
+        return
+    try:
+        from app.observability import get_observer
+
+        get_observer().record_outcome(
+            review_id=review_id,
+            installation_id=installation_id,
+            outcome=outcome,
+            canonical_outcome=canonical,
+            finding_index=finding_index,
+            github_comment_id=github_comment_id,
+        )
+    except Exception:  # telemetry must never break classification
+        return
+
+
 async def seed_pending_finding_outcomes(
     review_id: int,
     installation_id: int,
@@ -130,9 +172,20 @@ async def classify_review_outcomes(
                 else None,
                 pr_state=pr_state,
             )
+            previous_outcome = str(row.outcome or "")
             row.outcome = decision.outcome.value
             row.outcome_confidence = decision.confidence
             row.signals = decision.signals
+            if decision.outcome.value != previous_outcome:
+                _emit_outcome_event(
+                    review_id=int(review.id),
+                    installation_id=int(review.installation_id),
+                    finding_index=finding_index,
+                    outcome=decision.outcome.value,
+                    github_comment_id=(
+                        int(row.github_comment_id) if row.github_comment_id is not None else None
+                    ),
+                )
 
         await session.commit()
 

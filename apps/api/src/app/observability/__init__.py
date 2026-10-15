@@ -30,8 +30,10 @@ from app.observability.observer import (
 from app.observability.events import (
     ContextBuildEvent,
     ErrorEvent,
+    FindingDroppedEvent,
     GenerationEvent,
     LLMUsage,
+    OutcomeEvent,
     ReviewEndEvent,
     ReviewStartEvent,
     StageEndEvent,
@@ -44,6 +46,7 @@ from app.observability.events import (
 from app.observability.sinks import (
     DBSink,
     InMemoryTestSink,
+    JsonlSink,
     LangfuseSink,
     ObservabilitySink,
     StructuredLogSink,
@@ -83,10 +86,12 @@ __all__ = [
     "ValidationEvent",
     "ContextBuildEvent",
     "ErrorEvent",
-    # Sinks
+    "FindingDroppedEvent",
+    "OutcomeEvent",
     "ObservabilitySink",
     "DBSink",
     "InMemoryTestSink",
+    "JsonlSink",
     "LangfuseSink",
     "StructuredLogSink",
 ]

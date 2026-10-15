@@ -27,12 +27,17 @@ ignore_paths:
   - "**/*.min.js"
   - "**/*.lock"
 
+# When to submit the GitHub review as REQUEST_CHANGES instead of COMMENT:
+#   critical_only (default) | high_or_above | never | always
+delivery:
+  request_changes: critical_only
+
 model:
   provider: anthropic
-  name: claude-sonnet-4-5
+  name: claude-sonnet-5
   pricing:
-    input_per_1m: 3.00
-    output_per_1m: 15.00
+    input_per_1m: 2.00
+    output_per_1m: 10.00
 
 # Primary + challenger + conditional tie-break
 max_mode:
@@ -41,10 +46,10 @@ max_mode:
   high_risk_severity: high
   challenger:
     provider: openai
-    name: gpt-5.5
+    name: gpt-5.6-terra
   tie_break:
-    provider: gemini
-    name: gemini-2.5-pro
+    provider: anthropic
+    name: claude-opus-5
 
 budgets:
   system_prompt: 3000

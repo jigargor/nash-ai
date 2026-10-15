@@ -170,7 +170,7 @@ class WorkerSettings:
     queue_name = default_queue_name
     max_tries = 1
     max_jobs = 5
-    job_timeout = 300
+    job_timeout = 600
     keep_result = 3600
     on_startup = worker_startup
     cron_jobs = [
