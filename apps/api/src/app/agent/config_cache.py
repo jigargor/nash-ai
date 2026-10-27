@@ -61,7 +61,7 @@ def _deserialize_config(raw_value: str) -> ReviewConfig:
         challenger_provider=challenger_provider,
         challenger_model=str(max_mode_data.get("challenger_model", "gpt-5.6-terra")),
         tie_break_provider=tie_break_provider,
-        tie_break_model=str(max_mode_data.get("tie_break_model", "claude-opus-5")),
+        tie_break_model=str(max_mode_data.get("tie_break_model", "claude-opus-5-5")),
         conflict_threshold=int(max_mode_data.get("conflict_threshold", 35)),
         high_risk_severity=str(max_mode_data.get("high_risk_severity", "high")),
     )

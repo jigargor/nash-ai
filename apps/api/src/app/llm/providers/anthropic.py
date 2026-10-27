@@ -95,12 +95,15 @@ class AnthropicAdapter(BaseProviderAdapter):
             "messages": request.messages,
             "timeout": 120.0,
         }
-        if not capabilities.rejects_sampling_params:
-            request_kwargs["temperature"] = temp
-        effort = request.effort or _optional_effort(request.context.get("llm_effort"))
-        model_role = _optional_str(request.context.get("model_role"))
-        if capabilities.supports_effort and (effort or model_role in {None, "primary_review"}):
-            request_kwargs["output_config"] = {"effort": effort or "medium"}
+        request_kwargs.update(
+            anthropic_create_kwargs(
+                request.model_name,
+                temperature=temp,
+                effort=request.effort or _optional_effort(request.context.get("llm_effort")),
+                model_role=_optional_str(request.context.get("model_role")),
+                capabilities=capabilities,
+            )
+        )
         try:
             response = await client.messages.create(**request_kwargs)  # type: ignore[call-overload]
         except Exception as exc:
@@ -200,6 +203,34 @@ def _optional_effort(value: object) -> str | None:
     return None
 
 
+_ECONOMY_MODEL_ROLES = frozenset({"fast_path", "editor", "config_generator"})
+
+
+def anthropic_create_kwargs(
+    model_name: str,
+    *,
+    temperature: float | None = 0.0,
+    effort: str | None = None,
+    model_role: str | None = None,
+    capabilities: ModelCapabilities | None = None,
+) -> dict[str, Any]:
+    """Build sampling/effort kwargs safe for Claude 5.x (no temperature when rejected)."""
+    caps = capabilities if capabilities is not None else _model_capabilities(model_name)
+    extras: dict[str, Any] = {}
+    if not caps.rejects_sampling_params and temperature is not None:
+        extras["temperature"] = temperature
+    if not caps.supports_effort:
+        return extras
+    resolved_effort = effort
+    if resolved_effort is None and model_role in _ECONOMY_MODEL_ROLES:
+        resolved_effort = "low"
+    elif resolved_effort is None and model_role in {None, "primary_review"}:
+        resolved_effort = "medium"
+    if resolved_effort is not None:
+        extras["output_config"] = {"effort": resolved_effort}
+    return extras
+
+
 def _model_capabilities(model_name: str) -> ModelCapabilities:
     record = load_baseline_catalog().find_model("anthropic", model_name)
     if record is not None:
@@ -214,5 +245,5 @@ def _is_claude_5_model(model_name: str) -> bool:
     normalized = model_name.lower()
     return any(
         family in normalized
-        for family in ("sonnet-5", "opus-5", "fable-5", "mythos-5")
+        for family in ("haiku-5", "sonnet-5", "opus-5", "fable-5", "mythos-5")
     )

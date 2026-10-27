@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
-    anthropic_default_model: str = "claude-sonnet-5"
+    anthropic_default_model: str = "claude-sonnet-5-5"
     openai_default_model: str = "gpt-5.6-terra"
     gemini_default_model: str = "gemini-3.1-pro-preview"
     environment: str = "development"

@@ -216,6 +216,57 @@ async def test_anthropic_claude_5_omits_sampling_and_sets_effort(
 
 
 @pytest.mark.anyio
+async def test_anthropic_structured_output_uses_low_effort_for_fast_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.llm.providers import anthropic as anthropic_module
+
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        class _Messages:
+            @staticmethod
+            async def create(**kwargs: object) -> object:
+                captured.update(kwargs)
+                return SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=3, output_tokens=1, total_tokens=4),
+                    stop_reason="tool_use",
+                    content=[
+                        SimpleNamespace(
+                            type="tool_use",
+                            name="submit_fast_path",
+                            input={"decision": "full_review"},
+                        )
+                    ],
+                )
+
+        messages = _Messages()
+
+    monkeypatch.setattr(
+        anthropic_module, "create_async_anthropic_client", lambda _api_key: _FakeClient()
+    )
+    monkeypatch.setattr(anthropic_module, "get_provider_api_key", lambda _provider: "test")
+
+    adapter = get_provider_adapter("anthropic")
+    await adapter.structured_output(
+        request=StructuredOutputRequest(
+            model_name="claude-haiku-5-5",
+            system_prompt="system",
+            messages=[{"role": "user", "content": "go"}],
+            tool_name="submit_fast_path",
+            tool_description="Submit fast path",
+            input_schema={"type": "object"},
+            context={"model_role": "fast_path"},
+            max_tokens=512,
+            temperature=0,
+        )
+    )
+
+    assert "temperature" not in captured
+    assert captured["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("provider", ["openai", "gemini"])
 async def test_openai_compatible_structured_output_extracts_tool_payload(
     monkeypatch: pytest.MonkeyPatch,

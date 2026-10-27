@@ -18,7 +18,7 @@ class _GitHubFileReader(Protocol):
 
 DEFAULT_CONFIDENCE_THRESHOLD = 85
 DEFAULT_MODEL_PROVIDER: ModelProvider = "anthropic"
-DEFAULT_MODEL_NAME = "claude-sonnet-5"
+DEFAULT_MODEL_NAME = "claude-sonnet-5-5"
 DEFAULT_SEVERITY_THRESHOLD = "low"
 DEFAULT_MAX_FINDINGS_PER_PR = 50
 ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
@@ -32,7 +32,7 @@ class ReviewModelConfig:
     name: str = DEFAULT_MODEL_NAME
     input_per_1m_usd: Decimal = Decimal("2.00")
     output_per_1m_usd: Decimal = Decimal("10.00")
-    cached_input_per_1m_usd: Decimal | None = Decimal("0.20")
+    cached_input_per_1m_usd: Decimal | None = Decimal("0.10")
     explicit: bool = False
 
 
@@ -42,7 +42,7 @@ class MaxModeConfig:
     challenger_provider: ModelProvider = "openai"
     challenger_model: str = "gpt-5.6-terra"
     tie_break_provider: ModelProvider = "anthropic"
-    tie_break_model: str = "claude-opus-5"
+    tie_break_model: str = "claude-opus-5-5"
     conflict_threshold: int = 35
     high_risk_severity: str = "high"
 
@@ -313,7 +313,7 @@ def _parse_max_mode(raw_value: object) -> MaxModeConfig:
     tie_break = _parse_model_ref(
         raw_value.get("tie_break"),
         default_provider="anthropic",
-        default_name="claude-opus-5",
+        default_name="claude-opus-5-5",
     )
     return MaxModeConfig(
         enabled=enabled,
