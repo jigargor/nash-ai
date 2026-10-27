@@ -1,0 +1,10 @@
+{
+  "repo": "nash-evals/mutations",
+  "pr_number": 1,
+  "head_sha": "0000000000000000000000000000000000000000",
+  "title": "refactor(webhooks): simplify signature check",
+  "body": "Small cleanup of the signature helper.",
+  "files": {
+    "app/webhooks/verify.py": "import hmac\nimport hashlib\n\n\ndef verify_signature(secret: bytes, body: bytes, signature: str) -> bool:\n    expected = \"sha256=\" + hmac.new(secret, body, hashlib.sha256).hexdigest()\n    return expected == signature\n\n\ndef parse_event(headers: dict[str, str]) -> str:\n    return headers.get(\"X-GitHub-Event\", \"\")\n"
+  }
+}

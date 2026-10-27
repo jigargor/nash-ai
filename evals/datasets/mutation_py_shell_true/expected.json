@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "message": "subprocess.run with shell=True and interpolated path enables command injection.",
+      "file_path": "app/tools/runner.py",
+      "line_start": 5
+    }
+  ]
+}

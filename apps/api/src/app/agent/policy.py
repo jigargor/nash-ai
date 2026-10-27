@@ -8,13 +8,39 @@ from app.agent.schema import Finding, ReviewResult
 from app.agent.vendor_detect import auto_tag_vendor_claims
 
 
+INFERENCE_CONFIDENCE_CAP = 75
+"""Schema cap: ``evidence='inference'`` findings can never exceed this confidence."""
+
+INFERENCE_CONFIDENCE_FLOOR = 50
+"""Separate floor for inference findings, which can never reach the default 85 threshold."""
+
+_INFERENCE_ELIGIBLE_SEVERITIES = frozenset({"low", "medium"})
+
+
+def effective_confidence_threshold(finding: Finding, threshold: int) -> int:
+    """Evidence-aware threshold.
+
+    Inference findings are capped at confidence 75 by the schema, so a global threshold above 75
+    would silently delete the whole tier. Medium/low inference findings use a separate floor;
+    every other evidence tier uses ``threshold`` unchanged.
+    """
+    if (
+        finding.evidence == "inference"
+        and finding.severity in _INFERENCE_ELIGIBLE_SEVERITIES
+        and finding.confidence <= INFERENCE_CONFIDENCE_CAP
+    ):
+        return min(threshold, INFERENCE_CONFIDENCE_FLOOR)
+    return threshold
+
+
 def apply_confidence_threshold(
     result: ReviewResult, threshold: int
 ) -> tuple[ReviewResult, list[dict[str, object]]]:
     kept_findings: list[Finding] = []
     dropped: list[dict[str, object]] = []
     for finding in result.findings:
-        if finding.confidence >= threshold:
+        effective_threshold = effective_confidence_threshold(finding, threshold)
+        if finding.confidence >= effective_threshold:
             kept_findings.append(finding)
             continue
         dropped.append(
@@ -23,7 +49,8 @@ def apply_confidence_threshold(
                 "line_start": finding.line_start,
                 "line_end": finding.line_end or finding.line_start,
                 "confidence": finding.confidence,
-                "threshold": threshold,
+                "threshold": effective_threshold,
+                "evidence": finding.evidence,
                 "message_excerpt": finding.message[:120],
             }
         )

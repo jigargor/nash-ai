@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import React from "react";
 
@@ -12,13 +12,23 @@ const forceRecoverState = {
   isPending: false,
 };
 
+const reviewState: { status: string; debugArtifacts: Record<string, unknown> | null } = {
+  status: "done",
+  debugArtifacts: null,
+};
+const useReviewStreamMock = vi.fn((_reviewId: number, _installationId: number, _options?: { enabled?: boolean }) => ({
+  events: [],
+  connectionState: "connected",
+}));
+
 const useReviewMock = vi.fn(
   (_reviewId: number, _installationId: number, _options?: { enabled?: boolean }) => ({
   isLoading: false,
   isError: false,
   data: {
     id: 1,
-    status: "done",
+    status: reviewState.status,
+    debug_artifacts: reviewState.debugArtifacts,
     tokens_used: 123,
     cost_usd: "0.120000",
     findings: {
@@ -32,6 +42,8 @@ const useReviewMock = vi.fn(
           line_start: 1,
           line_end: 1,
           suggestion: "a = 1",
+          target_line_content: "a = 0",
+          patch_hunk: "@@ -1 +1 @@",
           confidence: 90,
           evidence: "diff_visible",
         },
@@ -77,10 +89,8 @@ vi.mock("@/hooks/use-review", () => ({
 }));
 
 vi.mock("@/hooks/use-review-stream", () => ({
-  useReviewStream: () => ({
-    events: [],
-    connectionState: "connected",
-  }),
+  useReviewStream: (reviewId: number, installationId: number, options?: { enabled?: boolean }) =>
+    useReviewStreamMock(reviewId, installationId, options),
 }));
 
 vi.mock("@/hooks/use-review-model-audits", () => ({
@@ -108,6 +118,9 @@ describe("PrReviewPageClient", () => {
   beforeEach(() => {
     rerunState.isPending = false;
     forceRecoverState.isPending = false;
+    reviewState.status = "done";
+    reviewState.debugArtifacts = null;
+    useReviewStreamMock.mockClear();
     useReviewMock.mockClear();
     useReviewModelAuditsMock.mockClear();
     delete process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
@@ -125,6 +138,57 @@ describe("PrReviewPageClient", () => {
     fireEvent.keyDown(window, { key: "j" });
 
     expect(useReviewUiStore.getState().selectedFindingIndex).toBe(1);
+  });
+
+  it("ignores j/k while typing in an input", () => {
+    render(
+      <>
+        <input aria-label="search" />
+        <PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />
+      </>,
+    );
+
+    fireEvent.keyDown(screen.getByLabelText("search"), { key: "j" });
+
+    expect(useReviewUiStore.getState().selectedFindingIndex).toBe(0);
+  });
+
+  it("hides dismissed findings by default and reveals them with a badge when toggled", () => {
+    reviewState.debugArtifacts = { dismissed_findings: [0] };
+    const { container } = render(
+      <PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />,
+    );
+    const scoped = within(container);
+
+    expect(scoped.queryAllByText("first")).toHaveLength(0);
+    expect(scoped.getAllByText("second").length).toBeGreaterThan(0);
+    expect(scoped.queryAllByText("DISMISSED")).toHaveLength(0);
+
+    fireEvent.click(scoped.getByRole("button", { name: /Show dismissed \(1\)/ }));
+
+    expect(scoped.getAllByText("first").length).toBeGreaterThan(0);
+    expect(scoped.getAllByText("DISMISSED")).toHaveLength(1);
+  });
+
+  it("enables the review stream only while the review is in flight", () => {
+    render(<PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />);
+    expect(useReviewStreamMock.mock.calls.at(-1)?.[2]).toEqual({ enabled: false });
+
+    cleanup();
+    useReviewStreamMock.mockClear();
+    reviewState.status = "running";
+    render(<PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />);
+    expect(useReviewStreamMock.mock.calls.at(-1)?.[2]).toEqual({ enabled: true });
+  });
+
+  it("renders target line content and severity in the diff viewer placeholder", () => {
+    const { container } = render(
+      <PrReviewPageClient owner="acme" repo="repo" prNumber="1" reviewId={1} installationId={10} />,
+    );
+    const scoped = within(container);
+    expect(scoped.getAllByText("HIGH").length).toBeGreaterThan(0);
+    expect(scoped.getByLabelText("Target line content").textContent).toBe("a = 0");
+    expect(scoped.getByLabelText("Patch hunk").textContent).toBe("@@ -1 +1 @@");
   });
 
   it("links finding click to diff selection state", () => {

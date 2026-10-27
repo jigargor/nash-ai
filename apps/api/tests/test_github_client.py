@@ -881,3 +881,162 @@ async def test_resolve_installation_id_raises_when_no_installations(
     with patch("app.github.smoke_check.httpx.AsyncClient", return_value=mock_client):
         with pytest.raises(RuntimeError, match="No GitHub App installations"):
             await resolve_installation_id()
+
+
+# ---------------------------------------------------------------------------
+# Review-creating POSTs are never auto-retried on 5xx; GET retries transport errors
+# ---------------------------------------------------------------------------
+
+
+def _scripted_http_client(outcomes: list[httpx.Response | Exception]) -> MagicMock:
+    calls: list[tuple[str, str]] = []
+    queue = list(outcomes)
+
+    async def _request(method: str, url: str, **_kwargs: object) -> httpx.Response:
+        calls.append((method, url))
+        outcome = queue.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    http_client = MagicMock()
+    http_client.request = _request
+    http_client.calls = calls
+    return http_client
+
+
+@pytest.mark.anyio
+async def test_request_with_retry_does_not_retry_review_post_on_5xx() -> None:
+    http_client = _scripted_http_client(
+        [_json_response({"message": "boom"}, status=502), _json_response({"id": 1})]
+    )
+
+    with patch("app.github.client.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+        with pytest.raises(httpx.HTTPStatusError):
+            await _request_with_retry(
+                "POST",
+                "https://api.github.com/repos/acme/repo/pulls/7/reviews",
+                {},
+                client=http_client,
+                json={"event": "COMMENT"},
+            )
+
+    assert len(http_client.calls) == 1
+    sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_request_with_retry_still_retries_other_posts_on_5xx() -> None:
+    http_client = _scripted_http_client(
+        [_json_response({"message": "boom"}, status=502), _json_response({"id": 1})]
+    )
+
+    with patch("app.github.client.asyncio.sleep", new=AsyncMock()):
+        resp = await _request_with_retry(
+            "POST",
+            "https://api.github.com/repos/acme/repo/issues/7/comments",
+            {},
+            client=http_client,
+            json={"body": "hi"},
+        )
+
+    assert resp.status_code == 200
+    assert len(http_client.calls) == 2
+
+
+@pytest.mark.anyio
+async def test_request_with_retry_still_retries_review_post_on_rate_limit() -> None:
+    http_client = _scripted_http_client(
+        [_json_response({"message": "slow down"}, status=429), _json_response({"id": 1})]
+    )
+
+    with patch("app.github.client.asyncio.sleep", new=AsyncMock()):
+        resp = await _request_with_retry(
+            "POST",
+            "https://api.github.com/repos/acme/repo/pulls/7/reviews",
+            {},
+            client=http_client,
+            json={"event": "COMMENT"},
+        )
+
+    assert resp.status_code == 200
+    assert len(http_client.calls) == 2
+
+
+@pytest.mark.anyio
+async def test_request_with_retry_retries_get_transport_errors() -> None:
+    http_client = _scripted_http_client(
+        [httpx.ConnectError("reset"), _json_response({"ok": True})]
+    )
+
+    with patch("app.github.client.asyncio.sleep", new=AsyncMock()):
+        resp = await _request_with_retry(
+            "GET", "https://api.github.com/repos/acme/repo/pulls/7", {}, client=http_client
+        )
+
+    assert resp.status_code == 200
+    assert len(http_client.calls) == 2
+
+
+@pytest.mark.anyio
+async def test_request_with_retry_does_not_retry_review_post_transport_errors() -> None:
+    http_client = _scripted_http_client([httpx.ReadTimeout("slow"), _json_response({"id": 1})])
+
+    with patch("app.github.client.asyncio.sleep", new=AsyncMock()):
+        with pytest.raises(httpx.ReadTimeout):
+            await _request_with_retry(
+                "POST",
+                "https://api.github.com/repos/acme/repo/pulls/7/reviews",
+                {},
+                client=http_client,
+                json={"event": "COMMENT"},
+            )
+
+    assert len(http_client.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# graphql / get_compare_diff
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_graphql_posts_query_and_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    retry_mock = AsyncMock(return_value=_json_response({"data": {"viewer": {"login": "bot"}}}))
+    monkeypatch.setattr("app.github.client._request_with_retry", retry_mock)
+
+    payload = await _fake_client().graphql("query { viewer { login } }", {"a": 1})
+
+    assert payload == {"data": {"viewer": {"login": "bot"}}}
+    args, kwargs = retry_mock.await_args
+    assert args[0] == "POST"
+    assert args[1] == "https://api.github.com/graphql"
+    assert kwargs["json"] == {"query": "query { viewer { login } }", "variables": {"a": 1}}
+
+
+@pytest.mark.anyio
+async def test_graphql_raises_when_response_contains_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retry_mock = AsyncMock(
+        return_value=_json_response({"errors": [{"message": "Could not resolve"}]})
+    )
+    monkeypatch.setattr("app.github.client._request_with_retry", retry_mock)
+
+    with pytest.raises(RuntimeError, match="Could not resolve"):
+        await _fake_client().graphql("query { nope }", {})
+
+
+@pytest.mark.anyio
+async def test_get_compare_diff_requests_pinned_shas_with_diff_accept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retry_mock = AsyncMock(return_value=_text_response("diff --git a/x b/x\n"))
+    monkeypatch.setattr("app.github.client._request_with_retry", retry_mock)
+
+    diff = await _fake_client().get_compare_diff("acme", "repo", "base1", "head2")
+
+    assert diff.startswith("diff --git")
+    args, kwargs = retry_mock.await_args
+    assert args[1] == "https://api.github.com/repos/acme/repo/compare/base1...head2"
+    assert kwargs["headers"]["Accept"] == "application/vnd.github.v3.diff"

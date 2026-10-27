@@ -1,37 +1,67 @@
 from collections import Counter
+from collections.abc import Sequence
 
 from sqlalchemy import desc, select
 
 from app.db.models import Review
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, set_installation_context
 
 
 async def _recent_debug_artifact_rows(
     *,
     limit: int,
     installation_id: int | None = None,
+    installation_ids: Sequence[int] | None = None,
     repo_full_name: str | None = None,
 ) -> list[tuple[int, object]]:
+    """Fetch recent (review_id, debug_artifacts) rows.
+
+    When ``installation_id`` or ``installation_ids`` is provided, tenant context is set per
+    installation before each query so RLS applies, and only those installations are read.
+    """
+    scoped_ids: list[int] | None = None
+    if installation_id is not None:
+        scoped_ids = [installation_id]
+    elif installation_ids is not None:
+        scoped_ids = sorted(set(installation_ids))
+
     async with AsyncSessionLocal() as session:
-        query = select(Review.id, Review.debug_artifacts).order_by(desc(Review.id)).limit(limit)
-        if installation_id is not None:
-            query = query.where(Review.installation_id == installation_id)
-        if repo_full_name is not None:
-            query = query.where(Review.repo_full_name == repo_full_name)
-        result = await session.execute(query)
-        return [(int(row[0]), row[1]) for row in result.all()]
+        if scoped_ids is None:
+            query = select(Review.id, Review.debug_artifacts).order_by(desc(Review.id)).limit(limit)
+            if repo_full_name is not None:
+                query = query.where(Review.repo_full_name == repo_full_name)
+            result = await session.execute(query)
+            return [(int(row[0]), row[1]) for row in result.all()]
+
+        collected: list[tuple[int, object]] = []
+        for scoped_id in scoped_ids:
+            await set_installation_context(session, scoped_id)
+            query = (
+                select(Review.id, Review.debug_artifacts)
+                .where(Review.installation_id == scoped_id)
+                .order_by(desc(Review.id))
+                .limit(limit)
+            )
+            if repo_full_name is not None:
+                query = query.where(Review.repo_full_name == repo_full_name)
+            result = await session.execute(query)
+            collected.extend((int(row[0]), row[1]) for row in result.all())
+        collected.sort(key=lambda item: item[0], reverse=True)
+        return collected[:limit]
 
 
 async def summarize_target_line_mismatch_telemetry(
     *,
     limit: int = 200,
     installation_id: int | None = None,
+    installation_ids: Sequence[int] | None = None,
     repo_full_name: str | None = None,
 ) -> dict[str, object]:
     """Summarize recent persisted mismatch telemetry for rollout checks."""
     rows = await _recent_debug_artifact_rows(
         limit=limit,
         installation_id=installation_id,
+        installation_ids=installation_ids,
         repo_full_name=repo_full_name,
     )
 
@@ -62,12 +92,14 @@ async def summarize_verified_fact_cap_telemetry(
     *,
     limit: int = 200,
     installation_id: int | None = None,
+    installation_ids: Sequence[int] | None = None,
     repo_full_name: str | None = None,
 ) -> dict[str, object]:
     """Summarize verified_fact cap events persisted in debug artifacts."""
     rows = await _recent_debug_artifact_rows(
         limit=limit,
         installation_id=installation_id,
+        installation_ids=installation_ids,
         repo_full_name=repo_full_name,
     )
 
@@ -112,12 +144,14 @@ async def summarize_verified_fact_retrieval_telemetry(
     *,
     limit: int = 200,
     installation_id: int | None = None,
+    installation_ids: Sequence[int] | None = None,
     repo_full_name: str | None = None,
 ) -> dict[str, object]:
     """Summarize verified fact retrieval stats captured during prompt assembly."""
     rows = await _recent_debug_artifact_rows(
         limit=limit,
         installation_id=installation_id,
+        installation_ids=installation_ids,
         repo_full_name=repo_full_name,
     )
 

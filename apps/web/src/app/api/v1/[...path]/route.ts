@@ -62,6 +62,15 @@ function isReviewRerunPath(path: string[]): boolean {
   return path.length === 3 && path[0] === "reviews" && path[2] === "rerun";
 }
 
+function isInstallationsSyncPath(path: string[]): boolean {
+  return (
+    path.length === 3 &&
+    path[0] === "users" &&
+    path[1] === "me" &&
+    path[2] === "installations-sync"
+  );
+}
+
 async function proxyApiRequest(request: Request, context: ApiProxyRouteContext): Promise<Response> {
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE_NAME)?.value;
@@ -101,8 +110,19 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   }
 
   const { path } = await context.params;
+  // Only the server-side OAuth callback may sync installations (hits API directly).
+  if (isInstallationsSyncPath(path)) {
+    return errorResponse(
+      makeApiError(403, "Installation sync is not available through the browser proxy.", {
+        code: "AUTH_FORBIDDEN",
+        family: "auth",
+        action: "none",
+      }),
+    );
+  }
   const cfClearanceCookie = cookieStore.get("cf_clearance")?.value;
-  if (isReviewRerunPath(path) && !cfClearanceCookie) {
+  const turnstileConfigured = Boolean(process.env.TURNSTILE_SECRET_KEY?.trim());
+  if (isReviewRerunPath(path) && turnstileConfigured && !cfClearanceCookie) {
     return errorResponse(
       makeApiError(403, "Turnstile clearance cookie required to re-run reviews.", {
         code: "AUTH_CLEARANCE_REQUIRED",

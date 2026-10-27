@@ -151,3 +151,85 @@ async def test_run_review_full_pipeline_marks_done() -> None:
         await run_review(int(review.id), _INSTALLATION_ID, _OWNER, _REPO, _PR_NUMBER, _HEAD_SHA)
 
     assert review.status == "done"
+
+
+class _RecordingRedis:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    async def delete(self, key: str) -> int:
+        self.deleted.append(key)
+        return 1
+
+
+@pytest.mark.anyio
+async def test_run_review_supersedes_when_pr_head_moved_and_releases_lock() -> None:
+    review = _make_fake_review()
+    mock_gh = _make_mock_gh()
+    mock_gh.get_pull_request.return_value = {
+        **mock_gh.get_pull_request.return_value,
+        "head": {"sha": "f" * 40},
+    }
+    post_review_mock = AsyncMock(return_value={})
+    redis = _RecordingRedis()
+
+    with (
+        patch("app.agent.runner.AsyncSessionLocal", return_value=_make_fake_session(review)),
+        patch(
+            "app.agent.runner.set_installation_context",
+            new=AsyncMock(side_effect=_fake_set_installation_context),
+        ),
+        patch("app.agent.runner.GitHubClient.for_installation", return_value=mock_gh),
+        patch("app.agent.runner._record_token_budget_usage", new=AsyncMock()),
+        patch("app.agent.runner.record_review_trace"),
+        patch("app.agent.runner.post_review", new=post_review_mock),
+        patch("app.agent.runner.get_cached_review_config", new=AsyncMock(return_value=None)),
+        patch("app.agent.runner.set_cached_review_config", new=AsyncMock()),
+    ):
+        await run_review(
+            int(review.id),
+            _INSTALLATION_ID,
+            _OWNER,
+            _REPO,
+            _PR_NUMBER,
+            _HEAD_SHA,
+            redis=redis,
+        )
+
+    assert review.status == "superseded"
+    assert "superseded" in (review.findings or {}).get("summary", "").lower()
+    post_review_mock.assert_not_awaited()
+    mock_gh.get_pull_request_diff.assert_not_awaited()
+    assert redis.deleted == [f"review-submit:{_INSTALLATION_ID}:{_OWNER}/{_REPO}:{_PR_NUMBER}:{_HEAD_SHA}"]
+    mock_gh.aclose.assert_awaited()
+
+
+@pytest.mark.anyio
+async def test_run_review_prefers_compare_diff_pinned_to_job_head() -> None:
+    review = _make_fake_review()
+    mock_gh = _make_mock_gh(draft=True)
+    mock_gh.get_pull_request.return_value = {
+        **mock_gh.get_pull_request.return_value,
+        "base": {"sha": "b" * 40},
+    }
+    mock_gh.get_compare_diff.return_value = mock_gh.get_pull_request_diff.return_value
+
+    with (
+        patch("app.agent.runner.AsyncSessionLocal", return_value=_make_fake_session(review)),
+        patch(
+            "app.agent.runner.set_installation_context",
+            new=AsyncMock(side_effect=_fake_set_installation_context),
+        ),
+        patch("app.agent.runner.GitHubClient.for_installation", return_value=mock_gh),
+        patch("app.agent.runner._record_token_budget_usage", new=AsyncMock()),
+        patch("app.agent.runner.record_review_trace"),
+        patch("app.agent.runner.get_cached_review_config", new=AsyncMock(return_value=None)),
+        patch("app.agent.runner.set_cached_review_config", new=AsyncMock()),
+        patch("app.agent.profiler_cache.get_cached_repo_profile", new=AsyncMock(return_value=None)),
+        patch("app.agent.profiler_cache.set_cached_repo_profile", new=AsyncMock()),
+    ):
+        await run_review(int(review.id), _INSTALLATION_ID, _OWNER, _REPO, _PR_NUMBER, _HEAD_SHA)
+
+    mock_gh.get_compare_diff.assert_awaited_once_with(_OWNER, _REPO, "b" * 40, _HEAD_SHA)
+    mock_gh.get_pull_request_diff.assert_not_awaited()
+    assert review.status == "skipped"

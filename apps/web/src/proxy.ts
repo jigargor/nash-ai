@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
+import { isDashboardRoute } from "@/lib/auth/dashboard-routes";
 import { parseSessionToken } from "@/lib/auth/session";
 
 // ---------------------------------------------------------------------------
@@ -59,13 +60,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   }
 
   // Protect dashboard routes — redirect to login if session is invalid
-  const isDashboardRoute =
-    pathname.startsWith("/dashboard") ||
-    pathname.startsWith("/repos") ||
-    pathname.startsWith("/reviews") ||
-    pathname.startsWith("/code-tour") ||
-    pathname.startsWith("/settings");
-  if (!isDashboardRoute) return NextResponse.next();
+  if (!isDashboardRoute(pathname)) return NextResponse.next();
 
   const token = request.cookies.get(AUTH_COOKIE_NAME)?.value;
   const session = await parseSessionToken(token);
@@ -84,5 +79,7 @@ export const config = {
     "/reviews/:path*",
     "/code-tour/:path*",
     "/settings/:path*",
+    "/models/:path*",
+    "/evaluate-external/:path*",
   ],
 };

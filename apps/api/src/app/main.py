@@ -161,9 +161,15 @@ async def request_context_middleware(request: Request, call_next: Any) -> Respon
 @app.middleware("http")
 async def usage_event_middleware(request: Request, call_next: Any) -> Response:
     response = await call_next(request)
+    # Only record successful authenticated API responses. Unauthenticated or
+    # unauthorized requests must not write tenant-scoped usage rows.
+    if response.status_code in {401, 403}:
+        return response
     if not request.url.path.startswith("/api/v1/"):
         return response
     if request.url.path.startswith("/api/v1/usage/"):
+        return response
+    if not (request.headers.get("X-Api-Key") and request.headers.get("X-Dashboard-User-Token")):
         return response
     installation_id_raw = request.query_params.get("installation_id")
     if installation_id_raw is None:
@@ -174,14 +180,25 @@ async def usage_event_middleware(request: Request, call_next: Any) -> Response:
         return response
     if installation_id <= 0:
         return response
-    service = (request.headers.get("X-Usage-Service") or "dashboard-bff").strip() or "dashboard-bff"
-    await _record_usage_event(
-        installation_id=installation_id,
-        service=service,
-        endpoint=request.url.path,
-        method=request.method,
-        status_code=response.status_code,
-    )
+    # Allowlist the usage service label; never trust arbitrary client values.
+    raw_service = (request.headers.get("X-Usage-Service") or "dashboard-bff").strip()
+    service = raw_service if raw_service in {"dashboard-bff", "admin"} else "dashboard-bff"
+    try:
+        await _record_usage_event(
+            installation_id=installation_id,
+            service=service,
+            endpoint=request.url.path,
+            method=request.method,
+            status_code=response.status_code,
+        )
+    except Exception:
+        # Never fail the API response because of usage telemetry (e.g. missing FK).
+        logger.debug(
+            "usage_event_middleware skipped installation_id=%s path=%s",
+            installation_id,
+            request.url.path,
+            exc_info=True,
+        )
     return response
 
 

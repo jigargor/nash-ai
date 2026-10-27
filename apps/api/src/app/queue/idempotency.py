@@ -5,20 +5,35 @@ REVIEW_SUBMISSION_LOCK_TTL_SECONDS = 15 * 60
 
 def review_submission_lock_key(
     installation_id: int,
+    repo_full_name: str,
     pr_number: int,
     head_sha: str,
 ) -> str:
-    return f"review-submit:{installation_id}:{pr_number}:{head_sha}"
+    return f"review-submit:{installation_id}:{repo_full_name.lower()}:{pr_number}:{head_sha}"
 
 
 async def acquire_review_submission_lock(
     redis: ArqRedis,
     *,
     installation_id: int,
+    repo_full_name: str,
     pr_number: int,
     head_sha: str,
     ttl_seconds: int = REVIEW_SUBMISSION_LOCK_TTL_SECONDS,
 ) -> bool:
-    lock_key = review_submission_lock_key(installation_id, pr_number, head_sha)
+    lock_key = review_submission_lock_key(installation_id, repo_full_name, pr_number, head_sha)
     acquired = await redis.set(lock_key, "1", ex=ttl_seconds, nx=True)
     return bool(acquired)
+
+
+async def release_review_submission_lock(
+    redis: ArqRedis,
+    *,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str,
+) -> None:
+    """Release the submission lock so a later retry/re-run of the same head can enqueue."""
+    lock_key = review_submission_lock_key(installation_id, repo_full_name, pr_number, head_sha)
+    await redis.delete(lock_key)

@@ -109,6 +109,7 @@ async def retry_review(
         lock_acquired = await acquire_review_submission_lock(
             redis,
             installation_id=int(review.installation_id),
+            repo_full_name=str(review.repo_full_name),
             pr_number=int(review.pr_number),
             head_sha=review.pr_head_sha,
         )

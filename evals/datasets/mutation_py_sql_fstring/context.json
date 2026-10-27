@@ -1,0 +1,10 @@
+{
+  "repo": "nash-evals/mutations",
+  "pr_number": 1,
+  "head_sha": "0000000000000000000000000000000000000000",
+  "title": "perf(db): inline user lookup query",
+  "body": "Avoids the parameter tuple allocation on the hot path.",
+  "files": {
+    "app/db/users.py": "from typing import Any\n\n\ndef fetch_user(cursor: Any, user_id: str) -> dict[str, Any] | None:\n    cursor.execute(f\"SELECT id, login FROM users WHERE id = {user_id}\")\n    row = cursor.fetchone()\n    if row is None:\n        return None\n    return {\"id\": row[0], \"login\": row[1]}\n\n\ndef count_users(cursor: Any) -> int:\n    cursor.execute(\"SELECT COUNT(*) FROM users\")\n    return int(cursor.fetchone()[0])\n"
+  }
+}

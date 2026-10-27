@@ -98,6 +98,8 @@ async def post_review_batched(
         return {}
 
     findings = assign_finding_ids(list(result.findings))
+    # Full current set (incl. findings already commented) drives outdated-thread resolution.
+    current_findings = list(findings)
     skipped_duplicates = 0
     if existing_comments:
         from app.delivery.synchronize import filter_new_findings
@@ -115,6 +117,14 @@ async def post_review_batched(
             )
     result = ReviewResult(findings=findings, summary=result.summary)
     if not findings and skipped_duplicates:
+        await _resolve_outdated_best_effort(
+            gh,
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            current_findings=current_findings,
+            existing_comments=existing_comments,
+        )
         return {"rejected": [], "comment_ids": [], "skipped_duplicates": skipped_duplicates}
 
     event = review_event_for(result, request_changes_policy)
@@ -187,12 +197,64 @@ async def post_review_batched(
                     error_class=exc.__class__.__name__,
                 )
 
+    await _resolve_outdated_best_effort(
+        gh,
+        owner=owner,
+        repo=repo,
+        pr_number=pr_number,
+        current_findings=current_findings,
+        existing_comments=existing_comments,
+    )
+
     merged: dict[str, object] = dict(github_response)
     merged["rejected"] = rejected
     merged["comment_ids"] = posted_ids
     merged["skipped_duplicates"] = skipped_duplicates
     merged["event"] = event
     return merged
+
+
+async def _resolve_outdated_best_effort(
+    gh: GitHubClient,
+    *,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    current_findings: list[Finding],
+    existing_comments: list[dict[str, Any]] | None,
+) -> None:
+    """After a successful delivery on a synchronize, resolve threads for fixed findings.
+
+    Only runs when earlier bot comments exist; never raises.
+    """
+    if not existing_comments:
+        return
+    try:
+        from app.delivery.synchronize import resolve_outdated_threads
+
+        resolved = await resolve_outdated_threads(
+            gh,
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            remaining_findings=current_findings,
+        )
+        if resolved:
+            logger.info(
+                "synchronize: resolved %s outdated threads for %s/%s#%s",
+                resolved,
+                owner,
+                repo,
+                pr_number,
+            )
+    except Exception:
+        logger.info(
+            "synchronize: resolve_outdated_threads failed for %s/%s#%s",
+            owner,
+            repo,
+            pr_number,
+            exc_info=True,
+        )
 
 
 def _comment_ids_from_response(response: dict[str, object]) -> list[int | None]:

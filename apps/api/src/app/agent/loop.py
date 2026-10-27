@@ -1,3 +1,4 @@
+import logging
 from time import monotonic
 from typing import Any
 from hashlib import sha256
@@ -14,10 +15,13 @@ from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.tools import TOOLS, execute_tool, tool_result_succeeded
 from app.llm.errors import coerce_quota_error
 from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
+from app.llm.providers.anthropic import anthropic_cache_control
 from app.observability import create_async_anthropic_client
 from app.observability.deepeval_tracing import observe_span, update_deepeval_span
 from app.observability.events import LLMUsage as ObserverLLMUsage
 from app.observability.observer import StageSpan, get_observer
+
+logger = logging.getLogger(__name__)
 
 
 def _result_token_count(content: object) -> int:
@@ -76,13 +80,17 @@ async def _run_agent_anthropic(
         get_provider_api_key("anthropic", user_key_override=user_key_override)
     )
     adapter = get_provider_adapter("anthropic")
-    messages: list[dict[str, Any]] = [{"role": "user", "content": initial_user_message}]
+    cache_options = _cache_options(context)
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": _cached_user_content(initial_user_message, cache_options)}
+    ]
     turns = 0
     fetch_file_content_calls = 0
     tool_result_tokens_by_tool: dict[str, int] = {}
     tool_result_calls_by_tool: dict[str, int] = {}
     started_at = monotonic()
-    anthropic_system: Any = adapter.render_anthropic_system(system_prompt, _cache_options(context))
+    anthropic_system: Any = adapter.render_anthropic_system(system_prompt, cache_options)
+    anthropic_tools: Any = _tools_with_cache_control(TOOLS, cache_options)
 
     for _ in range(MAX_ITERATIONS):
         if _contains_empty_user_message(messages):
@@ -94,8 +102,9 @@ async def _run_agent_anthropic(
             response = await client.messages.create(
                 model=model_name,
                 max_tokens=4096,
+                temperature=0,
                 system=anthropic_system,
-                tools=TOOLS,  # type: ignore[arg-type]
+                tools=anthropic_tools,
                 messages=messages,  # type: ignore[arg-type]
             )
         except Exception as exc:
@@ -125,6 +134,24 @@ async def _run_agent_anthropic(
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason == "end_turn":
+            break
+
+        if response.stop_reason == "max_tokens":
+            # Truncated output (possibly a cut-off tool_use block): never execute or continue it.
+            logger.warning(
+                "Agent response truncated (stop_reason=max_tokens) review_id=%s turn=%s; "
+                "ending loop and proceeding to finalization",
+                context.get("review_id"),
+                turns,
+            )
+            context["agent_truncated"] = True
+            # A cut-off tool_use block has no tool_result; drop it so the transcript stays valid.
+            kept_blocks = [
+                block for block in response.content if getattr(block, "type", "") != "tool_use"
+            ]
+            messages.pop()
+            if kept_blocks:
+                messages.append({"role": "assistant", "content": kept_blocks})
             break
 
         if response.stop_reason == "tool_use":
@@ -164,6 +191,13 @@ async def _run_agent_anthropic(
             continue
 
         break
+    else:
+        logger.warning(
+            "Agent loop hit MAX_ITERATIONS=%s without finishing review_id=%s; "
+            "proceeding to finalization",
+            MAX_ITERATIONS,
+            context.get("review_id"),
+        )
 
     context["agent_metrics"] = {
         "turn_count": turns,
@@ -306,7 +340,21 @@ async def _run_agent_openai_compatible(
                 )
             continue
         messages.append({"role": "assistant", "content": assistant_content})
+        if getattr(completion.choices[0], "finish_reason", None) == "length":
+            logger.warning(
+                "Agent response truncated (finish_reason=length) review_id=%s turn=%s",
+                context.get("review_id"),
+                turns,
+            )
+            context["agent_truncated"] = True
         break
+    else:
+        logger.warning(
+            "Agent loop hit MAX_ITERATIONS=%s without finishing review_id=%s; "
+            "proceeding to finalization",
+            MAX_ITERATIONS,
+            context.get("review_id"),
+        )
 
     context["agent_metrics"] = {
         "turn_count": turns,
@@ -331,6 +379,29 @@ def _contains_empty_user_message(messages: list[dict[str, Any]]) -> bool:
         if isinstance(content, list) and not content:
             return True
     return False
+
+
+def _tools_with_cache_control(
+    tools: list[dict[str, Any]], options: CacheRequestOptions | None = None
+) -> list[dict[str, Any]]:
+    """Copy of ``tools`` with ephemeral ``cache_control`` on the last tool (caches all tools)."""
+    if not tools:
+        return []
+    last = {**tools[-1], "cache_control": anthropic_cache_control(options)}
+    return [*tools[:-1], last]
+
+
+def _cached_user_content(
+    text: str, options: CacheRequestOptions | None = None
+) -> str | list[dict[str, Any]]:
+    """Wrap the large initial user text in a content block carrying ``cache_control``.
+
+    Empty text stays a plain string: Anthropic rejects ``cache_control`` on empty blocks and
+    ``_contains_empty_user_message`` must still detect it.
+    """
+    if not text.strip():
+        return text
+    return [{"type": "text", "text": text, "cache_control": anthropic_cache_control(options)}]
 
 
 def _cache_options(context: dict[str, Any]) -> CacheRequestOptions:

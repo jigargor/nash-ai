@@ -72,6 +72,11 @@ from app.agent.schema import (
     Finding,
     ReviewResult,
 )
+from app.agent.pipeline.validation_stage import (
+    apply_config_filters,
+    repair_and_anchor,
+    validate_with,
+)
 from app.agent.validator import FindingValidator
 from app.agent.policy import (  # noqa: F401 — re-exported for tests and legacy callers
     apply_confidence_threshold as _apply_confidence_threshold,
@@ -85,12 +90,13 @@ from app.agent.repair import (  # noqa: F401 — re-exported for tests and legac
     repair_finding as _repair_finding,
     repair_findings_from_files as _repair_findings_from_files,
 )
-from app.agent.tool_trace import extract_tool_call_history, extract_tool_usage_by_file
+from app.agent.tool_trace import extract_tool_call_history, extract_tool_usage_with_context
 from app.config import settings
 from app.crypto import decrypt_secret
 from app.db.models import Review, ReviewModelAudit, User, UserProviderKey
 from app.db.session import AsyncSessionLocal, set_installation_context, set_user_context
 from app.errors.classification import failure_class_for_exception
+from app.github.check_runs import conclusion_for_review_status, upsert_review_check_run
 from app.github.client import GitHubClient
 from app.github.comments import post_review
 from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
@@ -104,10 +110,27 @@ from app.observability.events import TerminalStatus
 from app.observability.observer import ReviewTrace
 from app.agent.snapshot import SnapshotPayload, store_snapshot
 from app.llm.circuit_breaker import record_provider_failure, record_provider_success
+from app.queue.idempotency import release_review_submission_lock
 from app.ratelimit import check_and_consume_daily_token_budget, current_daily_token_usage
 from app.telemetry.finding_outcomes import seed_pending_finding_outcomes
 
 logger = logging.getLogger(__name__)
+
+
+class ReviewSupersededError(Exception):
+    """The PR head moved since this job was enqueued; the review must not be posted."""
+
+    def __init__(self, job_head_sha: str, live_head_sha: str) -> None:
+        super().__init__(f"PR head moved from {job_head_sha} to {live_head_sha}")
+        self.job_head_sha = job_head_sha
+        self.live_head_sha = live_head_sha
+
+
+def _bot_login() -> str | None:
+    """Configured GitHub App bot login for scoping prior-comment lookups (None = any Bot)."""
+    login = settings.github_app_bot_login
+    return login.strip() if isinstance(login, str) and login.strip() else None
+
 FULL_REGENERATE_RETRY_DROP_RATE = 0.50
 MIN_RECOVERY_RATIO_FOR_SUCCESS = 0.50
 SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -129,6 +152,7 @@ def _to_terminal_status(status: str) -> str:
         "skipped": "skipped",
         "failed": "failed",
         "canceled": "canceled",
+        "superseded": "canceled",
         "partial": "partial",
         "rate_limited": "rate_limited",
         "budget_exhausted": "budget_exhausted",
@@ -143,6 +167,9 @@ class DiffAnchorMetadata(TypedDict):
 
 
 async def _mark_review_running(review_id: int, installation_id: int) -> None:
+    owner = ""
+    repo = ""
+    head_sha = ""
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
         review = await session.get(Review, review_id)
@@ -150,7 +177,96 @@ async def _mark_review_running(review_id: int, installation_id: int) -> None:
             raise RuntimeError(f"Review {review_id} does not exist")
         review.status = "running"
         review.started_at = datetime.now(timezone.utc)
+        parts = str(review.repo_full_name).split("/", 1)
+        owner = parts[0] if parts else ""
+        repo = parts[1] if len(parts) > 1 else ""
+        head_sha = str(review.pr_head_sha or "")
         await session.commit()
+    if owner and repo and head_sha:
+        try:
+            gh = await GitHubClient.for_installation(installation_id)
+            check_run_id = await upsert_review_check_run(
+                gh,
+                owner=owner,
+                repo=repo,
+                head_sha=head_sha,
+                status="in_progress",
+                title="Review in progress",
+                summary="Nash AI is reviewing this pull request.",
+                external_id=str(review_id),
+            )
+            await gh.aclose()
+            if check_run_id is not None:
+                async with AsyncSessionLocal() as session:
+                    await set_installation_context(session, installation_id)
+                    review = await session.get(Review, review_id)
+                    if review is not None:
+                        artifacts = dict(review.debug_artifacts or {})
+                        artifacts["check_run_id"] = check_run_id
+                        review.debug_artifacts = artifacts
+                        await session.commit()
+        except Exception:
+            logger.debug(
+                "Failed to publish in_progress check run review_id=%s",
+                review_id,
+                exc_info=True,
+            )
+
+
+async def _persist_trace_identifiers(
+    *,
+    review_id: int,
+    installation_id: int,
+    trace_id: str,
+) -> str | None:
+    """Store ``trace_id`` in ``Review.debug_artifacts`` (no schema migration needed).
+
+    Returns the GitHub webhook ``delivery_id`` recorded at enqueue time, if any, so it can be
+    propagated into the run context. Best-effort: failures never block the review.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            await set_installation_context(session, installation_id)
+            review = await session.get(Review, review_id)
+            if review is None:
+                return None
+            artifacts = dict(review.debug_artifacts or {})
+            artifacts["trace_id"] = trace_id
+            review.debug_artifacts = artifacts
+            await session.commit()
+            raw_delivery_id = artifacts.get("delivery_id")
+            return raw_delivery_id if isinstance(raw_delivery_id, str) and raw_delivery_id else None
+    except Exception:
+        logger.warning(
+            "Failed to persist trace_id review_id=%s",
+            review_id,
+            exc_info=True,
+        )
+        return None
+
+
+async def _fetch_review_diff(
+    gh: "GitHubClient",
+    *,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+) -> str:
+    """Prefer a diff pinned to the job's head SHA; fall back to the live PR diff."""
+    if base_sha.strip() and head_sha:
+        try:
+            return await gh.get_compare_diff(owner, repo, base_sha.strip(), head_sha)
+        except Exception:
+            logger.info(
+                "Compare diff unavailable; falling back to PR diff repo=%s/%s pr_number=%s",
+                owner,
+                repo,
+                pr_number,
+                exc_info=True,
+            )
+    return await gh.get_pull_request_diff(owner, repo, pr_number)
 
 
 async def _fetch_pr_inputs(
@@ -175,10 +291,32 @@ async def _fetch_pr_inputs(
             "run_id": context.get("run_id"),
         }
     )
-    diff_text = await gh.get_pull_request_diff(owner, repo, pr_number)
     pr = await gh.get_pull_request(owner, repo, pr_number)
+    head_obj = pr.get("head") if isinstance(pr, dict) else None
+    live_head_raw = head_obj.get("sha") if isinstance(head_obj, dict) else None
+    live_head_sha = live_head_raw.strip() if isinstance(live_head_raw, str) else ""
+    if live_head_sha and live_head_sha != head_sha:
+        raise ReviewSupersededError(head_sha, live_head_sha)
+    base_obj = pr.get("base") if isinstance(pr, dict) else None
+    base_sha_raw = base_obj.get("sha") if isinstance(base_obj, dict) else None
+    diff_text = await _fetch_review_diff(
+        gh,
+        owner=owner,
+        repo=repo,
+        pr_number=pr_number,
+        base_sha=base_sha_raw if isinstance(base_sha_raw, str) else "",
+        head_sha=head_sha,
+    )
     commits = await gh.get_pull_request_commits(owner, repo, pr_number)
-    review_config = await _load_review_config_cached(gh, owner, repo, head_sha)
+    # Load .codereview.yml from the PR base ref (maintainer-controlled), never head.
+    config_ref = (
+        str(base_sha_raw).strip()
+        if isinstance(base_sha_raw, str) and base_sha_raw.strip()
+        else head_sha
+    )
+    context["config_ref"] = config_ref
+    context["base_sha"] = config_ref
+    review_config = await _load_review_config_cached(gh, owner, repo, config_ref)
     record_review_trace(
         {
             "review_id": review_id,
@@ -200,6 +338,8 @@ async def _assemble_context(
     context: dict[str, Any],
     diff_text: str,
     review_config: "ReviewConfig",
+    pr: dict[str, Any] | None = None,
+    commits: list[dict[str, Any]] | None = None,
 ) -> "tuple[list[FileInDiff], dict[str, str], ContextBundle, str, str]":
     owner: str = context["owner"]
     repo: str = context["repo"]
@@ -230,7 +370,16 @@ async def _assemble_context(
     debug_artifacts = context.get("debug_artifacts")
     if isinstance(debug_artifacts, dict):
         debug_artifacts["verified_fact_retrieval"] = select_verified_fact_telemetry(diff_text)
-    user_prompt = build_initial_user_prompt(owner, repo, pr_number, context_bundle.rendered)
+    pr_title, pr_body, commit_messages = _pr_prompt_metadata(pr, commits)
+    user_prompt = build_initial_user_prompt(
+        owner,
+        repo,
+        pr_number,
+        context_bundle.rendered,
+        title=pr_title,
+        body=pr_body,
+        commits=commit_messages,
+    )
     trace = context.get("_observation_trace")
     observer = get_observer()
     if isinstance(trace, ReviewTrace):
@@ -257,6 +406,21 @@ async def _assemble_context(
             )
             observer.finish_stage(span, status="partial")
     return files_in_diff, fetched_map, context_bundle, system_prompt, user_prompt
+
+
+def _pr_prompt_metadata(
+    pr: dict[str, Any] | None,
+    commits: list[dict[str, Any]] | None,
+) -> tuple[str | None, str | None, list[str] | None]:
+    """Extract (title, body, commit messages) for the primary user prompt; None when unavailable."""
+    if not isinstance(pr, dict):
+        return None, None, None
+    title = str(pr.get("title") or "")
+    body = str(pr.get("body") or "")
+    commit_messages = [
+        str((commit.get("commit") or {}).get("message", "")) for commit in (commits or [])
+    ]
+    return title, body, commit_messages
 
 
 def _resolve_runtime_model(
@@ -413,7 +577,9 @@ async def _run_fast_path_stage(
     runtime_fast_path_config = review_config.fast_path
     if review_config.adaptive_threshold.enabled:
         dynamic_threshold = await get_effective_fast_path_threshold(
-            int(context["installation_id"]), review_config.adaptive_threshold
+            int(context["installation_id"]),
+            review_config.adaptive_threshold,
+            context.get("_redis"),
         )
         runtime_fast_path_config = replace(
             review_config.fast_path,
@@ -836,6 +1002,19 @@ async def run_review(
         trace_id=trace.trace_id,
         prompt_version=PROMPT_VERSION,
     )
+    delivery_id = await _persist_trace_identifiers(
+        review_id=review_id,
+        installation_id=installation_id,
+        trace_id=trace.trace_id,
+    )
+    if delivery_id:
+        context["delivery_id"] = delivery_id
+    context.setdefault("debug_artifacts", {})
+    trace_artifacts = context["debug_artifacts"]
+    if isinstance(trace_artifacts, dict):
+        trace_artifacts["trace_id"] = trace.trace_id
+        if delivery_id:
+            trace_artifacts["delivery_id"] = delivery_id
     _update_provider_availability_debug(context)
     started_at = monotonic()
 
@@ -926,7 +1105,7 @@ async def run_review(
             )
             editor_resolution: ModelResolution | None = None
             if final_result.findings:
-                prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+                prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number, bot_login=_bot_login())
                 editor_attempts = _resolve_runtime_attempt_chain(
                     context,
                     effective_review_config,
@@ -998,10 +1177,63 @@ async def run_review(
             final_result = ReviewResult(
                 findings=edited_result.findings, summary=edited_result.summary
             )
-            final_result = _apply_review_config_filters(final_result, effective_review_config)
-            review_post_response = await post_review(
-                gh, owner, repo, pr_number, head_sha, final_result
+            # Editor "modify" may rewrite suggestions/anchors; re-validate before delivery.
+            final_result, _, _ = _validate_result(
+                final_result,
+                _build_chunked_validator(
+                    context,
+                    _filter_diff_files(parse_diff(diff_text), effective_review_config.ignore_paths),
+                ),
+                context,
             )
+            final_result = _apply_review_config_filters(final_result, effective_review_config)
+            delivery_status = "done"
+            chunked_delivery_error: str | None = None
+            try:
+                chunked_existing_comments: list[dict[str, Any]] | None = None
+                try:
+                    chunked_existing_comments = await gh.get_pr_reviews_by_bot(
+                        owner, repo, pr_number, bot_login=_bot_login()
+                    )
+                except Exception as exc:
+                    logger.info("synchronize: could not list existing bot comments: %s", exc)
+                review_post_response = await post_review(
+                    gh,
+                    owner,
+                    repo,
+                    pr_number,
+                    head_sha,
+                    final_result,
+                    request_changes_policy=effective_review_config.request_changes_policy,
+                    existing_comments=chunked_existing_comments,
+                    review_id=review_id,
+                    installation_id=installation_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Chunked delivery failed; persisting as partial review_id=%s err=%s",
+                    review_id,
+                    exc,
+                )
+                review_post_response = {}
+                delivery_status = "failed" if not final_result.findings else "partial"
+                chunked_delivery_error = f"{exc.__class__.__name__}: {exc}"
+            rejected = (
+                review_post_response.get("rejected")
+                if isinstance(review_post_response, dict)
+                else None
+            )
+            if isinstance(rejected, list) and rejected and delivery_status == "done":
+                delivery_status = "partial"
+            debug_artifacts = context.get("debug_artifacts")
+            delivery_artifacts = dict(debug_artifacts) if isinstance(debug_artifacts, dict) else {}
+            delivery_artifacts["delivery"] = {
+                "status": delivery_status,
+                "error": chunked_delivery_error,
+                "rejected": rejected if isinstance(rejected, list) else [],
+                "config_ref": context.get("config_ref"),
+            }
+            context["debug_artifacts"] = delivery_artifacts
             context["github_review_node_id"] = extract_review_node_id(review_post_response)
             comment_ids = extract_review_comment_ids(review_post_response)
             await seed_pending_finding_outcomes(
@@ -1013,7 +1245,7 @@ async def run_review(
             await _mark_review_done(
                 session_data=final_result,
                 context=context,
-                status="done",
+                status=delivery_status,
                 review_config=effective_review_config,
             )
             logger.info(
@@ -1030,7 +1262,7 @@ async def run_review(
             context_bundle,
             system_prompt,
             user_prompt,
-        ) = await _assemble_context(gh, context, diff_text, review_config)
+        ) = await _assemble_context(gh, context, diff_text, review_config, pr, commits)
         asyncio.create_task(
             _capture_context_snapshot(
                 context=context,
@@ -1133,8 +1365,9 @@ async def run_review(
                 "context_layers": context_bundle.telemetry.as_dict(),
             },
         )
-        tools_called_per_file = extract_tool_usage_by_file(messages)
-        tool_call_history = extract_tool_call_history(messages)
+        tools_called_per_file, tool_call_history = extract_tool_usage_with_context(
+            messages, context
+        )
         for finding in result.findings:
             finding.verified_via_tool = finding.file_path in tools_called_per_file
 
@@ -1143,13 +1376,13 @@ async def run_review(
             fetched_map,
             commentable_lines=commentable_lines,
         )
-        result.findings = _repair_findings_from_files(
+        result.findings = repair_and_anchor(
             result.findings,
             fetched_map,
+            files_in_diff,
             commentable_lines=commentable_lines,
             window=REPAIR_SEARCH_WINDOW,
         )
-        result.findings = attach_anchor_metadata(result.findings, files_in_diff)
         result, validator_dropped, generated = _validate_result(result, validator, context)
         if primary_span is not None:
             observer.record_validation(
@@ -1384,10 +1617,11 @@ async def run_review(
                 primary=draft_result,
                 challenger=challenger_result,
                 tie_break=tie_break_result,
+                primary_validated=True,  # draft passed FindingValidator + policy filters above
             )
         if draft_result.findings:
             code_acknowledgments = extract_todo_fixme_markers(fetched_map)
-            prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+            prior_reviews = await gh.get_pr_reviews_by_bot(owner, repo, pr_number, bot_login=_bot_login())
             editor_attempts = _resolve_runtime_attempt_chain(
                 context,
                 review_config,
@@ -1504,6 +1738,11 @@ async def run_review(
                 },
             )
         final_result = ReviewResult(findings=edited_result.findings, summary=edited_result.summary)
+        # The editor may rewrite suggestions/anchors ("modify"); re-validate before delivery.
+        final_result, editor_validator_dropped, _ = _validate_result(
+            final_result, validator, context
+        )
+        validator_dropped.extend(editor_validator_dropped)
         final_result = _apply_review_config_filters(final_result, review_config)
         await _record_model_audit(
             context=context,
@@ -1575,10 +1814,12 @@ async def run_review(
             context_telemetry=context_bundle.telemetry,
         )
 
+        delivery_status = "done"
+        delivery_error: str | None = None
         try:
             existing_bot_comments: list[dict[str, Any]] | None = None
             try:
-                existing_bot_comments = await gh.get_pr_reviews_by_bot(owner, repo, pr_number)
+                existing_bot_comments = await gh.get_pr_reviews_by_bot(owner, repo, pr_number, bot_login=_bot_login())
             except Exception as exc:
                 logger.info("synchronize: could not list existing bot comments: %s", exc)
             review_post_response = await post_review(
@@ -1595,11 +1836,31 @@ async def run_review(
             )
         except Exception as exc:
             logger.warning(
-                "Delivery degraded; persisting findings without GitHub post review_id=%s err=%s",
+                "Delivery failed; persisting findings as partial review_id=%s err=%s",
                 review_id,
                 exc,
             )
             review_post_response = {}
+            delivery_status = "failed" if not final_result.findings else "partial"
+            delivery_error = f"{exc.__class__.__name__}: {exc}"
+        rejected = review_post_response.get("rejected") if isinstance(review_post_response, dict) else None
+        skipped_duplicates = (
+            review_post_response.get("skipped_duplicates")
+            if isinstance(review_post_response, dict)
+            else None
+        )
+        if isinstance(rejected, list) and rejected and delivery_status == "done":
+            delivery_status = "partial"
+        debug_artifacts = context.get("debug_artifacts")
+        delivery_artifacts = dict(debug_artifacts) if isinstance(debug_artifacts, dict) else {}
+        delivery_artifacts["delivery"] = {
+            "status": delivery_status,
+            "error": delivery_error,
+            "rejected": rejected if isinstance(rejected, list) else [],
+            "skipped_duplicates": skipped_duplicates if isinstance(skipped_duplicates, list) else [],
+            "config_ref": context.get("config_ref"),
+        }
+        context["debug_artifacts"] = delivery_artifacts
         context["github_review_node_id"] = extract_review_node_id(review_post_response)
         comment_ids = extract_review_comment_ids(review_post_response)
         await seed_pending_finding_outcomes(
@@ -1609,7 +1870,10 @@ async def run_review(
             github_comment_ids=comment_ids,
         )
         await _mark_review_done(
-            session_data=final_result, context=context, status="done", review_config=review_config
+            session_data=final_result,
+            context=context,
+            status=delivery_status,
+            review_config=review_config,
         )
         logger.info(
             "Review completed review_id=%s duration_ms=%s first_model_call_latency_ms=%s",
@@ -1617,6 +1881,31 @@ async def run_review(
             int((monotonic() - started_at) * 1000),
             context.get("first_model_call_latency_ms", 0),
         )
+    except ReviewSupersededError as exc:
+        logger.warning(
+            "Review superseded before posting review_id=%s job_head_sha=%s live_head_sha=%s",
+            review_id,
+            exc.job_head_sha,
+            exc.live_head_sha,
+        )
+        debug_artifacts = context.get("debug_artifacts")
+        context["debug_artifacts"] = {
+            **(debug_artifacts if isinstance(debug_artifacts, dict) else {}),
+            "superseded_by_head_sha": exc.live_head_sha,
+        }
+        await _mark_review_done(
+            session_data=ReviewResult(
+                findings=[],
+                summary=(
+                    f"Superseded by a newer push (head {exc.live_head_sha[:7]}); "
+                    f"this review of {exc.job_head_sha[:7]} was not posted."
+                ),
+            ),
+            context=context,
+            status="superseded",
+            review_config=None,
+        )
+        return
     except asyncio.CancelledError as exc:
         logger.warning("Review job cancelled review_id=%s", review_id)
         debug_artifacts = context.get("debug_artifacts")
@@ -1685,6 +1974,27 @@ async def run_review(
     finally:
         terminal = str(context.get("_terminal_status", "failed"))
         observer.finish_review_trace(trace, status=cast(TerminalStatus, terminal))
+        gh_client = context.get("github_client")
+        if gh_client is not None:
+            try:
+                await gh_client.aclose()
+            except Exception:
+                logger.debug("GitHub client close failed review_id=%s", review_id, exc_info=True)
+        if redis is not None:
+            try:
+                await release_review_submission_lock(
+                    redis,
+                    installation_id=installation_id,
+                    repo_full_name=f"{owner}/{repo}",
+                    pr_number=pr_number,
+                    head_sha=head_sha,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to release review submission lock review_id=%s",
+                    review_id,
+                    exc_info=True,
+                )
 
 
 async def _mark_review_done(
@@ -1712,13 +2022,21 @@ async def _mark_review_done(
         cached_input_per_1m_usd=cached_input_price,
     )
     installation_id = cast(int, context["installation_id"])
-    await _record_token_budget_usage(installation_id, int(context.get("tokens_used", 0)))
+    await _record_token_budget_usage(
+        installation_id, int(context.get("tokens_used", 0)), context.get("_redis")
+    )
+    check_run_id: int | None = None
+    repo_full_name = ""
+    head_sha = ""
+    finding_count = len(session_data.findings)
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
         review = await session.get(Review, cast(int, context["review_id"]))
         if review is None:
             return
-        review.status = status
+        # "superseded" is terminal: a stale job finishing late must not resurrect the row.
+        if review.status != "superseded" or status == "superseded":
+            review.status = status
         if review_config is not None:
             # Persist the configured primary model in review headers/cards.
             # The action chain remains the source of truth for all runtime attempts.
@@ -1759,6 +2077,41 @@ async def _mark_review_done(
             review.github_review_node_id = github_review_node_id.strip()
         review.completed_at = datetime.now(timezone.utc)
         await session.commit()
+        check_run_id_raw = current_artifacts.get("check_run_id")
+        check_run_id = int(check_run_id_raw) if isinstance(check_run_id_raw, int) else None
+        repo_full_name = str(getattr(review, "repo_full_name", "") or "")
+        head_sha = str(getattr(review, "pr_head_sha", "") or "")
+
+    # Best-effort check run completion (requires checks:write on the GitHub App).
+    try:
+        owner_repo = repo_full_name.split("/", 1)
+        if len(owner_repo) == 2 and head_sha:
+            check_status, conclusion = conclusion_for_review_status(status)
+            title = f"Review {status}"
+            summary = (
+                f"Status: {status}. Findings posted: {finding_count}. "
+                f"{session_data.summary[:500]}"
+            )
+            gh = await GitHubClient.for_installation(installation_id)
+            await upsert_review_check_run(
+                gh,
+                owner=owner_repo[0],
+                repo=owner_repo[1],
+                head_sha=head_sha,
+                status=check_status,
+                conclusion=conclusion,
+                title=title,
+                summary=summary,
+                check_run_id=check_run_id,
+                external_id=str(context.get("review_id") or ""),
+            )
+            await gh.aclose()
+    except Exception:
+        logger.debug(
+            "Failed to publish completed check run review_id=%s",
+            context.get("review_id"),
+            exc_info=True,
+        )
 
     # Stamp last_used_at for any user-supplied provider keys that were active
     user_github_id: int | None = context.get("user_github_id")
@@ -1843,10 +2196,15 @@ def _decimal_from_context(value: object) -> Decimal | None:
         return None
 
 
-async def _record_token_budget_usage(installation_id: int, tokens_used: int) -> None:
+async def _record_token_budget_usage(
+    installation_id: int, tokens_used: int, redis: Redis | None = None
+) -> None:
     if tokens_used <= 0:
         return
-    redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+    # Prefer the review's shared connection; only own (and close) a client we create here.
+    owns_redis = redis is None
+    if redis is None:
+        redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
     try:
         allowed = await check_and_consume_daily_token_budget(
             redis,
@@ -1877,12 +2235,13 @@ async def _record_token_budget_usage(installation_id: int, tokens_used: int) -> 
             exc,
         )
     finally:
-        try:
-            await redis.aclose()
-        except redis_exc.RedisError:
-            pass
-        except OSError:
-            pass
+        if owns_redis:
+            try:
+                await redis.aclose()
+            except redis_exc.RedisError:
+                pass
+            except OSError:
+                pass
 
 
 async def _load_review_config_cached(
@@ -1997,11 +2356,15 @@ async def _run_chunked_review(
         system_prompt = build_system_prompt(
             repo_profile.frameworks, chunk_diff, review_config.prompt_additions
         )
+        chunk_pr_title, chunk_pr_body, chunk_commit_messages = _pr_prompt_metadata(pr, commits)
         user_prompt = build_initial_user_prompt(
             owner,
             repo,
             pr_number,
             f"{context_bundle.rendered}\n\nChunk coverage note: {chunk_plan.coverage_note}",
+            title=chunk_pr_title,
+            body=chunk_pr_body,
+            commits=chunk_commit_messages,
         )
         chunk_resolution = _resolve_runtime_model(
             context,
@@ -2067,8 +2430,18 @@ async def _run_chunked_review(
             )
             chunk_result.findings = attach_anchor_metadata(chunk_result.findings, chunk_files)
             valid_findings = filter_findings_with_valid_anchors(chunk_result.findings, chunk_files)
-            postprocessed_chunk, _, _, _ = _apply_policy_filters(
+            chunk_file_map = _merge_fetched_files_into_context(
+                context, dict(context_bundle.fetched_files)
+            )
+            validated_chunk, _, _ = _validate_result(
                 ReviewResult(findings=valid_findings, summary=chunk_result.summary),
+                FindingValidator(
+                    chunk_file_map, commentable_lines=right_side_diff_line_set(chunk_files)
+                ),
+                context,
+            )
+            postprocessed_chunk, _, _, _ = _apply_policy_filters(
+                validated_chunk,
                 threshold=review_config.confidence_threshold or 85,
                 tool_call_history=extract_tool_call_history(messages),
                 known_fact_ids=load_verified_fact_ids(),
@@ -2206,8 +2579,13 @@ async def _run_chunked_review(
         attach_anchor_metadata(synthesis_result.findings, files_in_diff),
         files_in_diff,
     )
-    synthesis_processed, _, _, _ = _apply_policy_filters(
+    synthesis_validated, _, _ = _validate_result(
         ReviewResult(findings=synthesis_findings, summary=synthesis_result.summary),
+        _build_chunked_validator(context, files_in_diff),
+        context,
+    )
+    synthesis_processed, _, _, _ = _apply_policy_filters(
+        synthesis_validated,
         threshold=review_config.confidence_threshold or 85,
         tool_call_history=[],
         known_fact_ids=load_verified_fact_ids(),
@@ -2328,25 +2706,10 @@ def _filter_diff_files(
 
 
 def _apply_review_config_filters(result: ReviewResult, review_config: ReviewConfig) -> ReviewResult:
-    allowed_categories = set(review_config.categories)
-    filtered: list[Finding] = []
-    for finding in result.findings:
-        if review_config.ignore_paths and any(
-            fnmatch(finding.file_path, pattern) for pattern in review_config.ignore_paths
-        ):
-            continue
-        if allowed_categories and finding.category not in allowed_categories:
-            continue
-        if SEVERITY_RANK[finding.severity] < SEVERITY_RANK.get(review_config.severity_threshold, 0):
-            continue
-        filtered.append(finding)
-    if len(filtered) > review_config.max_findings_per_pr:
-        filtered = sorted(
-            filtered,
-            key=lambda finding: (SEVERITY_RANK[finding.severity], finding.confidence),
-            reverse=True,
-        )[: review_config.max_findings_per_pr]
-    result.findings = filtered
+    # Shared with review_pipeline; the runner path does not surface per-finding drops here.
+    result.findings, _ = apply_config_filters(
+        result.findings, review_config, list(review_config.ignore_paths)
+    )
     return result
 
 
@@ -2355,18 +2718,10 @@ def _validate_result(
     validator: FindingValidator,
     context: dict[str, Any] | None = None,
 ) -> tuple[ReviewResult, list[tuple[Finding, DropReason, str]], int]:
-    valid_findings: list[Finding] = []
-    dropped: list[tuple[Finding, DropReason, str]] = []
     generated = len(result.findings)
     observer = get_observer()
-    for finding in result.findings:
-        is_valid, reason, detail = validator.validate(finding)
-        if is_valid:
-            valid_findings.append(finding)
-            continue
-        dropped_reason = reason or "line_out_of_range"
-        dropped_detail = detail or "Unknown validation error"
-        dropped.append((finding, dropped_reason, dropped_detail))
+    valid_findings, dropped = validate_with(validator, result.findings)
+    for finding, dropped_reason, dropped_detail in dropped:
         logger.warning("Dropped finding: %s — %s", dropped_reason, dropped_detail)
         if context is not None:
             span = context.get("_observation_stage_span")
@@ -2382,6 +2737,29 @@ def _validate_result(
             )
     result.findings = valid_findings
     return result, dropped, generated
+
+
+def _merge_fetched_files_into_context(
+    context: dict[str, Any], bundle_files: dict[str, str]
+) -> dict[str, str]:
+    """Accumulate bundle + tool-fetched file contents on ``context['fetched_files']``.
+
+    Used by the chunked path so per-chunk, synthesis, and post-editor validation all see the same
+    file map the full path gets from ``_assemble_context``.
+    """
+    existing = context.get("fetched_files")
+    merged: dict[str, str] = dict(existing) if isinstance(existing, dict) else {}
+    merged.update(bundle_files)
+    context["fetched_files"] = merged
+    return merged
+
+
+def _build_chunked_validator(
+    context: dict[str, Any], files_in_diff: list[FileInDiff]
+) -> FindingValidator:
+    fetched = context.get("fetched_files")
+    file_map: dict[str, str] = dict(fetched) if isinstance(fetched, dict) else {}
+    return FindingValidator(file_map, commentable_lines=right_side_diff_line_set(files_in_diff))
 
 
 def _validation_feedback(dropped: list[tuple[Finding, DropReason, str]]) -> str:
@@ -2682,24 +3060,52 @@ def _build_tie_break_prompt(
     )
 
 
-def _finding_key(finding: Finding) -> tuple[str, int, int, str]:
-    return (
-        finding.file_path,
-        finding.line_start,
-        finding.line_end or finding.line_start,
-        normalize_for_match(finding.message),
-    )
+def _finding_key(finding: Finding) -> tuple[str, str]:
+    """Coarse debate-matching key; line overlap is checked separately by ``_cluster_findings``.
+
+    Message text is intentionally excluded: independent models phrase the same issue differently,
+    so text matching under-counts agreement and drops real consensus findings.
+    """
+    return (finding.file_path, finding.category)
+
+
+def _finding_line_range(finding: Finding) -> tuple[int, int]:
+    return finding.line_start, finding.line_end or finding.line_start
+
+
+def _line_ranges_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] <= right[1] and right[0] <= left[1]
+
+
+def _cluster_findings(sources: list[list[Finding]]) -> list[list[tuple[int, Finding]]]:
+    """Group findings across sources by (file_path, category, overlapping line range).
+
+    Returns clusters of ``(source_index, finding)`` in first-seen order. A finding joins the first
+    cluster with the same key that has any member whose line range overlaps its own.
+    """
+    clusters: list[list[tuple[int, Finding]]] = []
+    for source_index, findings in enumerate(sources):
+        for finding in findings:
+            key = _finding_key(finding)
+            line_range = _finding_line_range(finding)
+            for cluster in clusters:
+                if _finding_key(cluster[0][1]) != key:
+                    continue
+                if any(_line_ranges_overlap(line_range, _finding_line_range(m)) for _, m in cluster):
+                    cluster.append((source_index, finding))
+                    break
+            else:
+                clusters.append([(source_index, finding)])
+    return clusters
 
 
 def _calculate_conflict_score(primary: list[Finding], challenger: list[Finding]) -> int:
-    primary_keys = {_finding_key(item) for item in primary}
-    challenger_keys = {_finding_key(item) for item in challenger}
-    union = primary_keys.union(challenger_keys)
-    if not union:
+    clusters = _cluster_findings([primary, challenger])
+    if not clusters:
         return 0
-    overlap = primary_keys.intersection(challenger_keys)
-    disagreement = len(union) - len(overlap)
-    return int(round((disagreement / len(union)) * 100))
+    overlap = sum(1 for cluster in clusters if len({index for index, _ in cluster}) > 1)
+    disagreement = len(clusters) - overlap
+    return int(round((disagreement / len(clusters)) * 100))
 
 
 def _has_high_risk_findings(findings: list[Finding], threshold: str) -> bool:
@@ -2712,23 +3118,37 @@ def _merge_debate_results(
     primary: ReviewResult,
     challenger: ReviewResult,
     tie_break: ReviewResult | None,
+    primary_validated: bool = False,
 ) -> ReviewResult:
+    """Consensus-merge debate stages by (file_path, category, overlapping line range).
+
+    Each stage casts at most one vote per cluster. The high-severity bypass (admit a lone
+    high/critical finding) applies only to *primary* findings and only when ``primary_validated``
+    is True, i.e. the primary findings already passed ``FindingValidator``. Challenger/tie-break
+    output is never validated at this point, so it cannot bypass consensus on its own.
+    """
     candidates = [primary, challenger]
     if tie_break is not None:
         candidates.append(tie_break)
-    votes: dict[tuple[str, int, int, str], list[Finding]] = {}
-    for candidate in candidates:
-        for finding in candidate.findings:
-            votes.setdefault(_finding_key(finding), []).append(finding)
+    clusters = _cluster_findings([candidate.findings for candidate in candidates])
     required_votes = 2 if len(candidates) >= 2 else 1
+    high_rank = SEVERITY_RANK["high"]
     merged: list[Finding] = []
-    for key, finding_votes in votes.items():
-        if (
-            len(finding_votes) >= required_votes
-            or SEVERITY_RANK.get(finding_votes[0].severity, 0) >= SEVERITY_RANK["high"]
-        ):
-            best = max(finding_votes, key=lambda item: item.confidence)
-            merged.append(best.model_copy(deep=True))
+    for cluster in clusters:
+        distinct_votes = len({index for index, _ in cluster})
+        primary_members = [member for index, member in cluster if index == 0]
+        has_validated_high_primary = primary_validated and any(
+            SEVERITY_RANK.get(member.severity, 0) >= high_rank for member in primary_members
+        )
+        if distinct_votes < required_votes and not has_validated_high_primary:
+            continue
+        pool = (
+            primary_members
+            if distinct_votes < required_votes
+            else [member for _, member in cluster]
+        )
+        best = max(pool, key=lambda item: item.confidence)
+        merged.append(best.model_copy(deep=True))
     merged.sort(key=lambda item: (SEVERITY_RANK[item.severity], item.confidence), reverse=True)
     summary = primary.summary if primary.summary else "Automated review completed."
     return ReviewResult(findings=merged, summary=summary)

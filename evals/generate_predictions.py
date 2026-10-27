@@ -7,9 +7,9 @@ snapshot (default)
     dataset directory, finds the last ``submit_review`` tool-use call in the
     stored agent messages, and writes its arguments as the prediction file.
 
-live
-    Actually calls the LLM with the snapshot's context (requires API keys).
-    Intended for local development and new-dataset bootstrapping only.
+live (removed)
+    Previously called `run_review` with a stale signature. Use the harness
+    instead: `python evals/harness/run.py --local-only --llm live` (or `--llm stub`).
 
 dry-run flag
     Validates that all cases have the necessary input files without writing
@@ -230,60 +230,24 @@ def generate_live_prediction(
     prompt_version: str,
     code_hash: str,
 ) -> dict[str, Any] | None:
-    """Generate a prediction dict by calling the LLM with the case context.
+    """Removed: live generation now lives in the eval harness.
 
-    This path is for local development only.  It requires API keys and the
-    full ``app`` package on ``sys.path``.
+    The previous implementation called ``app.agent.runner.run_review`` with a
+    ``(diff_text, context, prompt_version)`` signature that no longer exists
+    (``run_review`` is the queue-job entrypoint taking review/installation ids).
+    Use the harness instead, which drives the real review pipeline in dry-run
+    mode with a response cache and budget guard:
 
-    Returns ``None`` on failure (with error printed to stderr).
+        python evals/harness/run.py --local-only --llm live --label <label>
     """
-    # Add apps/api/src to sys.path so ``app.*`` imports resolve.
-    api_src = _REPO_ROOT / "apps" / "api" / "src"
-    if str(api_src) not in sys.path:
-        sys.path.insert(0, str(api_src))
-
-    # Lazy import — fail with a clear message if the package isn't importable.
-    try:
-        import asyncio
-
-        from app.agent.runner import run_review  # type: ignore[import-untyped]
-    except ImportError as exc:
-        print(
-            f"  [ERROR] {case_dir.name}: cannot import app.agent.runner — {exc}\n"
-            "  Ensure you are running from apps/api/ with `uv run python ...` or "
-            "that the package is on sys.path.",
-            file=sys.stderr,
-        )
-        return None
-
-    context = _load_json(case_dir / "context.json")
-    diff_path = case_dir / "diff.patch"
-    diff_text = diff_path.read_text(encoding="utf-8") if diff_path.exists() else ""
-
-    try:
-        result = asyncio.run(
-            run_review(
-                diff_text=diff_text,
-                context=context,
-                prompt_version=prompt_version,
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"  [ERROR] {case_dir.name}: live review failed — {exc}", file=sys.stderr)
-        return None
-
-    findings = result.get("findings", []) if isinstance(result, dict) else []
-    model = result.get("model", "unknown") if isinstance(result, dict) else "unknown"
-
-    return {
-        "findings": findings,
-        "prompt_version": prompt_version,
-        "model": model,
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
-        "code_hash": code_hash,
-        "mode": "live",
-    }
-
+    del prompt_version, code_hash
+    print(
+        f"  [ERROR] {case_dir.name}: --mode=live was removed. Use the harness: "
+        "`python evals/harness/run.py --local-only --llm live --label <label>` "
+        "(offline: `--llm stub`).",
+        file=sys.stderr,
+    )
+    return None
 
 # ---------------------------------------------------------------------------
 # Staleness check
@@ -400,7 +364,7 @@ def run(
         print(
             "\nTip: some cases were skipped because they lack snapshot.json.  "
             "Run `evals/export_snapshot.py` to capture live review snapshots, "
-            "or use --mode=live to generate predictions directly.",
+            "or run the harness: `python evals/harness/run.py --local-only --llm stub`.",
             file=sys.stderr,
         )
 
@@ -414,7 +378,7 @@ def run(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate eval predictions from offline snapshot replay or live LLM calls.",
+        description="Generate eval predictions from offline snapshot replay (live runs: evals/harness/run.py).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -427,7 +391,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--mode",
         choices=["snapshot", "live"],
         default="snapshot",
-        help="Generation mode: 'snapshot' (offline, no API keys) or 'live' (calls LLM).",
+        help="Generation mode: 'snapshot' (offline replay). 'live' is removed; use evals/harness/run.py.",
     )
     parser.add_argument(
         "--datasets-dir",

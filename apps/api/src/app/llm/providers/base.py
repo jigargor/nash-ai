@@ -59,7 +59,11 @@ class ProviderAdapter(Protocol):
     ) -> StructuredOutputResult: ...
 
     def render_anthropic_system(
-        self, system_prompt: str, options: CacheRequestOptions | None = None
+        self,
+        system_prompt: str,
+        options: CacheRequestOptions | None = None,
+        *,
+        dynamic_prompt: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
     def chat_completion_extra_kwargs(
@@ -105,9 +109,14 @@ class BaseProviderAdapter:
         )
 
     def render_anthropic_system(
-        self, system_prompt: str, options: CacheRequestOptions | None = None
+        self,
+        system_prompt: str,
+        options: CacheRequestOptions | None = None,
+        *,
+        dynamic_prompt: str | None = None,
     ) -> list[dict[str, Any]]:
-        return [{"type": "text", "text": system_prompt}]
+        text = system_prompt if not dynamic_prompt else f"{system_prompt}\n\n{dynamic_prompt}"
+        return [{"type": "text", "text": text}]
 
     def chat_completion_extra_kwargs(
         self,

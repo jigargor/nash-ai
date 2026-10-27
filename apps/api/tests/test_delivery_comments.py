@@ -114,3 +114,87 @@ async def test_large_reviews_are_batched() -> None:
     assert gh.payloads[0]["body"] == "Many."
     assert gh.payloads[1]["body"] == ""  # continuation batch carries no summary
     assert len(response["comment_ids"]) == 85  # type: ignore[arg-type]
+
+
+class _ResolvingGitHub:
+    def __init__(self, *, graphql_error: bool = False) -> None:
+        self.posts: list[dict[str, Any]] = []
+        self.graphql_calls: list[str] = []
+        self._graphql_error = graphql_error
+
+    async def post_json(self, _path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.posts.append(payload)
+        return {"id": 1, "comments": [{"id": 10}]}
+
+    async def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        self.graphql_calls.append(query)
+        if self._graphql_error:
+            raise RuntimeError("graphql down")
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [],
+                        }
+                    }
+                }
+            }
+        }
+
+
+@pytest.mark.anyio
+async def test_post_review_batched_resolves_outdated_threads_when_prior_comments_exist() -> None:
+    gh = _ResolvingGitHub()
+    prior = _finding(line=3, finding_id="old-id")
+    existing = [{"path": "src/a.ts", "line": 3, "body": format_finding_human(prior)}]
+
+    await post_review_batched(
+        gh,  # type: ignore[arg-type]
+        "acme",
+        "repo",
+        7,
+        "a" * 40,
+        ReviewResult(findings=[_finding(line=9, target_line_content="new line")], summary="s"),
+        existing_comments=existing,
+    )
+
+    assert len(gh.posts) == 1
+    assert gh.graphql_calls, "expected outdated-thread resolution to be attempted"
+
+
+@pytest.mark.anyio
+async def test_post_review_batched_skips_thread_resolution_without_prior_comments() -> None:
+    gh = _ResolvingGitHub()
+
+    await post_review_batched(
+        gh,  # type: ignore[arg-type]
+        "acme",
+        "repo",
+        7,
+        "a" * 40,
+        ReviewResult(findings=[_finding(line=9)], summary="s"),
+        existing_comments=None,
+    )
+
+    assert gh.graphql_calls == []
+
+
+@pytest.mark.anyio
+async def test_post_review_batched_thread_resolution_failure_does_not_fail_delivery() -> None:
+    gh = _ResolvingGitHub(graphql_error=True)
+    existing = [{"path": "src/a.ts", "line": 3, "body": "x"}]
+
+    response = await post_review_batched(
+        gh,  # type: ignore[arg-type]
+        "acme",
+        "repo",
+        7,
+        "a" * 40,
+        ReviewResult(findings=[_finding(line=9)], summary="s"),
+        existing_comments=existing,
+    )
+
+    assert response["rejected"] == []
+    assert len(gh.posts) == 1

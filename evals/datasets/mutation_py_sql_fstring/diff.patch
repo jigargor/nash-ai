@@ -1,0 +1,12 @@
+diff --git a/app/db/users.py b/app/db/users.py
+--- a/app/db/users.py
++++ b/app/db/users.py
+@@ -2,7 +2,7 @@
+ 
+ 
+ def fetch_user(cursor: Any, user_id: str) -> dict[str, Any] | None:
+-    cursor.execute("SELECT id, login FROM users WHERE id = %s", (user_id,))
++    cursor.execute(f"SELECT id, login FROM users WHERE id = {user_id}")
+     row = cursor.fetchone()
+     if row is None:
+         return None

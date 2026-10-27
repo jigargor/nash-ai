@@ -30,6 +30,11 @@ class _FakeRedis:
         self.keys.add(key)
         return True
 
+    async def delete(self, key: str) -> int:
+        existed = key in self.keys
+        self.keys.discard(key)
+        return int(existed)
+
 
 def _payload_bytes(action: str = "opened") -> bytes:
     payload = {
@@ -115,7 +120,7 @@ async def test_github_webhook_with_valid_signature_and_opened_action_enqueues(
 ) -> None:
     calls: list[str] = []
 
-    async def fake_queue(_redis: object, _payload: object) -> None:
+    async def fake_queue(_redis: object, _payload: object, **_kwargs: object) -> None:
         calls.append("queued")
 
     test_app.state.redis = _FakeRedis()
@@ -144,7 +149,7 @@ async def test_github_webhook_with_valid_signature_and_synchronize_action_enqueu
 ) -> None:
     calls: list[str] = []
 
-    async def fake_queue(_redis: object, _payload: object) -> None:
+    async def fake_queue(_redis: object, _payload: object, **_kwargs: object) -> None:
         calls.append("queued")
 
     test_app.state.redis = _FakeRedis()
@@ -173,7 +178,7 @@ async def test_github_webhook_with_valid_signature_and_reopened_action_enqueues(
 ) -> None:
     calls: list[str] = []
 
-    async def fake_queue(_redis: object, _payload: object) -> None:
+    async def fake_queue(_redis: object, _payload: object, **_kwargs: object) -> None:
         calls.append("queued")
 
     test_app.state.redis = object()
@@ -255,7 +260,7 @@ async def test_github_webhook_with_ignored_action_returns_ok_without_enqueue(
 ) -> None:
     calls: list[str] = []
 
-    async def fake_queue(_redis: object, _payload: object) -> None:
+    async def fake_queue(_redis: object, _payload: object, **_kwargs: object) -> None:
         calls.append("queued")
 
     test_app.state.redis = object()
@@ -317,7 +322,7 @@ async def test_github_webhook_skips_duplicate_pull_request_delivery(
 ) -> None:
     calls: list[str] = []
 
-    async def fake_queue(_redis: object, _payload: object) -> None:
+    async def fake_queue(_redis: object, _payload: object, **_kwargs: object) -> None:
         calls.append("queued")
 
     test_app.state.redis = _FakeRedis()
@@ -372,3 +377,66 @@ async def test_github_webhook_closed_action_enqueues_outcome_classification(
     assert response.status_code == 200
     assert response.json() == {"ok": True}
     assert calls == ["classified"]
+
+
+@pytest.mark.anyio
+async def test_github_webhook_failed_pull_request_handler_releases_delivery_for_redelivery(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    should_fail = {"value": True}
+
+    async def flaky_queue(_redis: object, _payload: object, **_kwargs: object) -> None:
+        if should_fail["value"]:
+            raise RuntimeError("enqueue exploded")
+        calls.append("queued")
+
+    fake_redis = _FakeRedis()
+    test_app.state.redis = fake_redis
+    monkeypatch.setattr(webhook_router, "queue_pull_request_review", flaky_queue)
+
+    payload = _payload_bytes(action="synchronize")
+    headers = {
+        "X-Hub-Signature-256": _signature(payload),
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "delivery-pr-retry",
+    }
+    with pytest.raises(RuntimeError, match="enqueue exploded"):
+        await client.post("/webhooks/github", content=payload, headers=headers)
+
+    # The failed delivery must not stay claimed, otherwise GitHub redelivery is dropped.
+    assert "webhook:delivery:delivery-pr-retry" not in fake_redis.keys
+
+    should_fail["value"] = False
+    redelivery = await client.post("/webhooks/github", content=payload, headers=headers)
+
+    assert redelivery.status_code == 200
+    assert calls == ["queued"]
+    assert "webhook:delivery:delivery-pr-retry" in fake_redis.keys
+
+
+@pytest.mark.anyio
+async def test_github_webhook_failed_installation_handler_releases_delivery(
+    client: httpx.AsyncClient,
+    test_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failing_sync(_payload: object) -> None:
+        raise RuntimeError("db down")
+
+    fake_redis = _FakeRedis()
+    test_app.state.redis = fake_redis
+    monkeypatch.setattr(webhook_router, "sync_installation_from_webhook", failing_sync)
+
+    payload = _installation_payload_bytes(action="created")
+    headers = {
+        "X-Hub-Signature-256": _signature(payload),
+        "X-GitHub-Event": "installation",
+        "X-GitHub-Delivery": "delivery-install-retry",
+    }
+    with pytest.raises(RuntimeError, match="db down"):
+        await client.post("/webhooks/github", content=payload, headers=headers)
+
+    assert "webhook:delivery:delivery-install-retry" not in fake_redis.keys

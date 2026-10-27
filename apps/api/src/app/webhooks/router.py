@@ -12,9 +12,14 @@ from app.queue.connection import require_app_redis
 from app.webhooks.handlers import (
     queue_pull_request_outcome_classification,
     queue_pull_request_review,
+    queue_review_comment_feedback,
     sync_installation_from_webhook,
 )
-from app.webhooks.schemas import GitHubInstallationWebhookPayload, GitHubPullRequestWebhookPayload
+from app.webhooks.schemas import (
+    GitHubInstallationWebhookPayload,
+    GitHubPullRequestReviewCommentWebhookPayload,
+    GitHubPullRequestWebhookPayload,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -38,14 +43,51 @@ def verify_signature(payload: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+_DELIVERY_KEY_PREFIX = "webhook:delivery:"
+_DELIVERY_PROCESSING_TTL_SECONDS = 120
+_DELIVERY_DONE_TTL_SECONDS = 86400
+
+
+def _delivery_key(delivery_id: str) -> str:
+    return f"{_DELIVERY_KEY_PREFIX}{delivery_id}"
+
+
 async def _is_duplicate_delivery(request: Request, delivery_id: str) -> bool:
+    """Claim the delivery id with a short-lived "processing" marker.
+
+    The marker is upgraded to a 24h "done" marker only after the handler succeeds
+    (``_mark_delivery_done``) and removed if it fails (``_release_delivery``), so a
+    failed delivery can be redelivered by GitHub.
+    """
     if not delivery_id:
         return False
     redis = require_app_redis(request)
-    already_seen = not await redis.set(f"webhook:delivery:{delivery_id}", "1", ex=86400, nx=True)
+    claimed = await redis.set(
+        _delivery_key(delivery_id), "processing", ex=_DELIVERY_PROCESSING_TTL_SECONDS, nx=True
+    )
+    already_seen = not claimed
     if already_seen:
         logger.info("Duplicate webhook delivery skipped delivery_id=%s", delivery_id)
     return already_seen
+
+
+async def _mark_delivery_done(request: Request, delivery_id: str) -> None:
+    if not delivery_id:
+        return
+    redis = require_app_redis(request)
+    await redis.set(_delivery_key(delivery_id), "done", ex=_DELIVERY_DONE_TTL_SECONDS)
+
+
+async def _release_delivery(request: Request, delivery_id: str) -> None:
+    if not delivery_id:
+        return
+    try:
+        redis = require_app_redis(request)
+        await redis.delete(_delivery_key(delivery_id))
+    except Exception:
+        logger.warning(
+            "Failed to release webhook delivery claim delivery_id=%s", delivery_id, exc_info=True
+        )
 
 
 @router.post("/github")
@@ -79,6 +121,7 @@ async def github_webhook(request: Request) -> dict[str, bool]:
                 payload_bytes
             )
         except ValidationError as exc:
+            await _release_delivery(request, delivery_id)
             logger.warning(
                 "GitHub installation webhook payload validation failed delivery_id=%s errors=%s",
                 delivery_id,
@@ -100,15 +143,56 @@ async def github_webhook(request: Request) -> dict[str, bool]:
             "unsuspend",
             "new_permissions_accepted",
         }:
-            await sync_installation_from_webhook(installation_payload)
+            try:
+                await sync_installation_from_webhook(installation_payload)
+            except BaseException:
+                await _release_delivery(request, delivery_id)
+                raise
         else:
             logger.warning(
                 "GitHub installation webhook ignored action=%s delivery_id=%s",
                 installation_payload.action,
                 delivery_id,
             )
+        await _mark_delivery_done(request, delivery_id)
         logger.info(
             "Webhook processed delivery_id=%s ack_latency_ms=%s",
+            delivery_id,
+            int((monotonic() - started_at) * 1000),
+        )
+        return {"ok": True}
+
+    if event == "pull_request_review_comment":
+        try:
+            review_comment_payload = GitHubPullRequestReviewCommentWebhookPayload.model_validate_json(
+                payload_bytes
+            )
+        except ValidationError as exc:
+            logger.warning(
+                "GitHub review_comment webhook payload validation failed delivery_id=%s errors=%s",
+                delivery_id,
+                exc.errors(),
+            )
+            raise AppError(
+                code="VALIDATION_WEBHOOK_PAYLOAD",
+                message="Invalid payload",
+                status_code=400,
+                family="validation",
+                retryable=False,
+                action="none",
+            )
+        if await _is_duplicate_delivery(request, delivery_id):
+            return {"ok": True}
+        try:
+            redis = require_app_redis(request)
+            await queue_review_comment_feedback(redis, review_comment_payload)
+        except BaseException:
+            await _release_delivery(request, delivery_id)
+            raise
+        await _mark_delivery_done(request, delivery_id)
+        logger.info(
+            "Webhook processed event=%s delivery_id=%s ack_latency_ms=%s",
+            event,
             delivery_id,
             int((monotonic() - started_at) * 1000),
         )
@@ -145,7 +229,12 @@ async def github_webhook(request: Request) -> dict[str, bool]:
         redis = require_app_redis(request)
         if await _is_duplicate_delivery(request, delivery_id):
             return {"ok": True}
-        await queue_pull_request_review(redis, pull_request_payload)
+        try:
+            await queue_pull_request_review(redis, pull_request_payload, delivery_id=delivery_id)
+        except BaseException:
+            await _release_delivery(request, delivery_id)
+            raise
+        await _mark_delivery_done(request, delivery_id)
     elif pull_request_payload.action == "closed":
         redis = require_app_redis(request)
         await queue_pull_request_outcome_classification(redis, pull_request_payload)

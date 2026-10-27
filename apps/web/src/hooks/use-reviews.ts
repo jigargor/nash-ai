@@ -2,8 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { actionFetchReviews } from "@/app/actions/dashboard-api";
-import type { ReviewListFilters } from "@/lib/api/reviews";
+import { fetchReviews, type ReviewListFilters } from "@/lib/api/reviews";
 import { dashboardListMetricsQueryOptions } from "@/lib/query/dashboard-query-options";
 import { isReviewInFlightStatus } from "@/lib/review-status";
 
@@ -16,7 +15,7 @@ export function useReviews(installationId?: number, filters?: ReviewListFilters)
       filters?.createdBefore ?? null,
       filters?.status ?? "all",
     ],
-    queryFn: () => actionFetchReviews(installationId, filters),
+    queryFn: () => fetchReviews(installationId, filters),
     ...dashboardListMetricsQueryOptions,
     refetchOnMount: "always",
     refetchInterval: (query) => {

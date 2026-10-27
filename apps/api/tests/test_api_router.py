@@ -278,9 +278,13 @@ async def test_telemetry_outcomes_summary_uses_public_summarizer(
     monkeypatch.setattr(api_router, "summarize_verified_fact_cap_telemetry", _fake_aux_telemetry)
 
     async def _fake_summary(
-        *, installation_id: int | None = None, repo_full_name: str | None = None
+        *,
+        installation_id: int | None = None,
+        installation_ids: list[int] | None = None,
+        repo_full_name: str | None = None,
     ) -> dict[str, object]:
         assert installation_id == 777
+        assert installation_ids is None
         assert repo_full_name == "acme/repo"
         return {
             "total_classified": 3,
@@ -1500,10 +1504,20 @@ async def test_telemetry_outcomes_summary_without_installation_forwarded_to_summ
     )
     monkeypatch.setattr(api_router, "summarize_verified_fact_cap_telemetry", _fake_aux_telemetry)
 
+    async def _fake_allowed_installation_ids(*_args: object, **_kwargs: object) -> set[int]:
+        return {901, 902}
+
+    monkeypatch.setattr(api_router, "_allowed_installation_ids", _fake_allowed_installation_ids)
+
     async def _fake_summary(
-        *, installation_id: int | None = None, repo_full_name: str | None = None
+        *,
+        installation_id: int | None = None,
+        installation_ids: list[int] | None = None,
+        repo_full_name: str | None = None,
     ) -> dict[str, object]:
         assert installation_id is None
+        # Unscoped requests must be restricted to the caller's allowed installations only.
+        assert installation_ids == [901, 902]
         assert repo_full_name == "solo/repo"
         return {"classified": True}
 
@@ -1711,8 +1725,12 @@ async def test_telemetry_outcomes_summary_optional_installation_delegates_to_sum
     monkeypatch.setattr(api_router, "summarize_verified_fact_cap_telemetry", _fake_aux_telemetry)
 
     async def fake_summarize(
-        *, installation_id: int | None = None, repo_full_name: str | None = None
+        *,
+        installation_id: int | None = None,
+        installation_ids: list[int] | None = None,
+        repo_full_name: str | None = None,
     ) -> dict[str, object]:
+        assert installation_ids is not None
         return {"ok": True, "installation_seen": installation_id, "repo": repo_full_name}
 
     monkeypatch.setattr(api_router, "summarize_finding_outcomes", fake_summarize)

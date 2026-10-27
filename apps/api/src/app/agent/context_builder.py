@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ from app.github.utils import safe_fetch_file
 
 ENCODER = tiktoken.get_encoding("cl100k_base")
 SUMMARY_CACHE: dict[str, str] = {}
+FILE_FETCH_CONCURRENCY = 8
 
 
 @dataclass
@@ -155,9 +157,12 @@ async def build_context_bundle(
         token_usage["repo"] += segment.token_count
         token_usage["L1.repo_profile"] += segment.token_count
 
-    summary_calls = 0
-    for file_in_diff in included_files:
-        source = await _try_fetch_file(gh, owner, repo, file_in_diff.path, head_sha)
+    fetched_sources = await fetch_sources_concurrently(gh, owner, repo, head_sha, included_files)
+    candidates: list[HunkCandidate] = []
+    file_lines_by_index: list[list[str] | None] = []
+    for file_index, (file_in_diff, source) in enumerate(
+        zip(included_files, fetched_sources, strict=True)
+    ):
         file_lines: list[str] | None = None
         if source is None:
             dropped_segments.append(f"{file_in_diff.path}:fetch_failed")
@@ -169,93 +174,112 @@ async def build_context_bundle(
                 file_in_diff.path, source, active_packaging.generated_paths
             )
             is_lockfile = _is_lockfile(file_in_diff.path)
-            hunks = _build_hunks(file_in_diff.numbered_lines)
-            for hunk_index, hunk in enumerate(hunks, start=1):
-                score = _score_hunk(
-                    file_in_diff, hunk, is_generated=is_generated, is_lockfile=is_lockfile
+            for hunk_index, hunk in enumerate(_build_hunks(file_in_diff.numbered_lines), start=1):
+                candidates.append(
+                    HunkCandidate(
+                        file_index=file_index,
+                        hunk_index=hunk_index,
+                        file_in_diff=file_in_diff,
+                        hunk=hunk,
+                        score=_score_hunk(
+                            file_in_diff, hunk, is_generated=is_generated, is_lockfile=is_lockfile
+                        ),
+                        file_lines=file_lines,
+                        is_generated=is_generated,
+                        is_lockfile=is_lockfile,
+                    )
                 )
-                hunk_text = _render_hunk(file_in_diff.path, file_in_diff.language, hunk_index, hunk)
-                hunk_segment = _make_segment(
-                    layer="review",
-                    source_id=f"{file_in_diff.path}:hunk:{hunk_index}",
-                    fidelity="high",
-                    text=hunk_text,
-                    file_path=file_in_diff.path,
-                    line_start=_hunk_anchor_line(hunk),
-                    line_end=_hunk_end_line(hunk),
-                    score=score,
-                )
-                if (
-                    token_usage["review_diff_hunks"] + hunk_segment.token_count
-                    > active_budgets.diff_hunks
-                ):
-                    dropped_segments.append(hunk_segment.source_id)
-                    continue
-                package.review.append(hunk_segment)
-                token_usage["review_diff_hunks"] += hunk_segment.token_count
-                token_usage["L4.review_hunks"] += hunk_segment.token_count
+        file_lines_by_index.append(file_lines)
 
-                if is_generated or is_lockfile:
-                    continue
-                window_size = (
-                    DOC_CONTEXT_WINDOW_LINES
-                    if _is_docs_file(file_in_diff.path, file_in_diff.language)
-                    else CONTEXT_WINDOW_LINES
-                )
-                context_text = _render_surrounding_context(
-                    file_lines, hunk, window_size=window_size
-                )
-                if not context_text:
-                    continue
-                context_segment = _make_segment(
-                    layer="review",
-                    source_id=f"{file_in_diff.path}:context:{hunk_index}",
-                    fidelity="high",
-                    text=context_text,
-                    file_path=file_in_diff.path,
-                    line_start=_hunk_anchor_line(hunk),
-                    line_end=_hunk_end_line(hunk),
-                    score=score,
-                )
-                if (
-                    token_usage["review_surrounding"] + context_segment.token_count
-                    <= active_budgets.surrounding_context
-                ):
-                    package.review.append(context_segment)
-                    token_usage["review_surrounding"] += context_segment.token_count
-                    token_usage["L5.surrounding_context"] += context_segment.token_count
-                    continue
+    # Allocate budgets to the riskiest hunks first, then restore file/line order for rendering.
+    summary_calls = 0
+    selected_segments: list[tuple[tuple[int, int, int], ContextSegment]] = []
+    for candidate in rank_hunk_candidates(candidates):
+        file_in_diff = candidate.file_in_diff
+        hunk = candidate.hunk
+        hunk_index = candidate.hunk_index
+        score = candidate.score
+        file_lines = candidate.file_lines
+        sort_key = (candidate.file_index, hunk_index)
+        hunk_text = _render_hunk(file_in_diff.path, file_in_diff.language, hunk_index, hunk)
+        hunk_segment = _make_segment(
+            layer="review",
+            source_id=f"{file_in_diff.path}:hunk:{hunk_index}",
+            fidelity="high",
+            text=hunk_text,
+            file_path=file_in_diff.path,
+            line_start=_hunk_anchor_line(hunk),
+            line_end=_hunk_end_line(hunk),
+            score=score,
+        )
+        if token_usage["review_diff_hunks"] + hunk_segment.token_count > active_budgets.diff_hunks:
+            dropped_segments.append(hunk_segment.source_id)
+            continue
+        selected_segments.append(((*sort_key, 0), hunk_segment))
+        token_usage["review_diff_hunks"] += hunk_segment.token_count
+        token_usage["L4.review_hunks"] += hunk_segment.token_count
 
-                if not active_packaging.summarization_enabled:
-                    dropped_segments.append(context_segment.source_id)
-                    continue
-                if summary_calls >= active_packaging.max_summary_calls_per_review:
-                    dropped_segments.append(f"{context_segment.source_id}:summary_cap_reached")
-                    continue
+        if candidate.is_generated or candidate.is_lockfile or file_lines is None:
+            continue
+        window_size = (
+            DOC_CONTEXT_WINDOW_LINES
+            if _is_docs_file(file_in_diff.path, file_in_diff.language)
+            else CONTEXT_WINDOW_LINES
+        )
+        context_text = _render_surrounding_context(file_lines, hunk, window_size=window_size)
+        if not context_text:
+            continue
+        context_segment = _make_segment(
+            layer="review",
+            source_id=f"{file_in_diff.path}:context:{hunk_index}",
+            fidelity="high",
+            text=context_text,
+            file_path=file_in_diff.path,
+            line_start=_hunk_anchor_line(hunk),
+            line_end=_hunk_end_line(hunk),
+            score=score,
+        )
+        if (
+            token_usage["review_surrounding"] + context_segment.token_count
+            <= active_budgets.surrounding_context
+        ):
+            selected_segments.append(((*sort_key, 1), context_segment))
+            token_usage["review_surrounding"] += context_segment.token_count
+            token_usage["L5.surrounding_context"] += context_segment.token_count
+            continue
 
-                summary_segment = _make_segment(
-                    layer="review",
-                    source_id=f"{context_segment.source_id}:summary",
-                    fidelity="summary",
-                    text=_summarize_context_segment(file_in_diff.path, context_text),
-                    file_path=file_in_diff.path,
-                    line_start=context_segment.line_start,
-                    line_end=context_segment.line_end,
-                    score=score,
-                )
-                summary_calls += 1
-                package.summarization_used = True
-                package.summarization_calls = summary_calls
-                if (
-                    token_usage["review_surrounding"] + summary_segment.token_count
-                    <= active_budgets.surrounding_context
-                ):
-                    package.review.append(summary_segment)
-                    token_usage["review_surrounding"] += summary_segment.token_count
-                    token_usage["L5.surrounding_context"] += summary_segment.token_count
-                else:
-                    dropped_segments.append(summary_segment.source_id)
+        if not active_packaging.summarization_enabled:
+            dropped_segments.append(context_segment.source_id)
+            continue
+        if summary_calls >= active_packaging.max_summary_calls_per_review:
+            dropped_segments.append(f"{context_segment.source_id}:summary_cap_reached")
+            continue
 
+        summary_segment = _make_segment(
+            layer="review",
+            source_id=f"{context_segment.source_id}:summary",
+            fidelity="summary",
+            text=_summarize_context_segment(file_in_diff.path, context_text),
+            file_path=file_in_diff.path,
+            line_start=context_segment.line_start,
+            line_end=context_segment.line_end,
+            score=score,
+        )
+        summary_calls += 1
+        package.summarization_used = True
+        package.summarization_calls = summary_calls
+        if (
+            token_usage["review_surrounding"] + summary_segment.token_count
+            <= active_budgets.surrounding_context
+        ):
+            selected_segments.append(((*sort_key, 2), summary_segment))
+            token_usage["review_surrounding"] += summary_segment.token_count
+            token_usage["L5.surrounding_context"] += summary_segment.token_count
+        else:
+            dropped_segments.append(summary_segment.source_id)
+    package.review.extend(segment for _, segment in sorted(selected_segments, key=lambda e: e[0]))
+
+    for file_in_diff, file_lines in zip(included_files, file_lines_by_index, strict=True):
         required_in_file = sorted(
             {line for path, line in required_anchor_lines if path == file_in_diff.path}
         )
@@ -335,6 +359,44 @@ async def build_context_bundle(
     return ContextBundle(
         rendered=rendered, fetched_files=fetched_files, package=package, telemetry=telemetry
     )
+
+
+@dataclass(frozen=True)
+class HunkCandidate:
+    """A scored hunk awaiting budget allocation."""
+
+    file_index: int
+    hunk_index: int
+    file_in_diff: FileInDiff
+    hunk: list[NumberedLine]
+    score: float
+    file_lines: list[str] | None = None
+    is_generated: bool = False
+    is_lockfile: bool = False
+
+
+def rank_hunk_candidates(candidates: list[HunkCandidate]) -> list[HunkCandidate]:
+    """Order by risk score (desc); ties keep file then line order for determinism."""
+    return sorted(candidates, key=lambda c: (-c.score, c.file_index, c.hunk_index))
+
+
+async def fetch_sources_concurrently(
+    gh: GitHubClient,
+    owner: str,
+    repo: str,
+    ref: str,
+    files_in_diff: list[FileInDiff],
+    *,
+    max_concurrency: int = FILE_FETCH_CONCURRENCY,
+) -> list[str | None]:
+    """Fetch head-revision sources in parallel (bounded); result order matches input order."""
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _fetch(path: str) -> str | None:
+        async with semaphore:
+            return await _try_fetch_file(gh, owner, repo, path, ref)
+
+    return list(await asyncio.gather(*(_fetch(file.path) for file in files_in_diff)))
 
 
 async def _try_fetch_file(

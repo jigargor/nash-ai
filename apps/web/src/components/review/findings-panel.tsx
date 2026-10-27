@@ -9,6 +9,8 @@ import { useReviewUiStore } from "@/stores/review-ui-store";
 interface FindingsPanelProps {
   findings: Finding[];
   findingOutcomes: FindingOutcome[];
+  /** Displayed indices that were dismissed (only present when the "show dismissed" toggle is on). */
+  dismissedIndices?: ReadonlySet<number>;
   selectedFindingIndex: number | null;
   onSelectFinding: (index: number) => void;
   onDismiss: (index: number) => void;
@@ -18,6 +20,7 @@ interface FindingsPanelProps {
 export function FindingsPanel({
   findings,
   findingOutcomes,
+  dismissedIndices,
   selectedFindingIndex,
   onSelectFinding,
   onDismiss,
@@ -96,6 +99,7 @@ export function FindingsPanel({
             <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
               <Badge variant={severityVariant(finding.severity)}>{finding.severity.toUpperCase()}</Badge>
               <strong>{finding.category}</strong>
+              {dismissedIndices?.has(index) ? <Badge variant="info">DISMISSED</Badge> : null}
             </div>
             <div style={{ marginTop: "0.25rem", overflowWrap: "anywhere", wordBreak: "break-word" }}>{finding.message}</div>
             <div
@@ -123,6 +127,7 @@ export function FindingsPanel({
             </Button>
             <Button
               variant="danger"
+              disabled={dismissedIndices?.has(index) ?? false}
               onClick={() => onDismiss(index)}
             >
               Dismiss

@@ -16,6 +16,7 @@ const findings = [
     suggestion: "print('fixed')",
     confidence: 90,
     evidence: "diff_visible",
+    target_line_content: "",
   },
   {
     severity: "low",
@@ -27,6 +28,7 @@ const findings = [
     suggestion: undefined,
     confidence: 80,
     evidence: "diff_visible",
+    target_line_content: "",
   },
 ] as const;
 

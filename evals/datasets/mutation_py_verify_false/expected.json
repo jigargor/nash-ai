@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "message": "TLS certificate verification disabled with verify=False.",
+      "file_path": "app/http/fetch.py",
+      "line_start": 5
+    }
+  ]
+}

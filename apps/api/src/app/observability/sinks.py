@@ -11,6 +11,7 @@ from app.observability.events import (
     ContextBuildEvent,
     DeliveryRejectedEvent,
     ErrorEvent,
+    EventBase,
     FindingDroppedEvent,
     GenerationEvent,
     OutcomeEvent,
@@ -28,6 +29,12 @@ logger = logging.getLogger(__name__)
 # A session factory is any callable that works as an async context manager
 # returning an AsyncSession, e.g. async_sessionmaker(engine).
 SessionFactory = Callable[[], Any]  # AsyncSession context manager
+
+# Bounds for diagnostic entries persisted into ReviewModelAudit.metadata_json.
+_MAX_AUDIT_LIST_ITEMS = 50
+_MAX_DETAIL_CHARS = 500
+_MAX_ERRORS_PER_EVENT = 10
+_NO_PROVIDER = "none"
 
 
 @runtime_checkable
@@ -291,6 +298,9 @@ class DBSink:
                         )
                         session.add(audit)
                     else:
+                        if audit.provider == _NO_PROVIDER:
+                            audit.provider = event.provider
+                            audit.model = event.model
                         audit.input_tokens += event.usage.input_tokens
                         audit.output_tokens += event.usage.output_tokens
                         audit.total_tokens += event.usage.total_tokens
@@ -308,7 +318,17 @@ class DBSink:
         pass
 
     def on_validation(self, event: ValidationEvent) -> None:
-        pass
+        if self._session_factory is None:
+            return
+        entry: dict[str, object] = {
+            "validation_type": event.validation_type,
+            "passed": event.passed,
+            "errors": [str(err)[:_MAX_DETAIL_CHARS] for err in event.errors[:_MAX_ERRORS_PER_EVENT]],
+            "findings_before": event.findings_before,
+            "findings_after": event.findings_after,
+            "drop_reason": event.drop_reason[:_MAX_DETAIL_CHARS],
+        }
+        self._schedule(self._persist_audit_event(event, "validations", entry))
 
     def on_context_build(self, event: ContextBuildEvent) -> None:
         pass
@@ -319,16 +339,99 @@ class DBSink:
         self._schedule(self._persist_error(event))
 
     def on_finding_dropped(self, event: FindingDroppedEvent) -> None:
-        return
+        if self._session_factory is None:
+            return
+        entry: dict[str, object] = {
+            "reason": event.reason,
+            "detail": event.detail[:_MAX_DETAIL_CHARS],
+            "file_path": event.file_path,
+            "line_start": event.line_start,
+            "finding_id": event.finding_id,
+        }
+        self._schedule(self._persist_audit_event(event, "dropped_findings", entry))
 
     def on_outcome(self, event: OutcomeEvent) -> None:
         return
 
     def on_delivery_rejected(self, event: DeliveryRejectedEvent) -> None:
-        return
+        if self._session_factory is None:
+            return
+        entry: dict[str, object] = {
+            "file_path": event.file_path,
+            "line_start": event.line_start,
+            "error_class": event.error_class,
+        }
+        self._schedule(self._persist_audit_event(event, "delivery_rejections", entry))
 
     def on_budget_exceeded(self, event: BudgetExceededEvent) -> None:
         return
+
+    async def _persist_audit_event(
+        self,
+        event: EventBase,
+        list_key: str,
+        entry: dict[str, object],
+    ) -> None:
+        """Append a bounded diagnostic entry to ``ReviewModelAudit.metadata_json[list_key]``.
+
+        Creates a zero-token audit row for the (review, stage, run) when none exists yet so
+        validation/drop/delivery diagnostics are never lost for stages without an LLM call.
+        """
+        from sqlalchemy import select
+
+        from app.db.models import ReviewModelAudit
+
+        if self._session_factory is None:
+            return
+        full_entry: dict[str, object] = {
+            **entry,
+            "trace_id": event.trace_id,
+            "stage_id": event.stage_id,
+            "span_id": event.span_id,
+            "event_id": event.event_id,
+            "ts": event.ts.isoformat(),
+        }
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        select(ReviewModelAudit).where(
+                            ReviewModelAudit.review_id == event.review_id,
+                            ReviewModelAudit.stage == event.stage,
+                            ReviewModelAudit.run_id == event.run_id,
+                        )
+                    )
+                    audit = result.scalars().first()
+                    if audit is None:
+                        audit = ReviewModelAudit(
+                            review_id=event.review_id,
+                            installation_id=event.installation_id,
+                            run_id=event.run_id,
+                            stage=event.stage,
+                            provider=event.provider or _NO_PROVIDER,
+                            model=event.model or _NO_PROVIDER,
+                            prompt_version=event.prompt_version or None,
+                            metadata_json={"trace_id": event.trace_id, list_key: [full_entry]},
+                        )
+                        session.add(audit)
+                        return
+                    existing: dict[str, object] = dict(audit.metadata_json or {})
+                    raw_items = existing.get(list_key, [])
+                    items: list[object] = list(raw_items) if isinstance(raw_items, list) else []
+                    if len(items) < _MAX_AUDIT_LIST_ITEMS:
+                        items.append(full_entry)
+                    else:
+                        existing[f"{list_key}_truncated"] = True
+                    existing[list_key] = items
+                    existing.setdefault("trace_id", event.trace_id)
+                    audit.metadata_json = existing
+        except Exception:
+            logger.exception(
+                "DBSink._persist_audit_event failed review_id=%s stage=%s key=%s",
+                event.review_id,
+                event.stage,
+                list_key,
+            )
 
     async def _persist_error(self, event: ErrorEvent) -> None:
         from sqlalchemy import select

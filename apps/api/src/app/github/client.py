@@ -11,6 +11,7 @@ import httpx
 from app.github.auth import get_installation_token
 
 BASE = "https://api.github.com"
+GRAPHQL_URL = "https://api.github.com/graphql"
 logger = logging.getLogger(__name__)
 
 JsonDict = dict[str, Any]
@@ -35,6 +36,12 @@ def _parse_next_link(link_header: str) -> str | None:
     return None
 
 
+def _is_review_create_request(method: str, url: str) -> bool:
+    """True for POST .../pulls/{n}/reviews, which creates a visible review and is not idempotent."""
+    path = url.split("?", 1)[0].rstrip("/")
+    return method.upper() == "POST" and "/pulls/" in path and path.endswith("/reviews")
+
+
 async def _request_with_retry(
     method: str,
     url: str,
@@ -47,7 +54,10 @@ async def _request_with_retry(
     """Make an HTTP request with exponential backoff on retryable status codes.
 
     GitHub secondary rate limits return 403 with Retry-After; primary rate
-    limits return 429.  Transient 5xx also deserve a retry.
+    limits return 429.  Transient 5xx also deserve a retry, except for
+    review-creating POSTs: a 5xx there may have created the review server-side, so
+    retrying would risk duplicate reviews/comments. Transport errors are retried
+    for GET only.
     """
     if client is None:
         async with httpx.AsyncClient(timeout=_TIMEOUT, limits=_LIMITS) as ephemeral_client:
@@ -59,13 +69,26 @@ async def _request_with_retry(
                 params=params,
                 json=json,
             )
+    no_server_error_retry = _is_review_create_request(method, url)
+    retry_transport_errors = method.upper() == "GET"
     for attempt in range(_MAX_RETRIES + 1):
-        response = await client.request(method, url, headers=headers, params=params, json=json)
+        try:
+            response = await client.request(
+                method, url, headers=headers, params=params, json=json
+            )
+        except httpx.TransportError:
+            if not retry_transport_errors or attempt == _MAX_RETRIES:
+                raise
+            jitter = secrets.randbelow(1_000_000) / 1_000_000
+            await asyncio.sleep(min(2**attempt + jitter, 60))
+            continue
         if response.status_code == 403 and "Retry-After" not in response.headers:
             response.raise_for_status()
         if response.status_code not in _RETRYABLE_STATUS:
             response.raise_for_status()
             return response
+        if no_server_error_retry and response.status_code >= 500:
+            response.raise_for_status()
         if attempt == _MAX_RETRIES:
             response.raise_for_status()
         retry_after = _parse_retry_after_seconds(response.headers.get("Retry-After", ""))
@@ -178,6 +201,17 @@ class GitHubClient:
         response = await _request_with_retry(
             "GET",
             f"{BASE}/repos/{owner}/{repo}/pulls/{pr_number}",
+            headers=headers,
+            client=self._client,
+        )
+        return response.text
+
+    async def get_compare_diff(self, owner: str, repo: str, base: str, head: str) -> str:
+        """Unified diff for ``base...head`` pinned to exact SHAs (immune to head moving mid-job)."""
+        headers = {**self._headers, "Accept": "application/vnd.github.v3.diff"}
+        response = await _request_with_retry(
+            "GET",
+            f"{BASE}/repos/{owner}/{repo}/compare/{base}...{head}",
             headers=headers,
             client=self._client,
         )
@@ -435,6 +469,39 @@ class GitHubClient:
     async def post_json(self, path: str, payload: JsonDict) -> JsonDict:
         response = await _request_with_retry(
             "POST",
+            f"{BASE}{path}",
+            self._headers,
+            client=self._client,
+            json=payload,
+        )
+        data = response.json()
+        if not isinstance(data, dict):
+            return {}
+        return cast(JsonDict, data)
+
+    async def graphql(self, query: str, variables: dict[str, Any]) -> JsonDict:
+        """Run a GraphQL query/mutation. Raises RuntimeError if the response carries errors."""
+        response = await _request_with_retry(
+            "POST",
+            GRAPHQL_URL,
+            self._headers,
+            client=self._client,
+            json={"query": query, "variables": variables},
+        )
+        data = response.json()
+        if not isinstance(data, dict):
+            return {}
+        errors = data.get("errors")
+        if isinstance(errors, list) and errors:
+            messages = [
+                str(err.get("message", ""))[:200] for err in errors if isinstance(err, dict)
+            ]
+            raise RuntimeError(f"GitHub GraphQL returned errors: {messages}")
+        return cast(JsonDict, data)
+
+    async def patch_json(self, path: str, payload: JsonDict) -> JsonDict:
+        response = await _request_with_retry(
+            "PATCH",
             f"{BASE}{path}",
             self._headers,
             client=self._client,

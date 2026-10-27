@@ -1,0 +1,8 @@
+diff --git a/src/math.py b/src/math.py
+new file mode 100644
+index 0000000..c0ffee3
+--- /dev/null
++++ b/src/math.py
+@@ -0,0 +1,2 @@
++def add(a: int, b: int) -> int:
++    return a + b

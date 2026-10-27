@@ -35,6 +35,7 @@ from app.agent.review_config import (
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.config import settings
 from app.db.models import (
+    FindingOutcome,
     Installation,
     InstallationUser,
     RepoConfig,
@@ -43,19 +44,26 @@ from app.db.models import (
     User,
     UserProviderKey,
 )
-from app.db.session import AsyncSessionLocal, set_installation_context
+from app.db.session import AsyncSessionLocal, set_installation_context, set_user_context
 from app.github.client import GitHubClient
 from app.github.utils import safe_fetch_file, split_repo_full_name as _split_repo_full_name
 from app.llm.router import resolve_model_for_role
 from app.observability import create_async_anthropic_client
 from app.queue.idempotency import acquire_review_submission_lock
 from app.queue.connection import require_app_redis
+from app.ratelimit import (
+    check_installation_review_rate_limit,
+    check_user_review_rate_limit,
+    current_daily_token_usage,
+)
 from app.telemetry.finding_outcomes import list_review_finding_outcomes, summarize_finding_outcomes
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.sql.elements import ColumnElement
 
 
@@ -271,6 +279,9 @@ async def _list_installation_rows(
 async def _allowed_installation_ids(
     session: AsyncSession, current_user: CurrentDashboardUser
 ) -> set[int]:
+    # `users` has strict per-caller RLS; set the user context so the membership join resolves
+    # under a non-bypass role. (Transaction-local; independent of the installation context.)
+    await set_user_context(session, current_user.github_id)
     rows = (
         await session.execute(
             select(InstallationUser.installation_id)
@@ -296,6 +307,46 @@ async def _user_has_provider_key(session: AsyncSession, github_id: int) -> bool:
 def _require_installation_access(allowed_installation_ids: set[int], installation_id: int) -> None:
     if installation_id not in allowed_installation_ids:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Installation not found")
+
+
+async def _load_review_for_user(
+    session: AsyncSession,
+    review_id: int,
+    installation_id: int | None,
+    allowed_installation_ids: set[int],
+) -> Review:
+    """Load a review under RLS, always setting tenant context BEFORE the review query.
+
+    ``reviews`` has FORCE ROW LEVEL SECURITY, so an unscoped ``session.get`` returns nothing
+    (or, with a bypass role, leaks cross-tenant rows). When the caller passes
+    ``installation_id`` we validate membership, set context, then query. When omitted we
+    probe only the caller's own allowed installations, setting context for each candidate
+    before the query, so the lookup never depends on a context-less read.
+
+    On success the session's transaction-local context is left set to the review's
+    installation, ready for follow-up RLS-protected queries.
+    """
+    if installation_id is not None:
+        _require_installation_access(allowed_installation_ids, installation_id)
+        await set_installation_context(session, installation_id)
+        review = await session.scalar(select(Review).where(Review.id == review_id))
+        if review is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        if int(review.installation_id) != installation_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
+            )
+        return review
+    for candidate_id in sorted(allowed_installation_ids):
+        await set_installation_context(session, candidate_id)
+        review = await session.scalar(
+            select(Review)
+            .where(Review.id == review_id)
+            .where(Review.installation_id == candidate_id)
+        )
+        if review is not None:
+            return review
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
 
 
 def _findings_count_from_review_row(review: Review) -> int:
@@ -820,21 +871,10 @@ async def get_review(
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
         allowed_installation_ids = await _allowed_installation_ids(session, current_user)
-        if installation_id is not None:
-            _require_installation_access(allowed_installation_ids, installation_id)
-            await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) not in allowed_installation_ids:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            installation_id = int(review.installation_id)
-            await set_installation_context(session, installation_id)
-        elif int(review.installation_id) != installation_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
-            )
+        review = await _load_review_for_user(
+            session, review_id, installation_id, allowed_installation_ids
+        )
+        installation_id = int(review.installation_id)
 
         return {
             "id": int(review.id),
@@ -868,21 +908,10 @@ async def get_review_outcomes(
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
         allowed_installation_ids = await _allowed_installation_ids(session, current_user)
-        if installation_id is not None:
-            _require_installation_access(allowed_installation_ids, installation_id)
-            await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) not in allowed_installation_ids:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            installation_id = int(review.installation_id)
-            await set_installation_context(session, installation_id)
-        elif int(review.installation_id) != installation_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
-            )
+        review = await _load_review_for_user(
+            session, review_id, installation_id, allowed_installation_ids
+        )
+        installation_id = int(review.installation_id)
 
         return {
             "review_id": int(review.id),
@@ -900,21 +929,10 @@ async def get_review_model_audits(
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
         allowed_installation_ids = await _allowed_installation_ids(session, current_user)
-        if installation_id is not None:
-            _require_installation_access(allowed_installation_ids, installation_id)
-            await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) not in allowed_installation_ids:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            installation_id = int(review.installation_id)
-            await set_installation_context(session, installation_id)
-        elif int(review.installation_id) != installation_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
-            )
+        review = await _load_review_for_user(
+            session, review_id, installation_id, allowed_installation_ids
+        )
+        installation_id = int(review.installation_id)
         rows = await session.scalars(
             select(ReviewModelAudit)
             .where(ReviewModelAudit.review_id == review_id)
@@ -960,28 +978,35 @@ async def get_outcome_summary(
     repo_full_name: str | None = Query(default=None),
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, object]:
+    async with AsyncSessionLocal() as session:
+        allowed_installation_ids = await _allowed_installation_ids(session, current_user)
+    scoped_installation_ids: list[int] | None = None
     if installation_id is not None:
-        async with AsyncSessionLocal() as session:
-            _require_installation_access(
-                await _allowed_installation_ids(session, current_user), installation_id
-            )
+        _require_installation_access(allowed_installation_ids, installation_id)
+    else:
+        # Without an explicit installation, aggregate ONLY the caller's own installations.
+        scoped_installation_ids = sorted(allowed_installation_ids)
     summary = await summarize_finding_outcomes(
         installation_id=installation_id,
+        installation_ids=scoped_installation_ids,
         repo_full_name=repo_full_name,
     )
     mismatch_summary = await summarize_target_line_mismatch_telemetry(
         limit=200,
         installation_id=installation_id,
+        installation_ids=scoped_installation_ids,
         repo_full_name=repo_full_name,
     )
     retrieval_summary = await summarize_verified_fact_retrieval_telemetry(
         limit=200,
         installation_id=installation_id,
+        installation_ids=scoped_installation_ids,
         repo_full_name=repo_full_name,
     )
     cap_summary = await summarize_verified_fact_cap_telemetry(
         limit=200,
         installation_id=installation_id,
+        installation_ids=scoped_installation_ids,
         repo_full_name=repo_full_name,
     )
     return {
@@ -1004,21 +1029,10 @@ async def rerun_review(
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
         allowed_installation_ids = await _allowed_installation_ids(session, current_user)
-        if installation_id is not None:
-            _require_installation_access(allowed_installation_ids, installation_id)
-            await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) not in allowed_installation_ids:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            installation_id = int(review.installation_id)
-            await set_installation_context(session, installation_id)
-        elif int(review.installation_id) != installation_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
-            )
+        review = await _load_review_for_user(
+            session, review_id, installation_id, allowed_installation_ids
+        )
+        installation_id = int(review.installation_id)
         if review.status in {"queued", "running"}:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1038,9 +1052,34 @@ async def rerun_review(
             )
         owner, repo = _split_repo_full_name(review.repo_full_name)
         redis = require_app_redis(request)
+        if not await check_installation_review_rate_limit(
+            redis,
+            int(review.installation_id),
+            limit=settings.reviews_per_hour_limit,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Installation review rate limit exceeded",
+            )
+        if not await check_user_review_rate_limit(
+            redis,
+            current_user.github_id,
+            limit=settings.reviews_per_hour_per_user_limit,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="User review rate limit exceeded",
+            )
+        daily_usage = await current_daily_token_usage(redis, int(review.installation_id))
+        if daily_usage >= settings.daily_token_budget_per_installation:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Daily token budget exhausted for this installation",
+            )
         lock_acquired = await acquire_review_submission_lock(
             redis,
             installation_id=int(review.installation_id),
+            repo_full_name=str(review.repo_full_name),
             pr_number=int(review.pr_number),
             head_sha=review.pr_head_sha,
         )
@@ -1049,21 +1088,7 @@ async def rerun_review(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_review_submission_conflict_detail(),
             )
-        job = await redis.enqueue_job(
-            "review_pr",
-            int(review.id),
-            int(review.installation_id),
-            owner,
-            repo,
-            int(review.pr_number),
-            review.pr_head_sha,
-            user_github_id=current_user.github_id,
-        )
-        if job is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to enqueue rerun job",
-            )
+        # Commit queued status before enqueue so workers never race a stale status.
         review.status = "queued"
         review.started_at = None
         review.completed_at = None
@@ -1075,6 +1100,24 @@ async def rerun_review(
         )
         review.triggered_by_user_id = int(trigger_user_id) if trigger_user_id is not None else None
         await session.commit()
+        job = await redis.enqueue_job(
+            "review_pr",
+            int(review.id),
+            int(review.installation_id),
+            owner,
+            repo,
+            int(review.pr_number),
+            review.pr_head_sha,
+            user_github_id=current_user.github_id,
+        )
+        if job is None:
+            review.status = "failed"
+            review.completed_at = datetime.now(timezone.utc)
+            await session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to enqueue rerun job",
+            )
 
     return {"ok": True, "review_id": review_id, "job_id": job.job_id if job else None}
 
@@ -1094,21 +1137,10 @@ async def force_recover_review(
         )
     async with AsyncSessionLocal() as session:
         allowed_installation_ids = await _allowed_installation_ids(session, current_user)
-        if installation_id is not None:
-            _require_installation_access(allowed_installation_ids, installation_id)
-            await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) not in allowed_installation_ids:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            installation_id = int(review.installation_id)
-            await set_installation_context(session, installation_id)
-        elif int(review.installation_id) != installation_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
-            )
+        review = await _load_review_for_user(
+            session, review_id, installation_id, allowed_installation_ids
+        )
+        installation_id = int(review.installation_id)
         is_admin = await _is_installation_admin(
             session, installation_id=installation_id, github_id=current_user.github_id
         )
@@ -1137,9 +1169,34 @@ async def force_recover_review(
 
         owner, repo = _split_repo_full_name(review.repo_full_name)
         redis = require_app_redis(request)
+        if not await check_installation_review_rate_limit(
+            redis,
+            int(review.installation_id),
+            limit=settings.reviews_per_hour_limit,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Installation review rate limit exceeded",
+            )
+        if not await check_user_review_rate_limit(
+            redis,
+            current_user.github_id,
+            limit=settings.reviews_per_hour_per_user_limit,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="User review rate limit exceeded",
+            )
+        daily_usage = await current_daily_token_usage(redis, int(review.installation_id))
+        if daily_usage >= settings.daily_token_budget_per_installation:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Daily token budget exhausted for this installation",
+            )
         lock_acquired = await acquire_review_submission_lock(
             redis,
             installation_id=int(review.installation_id),
+            repo_full_name=str(review.repo_full_name),
             pr_number=int(review.pr_number),
             head_sha=review.pr_head_sha,
         )
@@ -1147,21 +1204,6 @@ async def force_recover_review(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=_review_submission_conflict_detail(),
-            )
-        job = await redis.enqueue_job(
-            "review_pr",
-            int(review.id),
-            int(review.installation_id),
-            owner,
-            repo,
-            int(review.pr_number),
-            review.pr_head_sha,
-            user_github_id=current_user.github_id,
-        )
-        if job is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to enqueue force-requeue job",
             )
         review.status = "queued"
         review.started_at = None
@@ -1181,6 +1223,24 @@ async def force_recover_review(
         }
         review.debug_artifacts = existing_artifacts
         await session.commit()
+        job = await redis.enqueue_job(
+            "review_pr",
+            int(review.id),
+            int(review.installation_id),
+            owner,
+            repo,
+            int(review.pr_number),
+            review.pr_head_sha,
+            user_github_id=current_user.github_id,
+        )
+        if job is None:
+            review.status = "failed"
+            review.completed_at = datetime.now(timezone.utc)
+            await session.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to enqueue force-requeue job",
+            )
         return {"ok": True, "review_id": review_id, "action": action, "job_id": job.job_id}
 
 
@@ -1193,28 +1253,38 @@ async def dismiss_finding(
 ) -> dict[str, object]:
     async with AsyncSessionLocal() as session:
         allowed_installation_ids = await _allowed_installation_ids(session, current_user)
-        if installation_id is not None:
-            _require_installation_access(allowed_installation_ids, installation_id)
-            await set_installation_context(session, installation_id)
-        review = await session.get(Review, review_id)
-        if review is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if int(review.installation_id) not in allowed_installation_ids:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        if installation_id is None:
-            installation_id = int(review.installation_id)
-            await set_installation_context(session, installation_id)
-        elif int(review.installation_id) != installation_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="installation_id mismatch"
-            )
+        review = await _load_review_for_user(
+            session, review_id, installation_id, allowed_installation_ids
+        )
+        installation_id = int(review.installation_id)
 
-        debug_artifacts = review.debug_artifacts or {}
+        # Copy before mutating so SQLAlchemy sees a new object (JSONB change detection).
+        debug_artifacts = dict(review.debug_artifacts or {})
         dismissed = list(debug_artifacts.get("dismissed_findings", []))
         if finding_index not in dismissed:
             dismissed.append(finding_index)
         debug_artifacts["dismissed_findings"] = dismissed
         review.debug_artifacts = debug_artifacts
+        flag_modified(review, "debug_artifacts")
+        # Feed the feedback loop: record an explicit dismissed outcome for this finding.
+        dismiss_stmt = pg_insert(FindingOutcome).values(
+            review_id=int(review.id),
+            finding_index=finding_index,
+            outcome="dismissed",
+            outcome_confidence="high",
+            signals={"source": "dashboard_dismiss", "actor_github_id": current_user.github_id},
+        )
+        await session.execute(
+            dismiss_stmt.on_conflict_do_update(
+                index_elements=["review_id", "finding_index"],
+                set_={
+                    "outcome": dismiss_stmt.excluded.outcome,
+                    "outcome_confidence": dismiss_stmt.excluded.outcome_confidence,
+                    "signals": dismiss_stmt.excluded.signals,
+                    "detected_at": datetime.now(timezone.utc),
+                },
+            )
+        )
         await session.commit()
 
     return {"ok": True, "review_id": review_id, "dismissed_finding_index": finding_index}
@@ -1233,24 +1303,17 @@ async def stream_review_events(
         previous_status: str | None = None
         for _ in range(120):
             async with AsyncSessionLocal() as session:
-                if installation_id is not None:
-                    if installation_id not in allowed_installation_ids:
-                        yield (
-                            f"data: {json.dumps({'type': 'error', 'message': 'Review not found'})}\n\n"
-                        )
-                        return
-                    await set_installation_context(session, installation_id)
-                review = await session.get(Review, review_id)
-                if review is None:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'Review not found'})}\n\n"
-                    return
-                if int(review.installation_id) not in allowed_installation_ids:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'Review not found'})}\n\n"
-                    return
-                if installation_id is None:
-                    await set_installation_context(session, int(review.installation_id))
-                elif int(review.installation_id) != installation_id:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'installation_id mismatch'})}\n\n"
+                try:
+                    review = await _load_review_for_user(
+                        session, review_id, installation_id, allowed_installation_ids
+                    )
+                except HTTPException as exc:
+                    message = (
+                        "installation_id mismatch"
+                        if exc.status_code == status.HTTP_400_BAD_REQUEST
+                        else "Review not found"
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'message': message})}\n\n"
                     return
 
                 if previous_status is None:

@@ -49,6 +49,40 @@ class GitHubPullRequestWebhookPayload(BaseModel):
     pull_request: GitHubPullRequest
 
 
+class GitHubReviewCommentUser(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    login: str = Field(default="", max_length=255)
+    type: str = Field(default="User", max_length=100)
+
+
+class GitHubReviewComment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int = Field(ge=1)
+    in_reply_to_id: int | None = Field(default=None, ge=1)
+    body: str | None = Field(default=None, max_length=65536)
+    user: GitHubReviewCommentUser | None = None
+
+
+class GitHubReviewCommentPullRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    number: int = Field(ge=1)
+
+
+class GitHubPullRequestReviewCommentWebhookPayload(BaseModel):
+    """`pull_request_review_comment` event (created / edited / deleted)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    action: str = Field(min_length=1, max_length=50)
+    installation: GitHubInstallation
+    repository: GitHubRepository
+    pull_request: GitHubReviewCommentPullRequest
+    comment: GitHubReviewComment
+
+
 class GitHubInstallationWebhookPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

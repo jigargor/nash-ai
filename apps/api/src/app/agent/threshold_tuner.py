@@ -85,6 +85,11 @@ def decide_next_threshold(
     return previous_threshold, "hold_healthy_range"
 
 
+def _new_redis() -> Redis:
+    client: Redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+    return client
+
+
 def _cache_key(installation_id: int) -> str:
     return f"{THRESHOLD_CACHE_PREFIX}:{installation_id}"
 
@@ -94,9 +99,10 @@ def _judge_window_cache_key(installation_id: int) -> str:
 
 
 async def get_effective_fast_path_threshold(
-    installation_id: int, config: AdaptiveThresholdConfig
+    installation_id: int, config: AdaptiveThresholdConfig, redis: Redis | None = None
 ) -> int:
-    cached = await _get_cached_threshold(installation_id)
+    """Resolve the threshold; pass ``redis`` (e.g. ``context["_redis"]``) to reuse a connection."""
+    cached = await _get_cached_threshold(installation_id, redis)
     if cached is not None:
         return cached
     try:
@@ -116,7 +122,7 @@ async def get_effective_fast_path_threshold(
             "Falling back to default fast-path threshold installation_id=%s", installation_id
         )
         threshold = int(config.initial_threshold)
-    await _set_cached_threshold(installation_id, threshold)
+    await _set_cached_threshold(installation_id, threshold, redis)
     return threshold
 
 
@@ -582,8 +588,8 @@ async def _set_cached_judge_gate_window(installation_id: int, payload: dict[str,
         await redis.aclose()
 
 
-async def _get_cached_threshold(installation_id: int) -> int | None:
-    redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+async def _get_cached_threshold(installation_id: int, shared: Redis | None = None) -> int | None:
+    redis = shared if shared is not None else _new_redis()
     try:
         raw = await redis.get(_cache_key(installation_id))
         if raw is None:
@@ -597,11 +603,14 @@ async def _get_cached_threshold(installation_id: int) -> int | None:
         logger.warning("Threshold cache read failed installation_id=%s", installation_id)
         return None
     finally:
-        await redis.aclose()
+        if shared is None:
+            await redis.aclose()
 
 
-async def _set_cached_threshold(installation_id: int, threshold: int) -> None:
-    redis = Redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+async def _set_cached_threshold(
+    installation_id: int, threshold: int, shared: Redis | None = None
+) -> None:
+    redis = shared if shared is not None else _new_redis()
     try:
         await redis.setex(
             _cache_key(installation_id),
@@ -611,4 +620,5 @@ async def _set_cached_threshold(installation_id: int, threshold: int) -> None:
     except redis_exc.RedisError:
         logger.warning("Threshold cache write failed installation_id=%s", installation_id)
     finally:
-        await redis.aclose()
+        if shared is None:
+            await redis.aclose()

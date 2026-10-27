@@ -79,14 +79,31 @@ async def client(test_app: FastAPI) -> httpx.AsyncIterator[httpx.AsyncClient]:
         yield ac
 
 
-async def _seed_user(github_id: int, login: str = "testuser") -> int:
+async def _seed_user(
+    github_id: int, login: str = "testuser", *, oauth_token: str | None = "gho_test_token"
+) -> int:
+    from app.crypto import encrypt_secret
+
+    token_enc = encrypt_secret(oauth_token) if oauth_token else None
     async with AsyncSessionLocal() as session:
+        values: dict[str, object] = {
+            "github_id": github_id,
+            "login": login,
+            "updated_at": datetime.now(timezone.utc),
+        }
+        update_values: dict[str, object] = {
+            "login": login,
+            "updated_at": datetime.now(timezone.utc),
+        }
+        if token_enc is not None:
+            values["token_enc"] = token_enc
+            update_values["token_enc"] = token_enc
         stmt = (
             pg_insert(User)
-            .values(github_id=github_id, login=login, updated_at=datetime.now(timezone.utc))
+            .values(**values)
             .on_conflict_do_update(
                 index_elements=["github_id"],
-                set_={"login": login, "updated_at": datetime.now(timezone.utc)},
+                set_=update_values,
             )
             .returning(User.id)
         )
@@ -355,10 +372,22 @@ async def test_upsert_current_user_encrypts_oauth_token(client: httpx.AsyncClien
 
 
 @pytest.mark.anyio
-async def test_sync_user_installations_upserts_membership(client: httpx.AsyncClient) -> None:
+async def test_sync_user_installations_upserts_membership(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     github_id = _rand_github_id()
     await _seed_user(github_id, login="sync-user")
 
+    async def _verified(_token: str) -> list[dict[str, object]]:
+        return [
+            {
+                "installation_id": 123456789,
+                "account_login": "acme-org",
+                "account_type": "Organization",
+            }
+        ]
+
+    monkeypatch.setattr(users_module, "_list_verified_user_installations", _verified)
     response = await client.post(
         "/api/v1/users/me/installations-sync",
         json={
@@ -409,7 +438,9 @@ async def test_sync_user_installations_missing_user_returns_404(client: httpx.As
 
 
 @pytest.mark.anyio
-async def test_sync_user_installations_removes_stale_memberships(client: httpx.AsyncClient) -> None:
+async def test_sync_user_installations_removes_stale_memberships(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     github_id = _rand_github_id()
     user_id = await _seed_user(github_id, login="sync-prune-user")
     old_installation_id = int(str(uuid4().int)[:9])
@@ -420,6 +451,16 @@ async def test_sync_user_installations_removes_stale_memberships(client: httpx.A
         session.add(InstallationUser(installation_id=old_installation_id, user_id=user_id, role="member"))
         await session.commit()
 
+    async def _verified(_token: str) -> list[dict[str, object]]:
+        return [
+            {
+                "installation_id": new_installation_id,
+                "account_login": "acme-new",
+                "account_type": "Organization",
+            }
+        ]
+
+    monkeypatch.setattr(users_module, "_list_verified_user_installations", _verified)
     response = await client.post(
         "/api/v1/users/me/installations-sync",
         json={
@@ -445,7 +486,9 @@ async def test_sync_user_installations_removes_stale_memberships(client: httpx.A
 
 
 @pytest.mark.anyio
-async def test_sync_installations_direct_covers_existing_installation_update() -> None:
+async def test_sync_installations_direct_covers_existing_installation_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     github_id = _rand_github_id()
     user_id = await _seed_user(github_id, login="direct-sync")
     installation_id = int(str(uuid4().int)[:9])
@@ -460,6 +503,16 @@ async def test_sync_installations_direct_covers_existing_installation_update() -
         session.add(InstallationUser(installation_id=installation_id, user_id=user_id, role="member"))
         await session.commit()
 
+    async def _verified(_token: str) -> list[dict[str, object]]:
+        return [
+            {
+                "installation_id": installation_id,
+                "account_login": "acme-new-login",
+                "account_type": "Organization",
+            }
+        ]
+
+    monkeypatch.setattr(users_module, "_list_verified_user_installations", _verified)
     result = await users_module.sync_current_user_installations(
         users_module.SyncInstallationsRequest(
             installations=[

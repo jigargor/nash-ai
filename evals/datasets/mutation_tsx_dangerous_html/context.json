@@ -1,0 +1,10 @@
+{
+  "repo": "nash-evals/mutations",
+  "pr_number": 1,
+  "head_sha": "0000000000000000000000000000000000000000",
+  "title": "feat(card): support rich text bodies",
+  "body": "Product wants bold/italic in card bodies.",
+  "files": {
+    "web/src/components/card.tsx": "import type { ReactNode } from \"react\";\n\ninterface CardProps {\n  title: string;\n  body: string;\n  children?: ReactNode;\n}\n\nexport function Card({ title, body, children }: CardProps) {\n  return (\n    <section className=\"card\">\n      <h3>{title}</h3>\n      <p dangerouslySetInnerHTML={{ __html: body }} />\n      {children}\n    </section>\n  );\n}\n"
+  }
+}

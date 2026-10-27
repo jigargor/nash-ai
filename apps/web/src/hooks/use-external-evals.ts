@@ -11,6 +11,7 @@ import {
   fetchExternalEvalDetail,
   fetchExternalEvals,
 } from "@/lib/api/external-evals";
+import { hasNonTerminalExternalEval, isExternalEvalTerminalStatus } from "@/lib/external-eval-status";
 
 export function useExternalEvalEstimate() {
   return useMutation({
@@ -33,7 +34,7 @@ export function useExternalEvals(installationId?: number) {
     queryKey: ["external-evals", installationId ?? null],
     queryFn: () => fetchExternalEvals(installationId as number),
     enabled: typeof installationId === "number" && installationId > 0,
-    refetchInterval: 4000,
+    refetchInterval: (query) => (hasNonTerminalExternalEval(query.state.data) ? 4000 : false),
   });
 }
 
@@ -46,7 +47,10 @@ export function useExternalEvalDetail(externalEvalId?: number, installationId?: 
       externalEvalId > 0 &&
       typeof installationId === "number" &&
       installationId > 0,
-    refetchInterval: 3500,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status && isExternalEvalTerminalStatus(status) ? false : 3500;
+    },
   });
 }
 

@@ -36,6 +36,7 @@ _logger.warning(
 )
 
 from app.agent.runner import run_review  # noqa: E402
+from app.agent.pipeline.worker_adapter import run_review_via_pipeline  # noqa: E402
 from app.agent.review_config import ReviewConfig  # noqa: E402
 from app.agent.snapshot import archive_expired_snapshots  # noqa: E402
 from app.agent.threshold_tuner import refresh_judge_gate_windows, tune_all_installations  # noqa: E402
@@ -61,7 +62,9 @@ async def review_pr(
     head_sha: str,
     user_github_id: int | None = None,
 ) -> None:
-    await run_review(
+    # Strangler flag: one setting flips the job onto review_pipeline (default: legacy runner).
+    review_runner = run_review_via_pipeline if settings.use_review_pipeline_worker else run_review
+    await review_runner(
         review_id,
         installation_id,
         owner,
@@ -81,6 +84,14 @@ async def classify_pr_outcomes(
     pr_number: int,
 ) -> None:
     await classify_pr_outcomes_for_closed_pr(installation_id, owner, repo, pr_number)
+
+
+async def record_review_comment_feedback(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
+    """Best-effort feedback capture for `pull_request_review_comment` replies."""
+    from app.webhooks.handlers import record_review_comment_feedback as _record
+    from app.webhooks.schemas import GitHubPullRequestReviewCommentWebhookPayload
+
+    await _record(GitHubPullRequestReviewCommentWebhookPayload.model_validate(payload))
 
 
 async def classify_pending_outcomes(ctx: dict[str, Any]) -> None:
@@ -157,6 +168,7 @@ class WorkerSettings:
     functions = [
         review_pr,
         classify_pr_outcomes,
+        record_review_comment_feedback,
         classify_pending_outcomes,
         archive_review_snapshots,
         tune_fast_path_thresholds,
@@ -168,7 +180,11 @@ class WorkerSettings:
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     queue_name = default_queue_name
-    max_tries = 1
+    # ARQ only re-runs a job on `Retry` or when the worker is interrupted mid-run (deploy/crash);
+    # ordinary exceptions fail the job without retrying. 2 tries lets a review survive one worker
+    # restart. Review-creating POSTs are never auto-retried at the HTTP layer, and
+    # run_review skips posting when the PR head has moved, so a re-run is safe.
+    max_tries = 2
     max_jobs = 5
     job_timeout = 600
     keep_result = 3600

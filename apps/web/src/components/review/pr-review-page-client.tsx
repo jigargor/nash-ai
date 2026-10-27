@@ -17,6 +17,8 @@ import { useDismissFinding, useForceRecoverReview, useRerunReview } from "@/hook
 import { useReview } from "@/hooks/use-review";
 import { useReviewStream } from "@/hooks/use-review-stream";
 import type { ReviewModelAudit } from "@/lib/api/reviews";
+import { filterVisibleFindings, getDismissedFindingIndices } from "@/lib/finding-visibility";
+import { isEditableShortcutTarget } from "@/lib/keyboard-shortcuts";
 import { doesAuditReasonTextSuggestStageFailure } from "@/lib/review-audit-stage-failure";
 import { buildPrReviewDebugExport } from "@/lib/pr-review-debug-export";
 import { isReviewInFlightStatus } from "@/lib/review-status";
@@ -28,10 +30,6 @@ interface PrReviewPageClientProps {
   prNumber: string;
   reviewId: number;
   installationId: number;
-}
-
-function isFindingVisible(_finding: Finding): boolean {
-  return true;
 }
 
 function noFindingsBodyText(
@@ -316,17 +314,26 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   const modelAudits = useReviewModelAudits(reviewId, installationId);
   const selectedFindingIndex = useReviewUiStore((state) => state.selectedFindingIndex);
   const setSelectedFindingIndex = useReviewUiStore((state) => state.setSelectedFindingIndex);
-  const { connectionState } = useReviewStream(reviewId, installationId);
   const [userSelectedRunId, setUserSelectedRunId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [showDismissed, setShowDismissed] = useState(false);
 
   const reviewStatus = reviewQuery.data?.status ?? "";
   const isInFlight = isReviewInFlightStatus(reviewStatus) || rerunMutation.isPending;
-  const findings = useMemo(
-    () => reviewQuery.data?.findings?.findings?.filter(isFindingVisible) ?? [],
-    [reviewQuery.data?.findings?.findings],
+  const { connectionState } = useReviewStream(reviewId, installationId, { enabled: isInFlight });
+  const dismissedIndices = useMemo(
+    () => getDismissedFindingIndices(reviewQuery.data?.debug_artifacts),
+    [reviewQuery.data?.debug_artifacts],
   );
-  const findingOutcomes = reviewQuery.data?.finding_outcomes ?? [];
+  const indexedFindings = useMemo(
+    () => filterVisibleFindings(reviewQuery.data?.findings?.findings ?? [], dismissedIndices, showDismissed),
+    [reviewQuery.data?.findings?.findings, dismissedIndices, showDismissed],
+  );
+  const findings = useMemo(() => indexedFindings.map((item) => item.finding), [indexedFindings]);
+  const findingOutcomes = useMemo(
+    () => reviewQuery.data?.finding_outcomes ?? [],
+    [reviewQuery.data?.finding_outcomes],
+  );
   const isFailedReview = reviewQuery.data?.status === "failed";
 
   const audits = useMemo(() => modelAudits.data?.model_audits ?? [], [modelAudits.data]);
@@ -366,12 +373,28 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     return output;
   }, [reviewQuery.data?.debug_artifacts]);
   const selectedRunOutput = selectedRunId ? runOutputByRunId.get(selectedRunId) ?? null : null;
-  const displayedFindings = useMemo(() => {
+  const isViewingHistoricalRun = !isInFlight && Boolean(selectedRunId) && selectedRunId !== latestRunId;
+  const displayedIndexed = useMemo(() => {
     if (!isInFlight && selectedRunOutput?.findings) {
-      return selectedRunOutput.findings.filter(isFindingVisible);
+      // Dismissed indices describe the latest findings array only; historical runs show everything.
+      return filterVisibleFindings(
+        selectedRunOutput.findings,
+        isViewingHistoricalRun ? new Set<number>() : dismissedIndices,
+        isViewingHistoricalRun || showDismissed,
+      );
     }
-    return findings;
-  }, [findings, isInFlight, selectedRunOutput]);
+    return indexedFindings;
+  }, [indexedFindings, isInFlight, selectedRunOutput, isViewingHistoricalRun, dismissedIndices, showDismissed]);
+  const displayedFindings = useMemo(() => displayedIndexed.map((item) => item.finding), [displayedIndexed]);
+  const displayedDismissedIndices = useMemo(() => {
+    const result = new Set<number>();
+    if (isViewingHistoricalRun) return result;
+    displayedIndexed.forEach((item, displayIndex) => {
+      if (dismissedIndices.has(item.originalIndex)) result.add(displayIndex);
+    });
+    return result;
+  }, [displayedIndexed, dismissedIndices, isViewingHistoricalRun]);
+  const totalDismissedCount = dismissedIndices.size;
   const modelUsageEntries = useMemo(() => modelUsageFromAudits(currentRunAudits), [currentRunAudits]);
   const pipelineStagedFindingsPeak = useMemo(
     () =>
@@ -389,7 +412,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
     if (!isInFlight && selectedRunOutput?.summary?.trim()) return selectedRunOutput.summary.trim();
     const row = reviewQuery.data;
     if (!row) return "";
-    const visible = row.findings?.findings?.filter(isFindingVisible) ?? [];
+    const visible = indexedFindings;
     const sum = row.findings?.summary ?? "";
     if (visible.length) return sum;
     return noFindingsBodyText(
@@ -398,9 +421,16 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
       row.status === "failed",
       isReviewInFlightStatus(row.status) || rerunMutation.isPending,
     );
-  }, [isInFlight, reviewQuery.data, rerunMutation.isPending, selectedRunOutput]);
-  const displayedFindingOutcomes =
-    !isInFlight && selectedRunId && selectedRunId !== latestRunId ? [] : findingOutcomes;
+  }, [isInFlight, reviewQuery.data, rerunMutation.isPending, selectedRunOutput, indexedFindings]);
+  const displayedFindingOutcomes = useMemo(() => {
+    if (isViewingHistoricalRun) return [];
+    // Outcomes are keyed by the original findings index; remap to the displayed (possibly filtered) index.
+    const displayIndexByOriginal = new Map(displayedIndexed.map((item, displayIndex) => [item.originalIndex, displayIndex]));
+    return findingOutcomes.flatMap((outcome) => {
+      const displayIndex = displayIndexByOriginal.get(outcome.finding_index);
+      return displayIndex === undefined ? [] : [{ ...outcome, finding_index: displayIndex }];
+    });
+  }, [isViewingHistoricalRun, displayedIndexed, findingOutcomes]);
   const displayedCostUsd =
     !isInFlight && selectedRunOutput?.cost_usd
       ? selectedRunOutput.cost_usd
@@ -409,6 +439,8 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!["j", "k"].includes(event.key)) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isEditableShortcutTarget(event.target)) return;
       if (!displayedFindings.length) return;
       event.preventDefault();
       const current = selectedFindingIndex ?? 0;
@@ -502,8 +534,10 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
   }
 
   function handleDismiss(index: number): void {
-    if (!isInFlight && selectedRunId && selectedRunId !== latestRunId) return;
-    void dismissMutation.mutateAsync({ reviewId, findingIndex: index, installationId });
+    if (isViewingHistoricalRun) return;
+    const originalIndex = displayedIndexed[index]?.originalIndex;
+    if (originalIndex === undefined || dismissedIndices.has(originalIndex)) return;
+    void dismissMutation.mutateAsync({ reviewId, findingIndex: originalIndex, installationId });
   }
 
   function submitRerun(): void {
@@ -705,6 +739,23 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
         getDebugExportPayload={getDebugExportPayload}
       />
 
+      {!isInFlight && !isViewingHistoricalRun && totalDismissedCount > 0 ? (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+          <Button
+            variant="ghost"
+            aria-pressed={showDismissed}
+            onClick={() => setShowDismissed((previous) => !previous)}
+          >
+            {showDismissed ? "Hide dismissed" : "Show dismissed"} ({totalDismissedCount})
+          </Button>
+          {!showDismissed && postedFindingsCount === 0 ? (
+            <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
+              All findings on this review have been dismissed.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
       {showFindingsWorkspace ? (
         <div className="review-workspace-grid panel panel-elevated">
           <FileTree findings={displayedFindings} onSelectFinding={setSelectedFindingIndex} />
@@ -712,6 +763,7 @@ export function PrReviewPageClient({ owner, repo, prNumber, reviewId, installati
           <FindingsPanel
             findings={displayedFindings}
             findingOutcomes={displayedFindingOutcomes}
+            dismissedIndices={displayedDismissedIndices}
             selectedFindingIndex={selectedFindingIndex}
             onSelectFinding={setSelectedFindingIndex}
             onDismiss={handleDismiss}

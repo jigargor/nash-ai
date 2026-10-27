@@ -19,14 +19,13 @@ return 1
 """
 
 
-async def check_installation_review_rate_limit(
+async def _check_sliding_window_rate_limit(
     redis: Redis,
-    installation_id: int,
+    key: str,
     *,
     limit: int,
     window_seconds: int = 3600,
 ) -> bool:
-    key = f"ratelimit:install:{installation_id}"
     now = time.time()
     cutoff = now - window_seconds
 
@@ -38,6 +37,36 @@ async def check_installation_review_rate_limit(
     _, count, _, _ = await pipe.execute()
 
     return int(count) < limit
+
+
+async def check_installation_review_rate_limit(
+    redis: Redis,
+    installation_id: int,
+    *,
+    limit: int,
+    window_seconds: int = 3600,
+) -> bool:
+    return await _check_sliding_window_rate_limit(
+        redis,
+        f"ratelimit:install:{installation_id}",
+        limit=limit,
+        window_seconds=window_seconds,
+    )
+
+
+async def check_user_review_rate_limit(
+    redis: Redis,
+    github_id: int,
+    *,
+    limit: int,
+    window_seconds: int = 3600,
+) -> bool:
+    return await _check_sliding_window_rate_limit(
+        redis,
+        f"ratelimit:user:{github_id}",
+        limit=limit,
+        window_seconds=window_seconds,
+    )
 
 
 def token_budget_key(installation_id: int, now: datetime | None = None) -> str:

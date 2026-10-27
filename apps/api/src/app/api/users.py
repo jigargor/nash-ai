@@ -2,7 +2,7 @@ import asyncio
 import hmac
 import logging
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.config import settings
-from app.crypto import encrypt_secret
+from app.crypto import decrypt_secret, encrypt_secret
 from app.db.models import Installation, InstallationUser, User, UserKeyAuditLog, UserProviderKey
 from app.db.session import AsyncSessionLocal, set_user_context
 
@@ -20,6 +20,62 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "gemini"})
 _SYNCED_INSTALLATION_ROLE = "admin"
+_GITHUB_API_BASE = "https://api.github.com"
+_GITHUB_API_VERSION = "2022-11-28"
+
+
+async def _list_verified_user_installations(oauth_token: str) -> list[dict[str, Any]]:
+    """Fetch installations the caller's OAuth token can actually see."""
+    headers = {
+        "Authorization": f"Bearer {oauth_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+    }
+    verified: list[dict[str, Any]] = []
+    url: str | None = f"{_GITHUB_API_BASE}/user/installations"
+    params: dict[str, str | int] | None = {"per_page": 100}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        while url:
+            response = await client.get(url, headers=headers, params=params)
+            if response.status_code in {401, 403}:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="GitHub OAuth token is missing or expired; please log out and back in.",
+                )
+            response.raise_for_status()
+            payload = response.json()
+            installations = payload.get("installations") if isinstance(payload, dict) else None
+            if not isinstance(installations, list):
+                break
+            for item in installations:
+                if not isinstance(item, dict):
+                    continue
+                installation_id = item.get("id")
+                account = item.get("account")
+                account_obj = account if isinstance(account, dict) else {}
+                login = str(account_obj.get("login") or "").strip()
+                account_type = str(account_obj.get("type") or "Unknown").strip() or "Unknown"
+                if not isinstance(installation_id, int) or installation_id <= 0 or not login:
+                    continue
+                verified.append(
+                    {
+                        "installation_id": installation_id,
+                        "account_login": login,
+                        "account_type": account_type,
+                    }
+                )
+            link = response.headers.get("Link", "")
+            next_url: str | None = None
+            for part in link.split(","):
+                segments = part.strip().split(";")
+                if len(segments) < 2:
+                    continue
+                if any('rel="next"' in segment for segment in segments[1:]):
+                    next_url = segments[0].strip().lstrip("<").rstrip(">")
+                    break
+            url = next_url
+            params = None
+    return verified
 
 
 def _verify_api_access(x_api_key: str | None = Header(default=None)) -> None:
@@ -270,14 +326,11 @@ async def sync_current_user_installations(
     body: SyncInstallationsRequest,
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, int]:
-    installation_ids = sorted(
-        {
-            item.installation_id
-            for item in body.installations
-            if item.installation_id > 0 and item.account_login.strip()
-        }
-    )
+    """Link the caller only to installations GitHub confirms for their OAuth token.
 
+    Client-supplied installation IDs are advisory metadata only. Any id not returned by
+    ``GET /user/installations`` is dropped so a forged body cannot grant cross-tenant admin.
+    """
     async with AsyncSessionLocal() as session:
         await set_user_context(session, current_user.github_id)
         user = (
@@ -288,7 +341,52 @@ async def sync_current_user_installations(
                 status_code=404,
                 detail="Account not found — please log out and back in to register your account.",
             )
+        if user.token_enc is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="GitHub OAuth token is missing; please log out and back in.",
+            )
+        try:
+            oauth_token = decrypt_secret(user.token_enc)
+        except Exception as exc:
+            logger.warning(
+                "Failed to decrypt user OAuth token github_id=%s err=%s",
+                current_user.github_id,
+                exc.__class__.__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="GitHub OAuth token is invalid; please log out and back in.",
+            ) from exc
 
+        verified = await _list_verified_user_installations(oauth_token)
+        # Optional body metadata may refine account_login/type for verified ids only.
+        body_by_id = {
+            item.installation_id: item
+            for item in body.installations
+            if item.installation_id > 0 and item.account_login.strip()
+        }
+        sync_items: list[dict[str, Any]] = []
+        for item in verified:
+            installation_id = int(item["installation_id"])
+            override = body_by_id.get(installation_id)
+            sync_items.append(
+                {
+                    "installation_id": installation_id,
+                    "account_login": (
+                        override.account_login.strip()
+                        if override is not None and override.account_login.strip()
+                        else str(item["account_login"])
+                    ),
+                    "account_type": (
+                        override.account_type.strip() or "Unknown"
+                        if override is not None
+                        else str(item["account_type"])
+                    ),
+                }
+            )
+
+        installation_ids = sorted(int(item["installation_id"]) for item in sync_items)
         if installation_ids:
             existing_installations = {
                 int(installation.installation_id): installation
@@ -302,21 +400,22 @@ async def sync_current_user_installations(
                     .all()
                 )
             }
-            for item in body.installations:
-                if item.installation_id <= 0 or not item.account_login.strip():
-                    continue
-                installation = existing_installations.get(item.installation_id)
+            for item in sync_items:
+                installation_id = int(item["installation_id"])
+                account_login = str(item["account_login"]).strip()
+                account_type = str(item["account_type"]).strip() or "Unknown"
+                installation = existing_installations.get(installation_id)
                 if installation is None:
                     installation = Installation(
-                        installation_id=item.installation_id,
-                        account_login=item.account_login.strip(),
-                        account_type=item.account_type.strip() or "Unknown",
+                        installation_id=installation_id,
+                        account_login=account_login,
+                        account_type=account_type,
                     )
                     session.add(installation)
-                    existing_installations[item.installation_id] = installation
+                    existing_installations[installation_id] = installation
                 else:
-                    installation.account_login = item.account_login.strip()
-                    installation.account_type = item.account_type.strip() or "Unknown"
+                    installation.account_login = account_login
+                    installation.account_type = account_type
 
         existing_rows = (
             (
@@ -357,7 +456,12 @@ async def sync_current_user_installations(
 async def delete_current_user(
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> dict[str, str]:
-    """GDPR erasure: soft-delete the user. Cascade removes all provider keys via DB FK."""
+    """GDPR erasure: soft-delete the user and hard-delete credential material.
+
+    The soft-deleted ``users`` row is retained for historical FK integrity, but every
+    stored BYOK provider key is deleted and the encrypted GitHub OAuth token is nulled
+    in the same transaction, so no secret survives account deletion.
+    """
     async with AsyncSessionLocal() as session:
         await set_user_context(session, current_user.github_id)
         row = (
@@ -365,6 +469,21 @@ async def delete_current_user(
         ).scalar_one_or_none()
         if row is None or row.deleted_at is not None:
             raise HTTPException(status_code=404, detail="User not found")
+        provider_key_rows = (
+            (
+                await session.execute(
+                    select(UserProviderKey).where(UserProviderKey.user_id == row.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for key_row in provider_key_rows:
+            session.add(
+                UserKeyAuditLog(user_id=row.id, provider=key_row.provider, action="deleted")
+            )
+            await session.delete(key_row)
+        row.token_enc = None
         row.deleted_at = datetime.now(timezone.utc)
         await session.commit()
     return {"detail": "User marked for deletion"}

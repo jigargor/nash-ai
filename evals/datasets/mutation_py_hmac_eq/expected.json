@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "message": "Webhook signature compared with == instead of hmac.compare_digest.",
+      "file_path": "app/webhooks/verify.py",
+      "line_start": 7
+    }
+  ]
+}

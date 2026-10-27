@@ -57,14 +57,13 @@ class FindingValidator:
 
         actual_target_line = lines[finding.line_start - 1]
         if finding.target_line_content != actual_target_line:
-            matched_line = _find_line_by_content(lines, finding.target_line_content)
-            if (
-                matched_line is not None
-                and matched_line >= finding.line_start
-                and matched_line <= end_line
-            ):
-                pass
-            else:
+            matched_line = _find_line_by_content(
+                lines,
+                finding.target_line_content,
+                start_line=finding.line_start,
+                end_line=end_line,
+            )
+            if matched_line is None:
                 return (
                     False,
                     "target_line_mismatch",
@@ -91,6 +90,17 @@ class FindingValidator:
             original_indent = actual_target_line[: len(actual_target_line) - len(actual_target_line.lstrip())]
             suggestion_first = suggestion_lines[0]
             suggestion_indent = suggestion_first[: len(suggestion_first) - len(suggestion_first.lstrip())]
+            first_non_empty = next((line for line in suggestion_lines if line.strip()), None)
+            if (
+                not original_indent
+                and first_non_empty is not None
+                and first_non_empty != first_non_empty.lstrip()
+            ):
+                return (
+                    False,
+                    "incoherent_suggestion",
+                    "Suggestion indentation does not match target line",
+                )
             if original_indent and suggestion_first.strip() and suggestion_indent != original_indent:
                 return (
                     False,
@@ -188,9 +198,17 @@ class FindingValidator:
         return True
 
 
-def _find_line_by_content(lines: list[str], target_line_content: str) -> int | None:
-    for index, line in enumerate(lines, start=1):
-        if line == target_line_content:
+def _find_line_by_content(
+    lines: list[str],
+    target_line_content: str,
+    *,
+    start_line: int = 1,
+    end_line: int | None = None,
+) -> int | None:
+    """Return the 1-based line number of the first exact match within [start_line, end_line]."""
+    upper = len(lines) if end_line is None else min(end_line, len(lines))
+    for index in range(max(start_line, 1), upper + 1):
+        if lines[index - 1] == target_line_content:
             return index
     return None
 
