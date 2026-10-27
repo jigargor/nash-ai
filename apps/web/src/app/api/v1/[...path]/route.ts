@@ -58,6 +58,38 @@ async function normalizedUpstreamError(response: Response): Promise<NextResponse
   return errorResponse({ ...normalized, requestId: requestId ?? undefined });
 }
 
+/** Hop-by-hop / compression headers that must not be forwarded after Node decompresses. */
+const STRIP_UPSTREAM_RESPONSE_HEADERS = new Set([
+  "content-encoding",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "upgrade",
+]);
+
+/**
+ * Node's `fetch` decompresses gzip/br bodies but often leaves `Content-Encoding` intact.
+ * Returning that Response to the browser causes `net::ERR_CONTENT_DECODING_FAILED`.
+ */
+async function rebuildDecodedProxyResponse(upstream: Response): Promise<NextResponse> {
+  const body = await upstream.arrayBuffer();
+  const headers = new Headers();
+  upstream.headers.forEach((value, key) => {
+    if (STRIP_UPSTREAM_RESPONSE_HEADERS.has(key.toLowerCase())) return;
+    headers.set(key, value);
+  });
+  return new NextResponse(body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
+  });
+}
+
 function isReviewRerunPath(path: string[]): boolean {
   return path.length === 3 && path[0] === "reviews" && path[2] === "rerun";
 }
@@ -154,6 +186,9 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
   headers.set("X-Api-Key", apiAccessKey);
   headers.set("X-Dashboard-User-Token", dashboardUserToken);
   headers.set("X-Usage-Service", "dashboard-bff");
+  // Ask for an uncompressed body. Node fetch still may decompress gzip; we strip
+  // Content-Encoding on the way out so the browser never sees a mismatched pair.
+  headers.set("Accept-Encoding", "identity");
   if (cfClearanceCookie) headers.set("X-CF-Clearance", cfClearanceCookie);
 
   let requestBody: ArrayBuffer | undefined;
@@ -182,7 +217,7 @@ async function proxyApiRequest(request: Request, context: ApiProxyRouteContext):
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
     if (!response.ok) return await normalizedUpstreamError(response);
-    return response;
+    return await rebuildDecodedProxyResponse(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upstream request failed";
     return errorResponse(

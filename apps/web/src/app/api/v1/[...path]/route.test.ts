@@ -213,6 +213,45 @@ describe("api v1 proxy route", () => {
     expect(options?.method).toBe("PATCH");
   });
 
+  it("strips Content-Encoding so browsers can decode already-decompressed bodies", async () => {
+    parseSessionTokenMock.mockResolvedValue({
+      sub: "12345",
+      user: { id: 12345, login: "octocat" },
+      exp: Math.floor(Date.now() / 1000) + 60,
+    });
+    createDashboardUserTokenMock.mockReturnValue("server-minted-dashboard-token");
+    const payload = JSON.stringify([{ id: 1 }]);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      // Simulate Node fetch: body already decoded, Content-Encoding still present.
+      new Response(payload, {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-encoding": "gzip",
+          "content-length": "12",
+          "x-request-id": "req-decode-1",
+        },
+      }),
+    );
+
+    const routeModule = await import("./route");
+    const request = new Request("http://localhost:3000/api/v1/reviews", { method: "GET" });
+    const response = await routeModule.GET(request, {
+      params: Promise.resolve({ path: ["reviews"] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("x-request-id")).toBe("req-decode-1");
+    await expect(response.json()).resolves.toEqual([{ id: 1 }]);
+
+    const options = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const forwarded = new Headers(options?.headers);
+    expect(forwarded.get("Accept-Encoding")).toBe("identity");
+  });
+
   it("normalizes legacy upstream errors into the canonical envelope", async () => {
     parseSessionTokenMock.mockResolvedValue({
       sub: "12345",
