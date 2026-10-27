@@ -1,0 +1,12 @@
+diff --git a/app/tools/runner.py b/app/tools/runner.py
+--- a/app/tools/runner.py
++++ b/app/tools/runner.py
+@@ -2,7 +2,7 @@
+ 
+ 
+ def run_formatter(path: str) -> int:
+-    completed = subprocess.run(["ruff", "format", path], check=False)
++    completed = subprocess.run("ruff format " + path, shell=True, check=False)
+     return completed.returncode
+ 
+ 

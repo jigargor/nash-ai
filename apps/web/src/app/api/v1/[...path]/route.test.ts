@@ -92,7 +92,8 @@ describe("api v1 proxy route", () => {
     expect(forwardedHeaders.get("X-User-Github-Id")).toBeNull();
   });
 
-  it("rejects rerun requests when cf_clearance cookie is missing", async () => {
+  it("rejects rerun requests when Turnstile is configured and cf_clearance is missing", async () => {
+    vi.stubEnv("TURNSTILE_SECRET_KEY", "test-turnstile-secret");
     parseSessionTokenMock.mockResolvedValue({
       sub: "12345",
       user: { id: 12345, login: "octocat" },
@@ -122,6 +123,29 @@ describe("api v1 proxy route", () => {
         retryable: false,
       },
     });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("denies browser proxy access to installations-sync", async () => {
+    parseSessionTokenMock.mockResolvedValue({
+      sub: "12345",
+      user: { id: 12345, login: "octocat" },
+      exp: Math.floor(Date.now() / 1000) + 60,
+    });
+    createDashboardUserTokenMock.mockReturnValue("server-minted-dashboard-token");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const routeModule = await import("./route");
+    const request = new Request("http://localhost:3000/api/v1/users/me/installations-sync", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ installations: [] }),
+    });
+    const response = await routeModule.POST(request, {
+      params: Promise.resolve({ path: ["users", "me", "installations-sync"] }),
+    });
+
+    expect(response.status).toBe(403);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

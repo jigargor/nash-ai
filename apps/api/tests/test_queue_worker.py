@@ -29,8 +29,8 @@ def test_tune_fast_path_thresholds_refreshes_judge_windows_first(
     assert "judge_gate_window_refresh" in ctx
     assert "threshold_tuning_results" in ctx
 
-def test_worker_settings_disable_retries_for_review_jobs() -> None:
-    assert worker.WorkerSettings.max_tries == 1
+def test_worker_settings_allow_one_retry_after_worker_interruption() -> None:
+    assert worker.WorkerSettings.max_tries == 2
 
 
 @pytest.mark.anyio
@@ -81,3 +81,26 @@ async def test_review_pr_forwards_redis_context_and_user(monkeypatch: pytest.Mon
         "user_github_id": 777,
         "redis": redis_client,
     }
+
+
+@pytest.mark.anyio
+async def test_review_pr_routes_through_pipeline_adapter_when_flag_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def _legacy(*_args: object, **_kwargs: object) -> None:
+        calls.append("legacy")
+
+    async def _pipeline(*_args: object, **_kwargs: object) -> None:
+        calls.append("pipeline")
+
+    monkeypatch.setattr(worker, "run_review", _legacy)
+    monkeypatch.setattr(worker, "run_review_via_pipeline", _pipeline)
+
+    monkeypatch.setattr(worker.settings, "use_review_pipeline_worker", False)
+    await worker.review_pr({}, 1, 2, "acme", "nash-ai", 3, "a" * 40)
+    monkeypatch.setattr(worker.settings, "use_review_pipeline_worker", True)
+    await worker.review_pr({}, 1, 2, "acme", "nash-ai", 3, "a" * 40)
+
+    assert calls == ["legacy", "pipeline"]

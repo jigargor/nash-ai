@@ -2,8 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { actionFetchReviewModelAudits } from "@/app/actions/dashboard-api";
-import type { ReviewDetail } from "@/lib/api/reviews";
+import { fetchReviewModelAudits, type ReviewDetail } from "@/lib/api/reviews";
 import { isReviewInFlightStatus } from "@/lib/review-status";
 
 interface UseReviewModelAuditsOptions {
@@ -18,7 +17,7 @@ export function useReviewModelAudits(
   const queryClient = useQueryClient();
   return useQuery({
     queryKey: ["review-model-audits", reviewId, installationId ?? null],
-    queryFn: () => actionFetchReviewModelAudits(reviewId, installationId),
+    queryFn: () => fetchReviewModelAudits(reviewId, installationId),
     enabled: Number.isFinite(reviewId) && (options?.enabled ?? true),
     refetchInterval: () => {
       const review = queryClient.getQueryData<ReviewDetail>(["review", reviewId, installationId ?? null]);

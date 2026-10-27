@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "message": "dangerouslySetInnerHTML renders unsanitized body content (XSS).",
+      "file_path": "web/src/components/card.tsx",
+      "line_start": 13
+    }
+  ]
+}

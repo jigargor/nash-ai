@@ -97,3 +97,54 @@ def test_validator_rejects_target_line_with_tab_space_mismatch() -> None:
     assert not is_valid
     assert reason == "target_line_mismatch"
     assert detail == "target_line_content does not match file content at line_start"
+
+
+def test_validator_content_match_is_bounded_to_finding_range() -> None:
+    content = "x = 1\ny = 2\nz = 3\nprint(y)"
+    validator = FindingValidator({"a.py": content})
+    # Content exists in the file, but only outside [line_start, line_end] -> must be rejected.
+    outside = _base_finding(
+        line_start=1,
+        line_end=2,
+        target_line_content="z = 3",
+        suggestion=None,
+        evidence="diff_visible",
+        evidence_tool_calls=None,
+    )
+    is_valid, reason, _ = validator.validate(outside)
+    assert not is_valid
+    assert reason == "target_line_mismatch"
+
+
+def test_validator_content_match_ignores_earlier_duplicate_outside_range() -> None:
+    content = "x = 1\ny = 2\nx = 1\nprint(y)"
+    validator = FindingValidator({"a.py": content})
+    # First file-wide match (line 1) is before line_start; the in-range duplicate must win.
+    finding = _base_finding(
+        line_start=2,
+        line_end=3,
+        target_line_content="x = 1",
+        suggestion=None,
+        evidence="diff_visible",
+        evidence_tool_calls=None,
+    )
+    is_valid, reason, _ = validator.validate(finding)
+    assert is_valid
+    assert reason is None
+
+
+def test_validator_rejects_indented_suggestion_for_top_level_target() -> None:
+    validator = FindingValidator({"a.py": "value = int(user_input)\nprint(value)"})
+    finding = _base_finding(suggestion="    value = int(user_input) or 0")
+    is_valid, reason, detail = validator.validate(finding)
+    assert not is_valid
+    assert reason == "incoherent_suggestion"
+    assert detail == "Suggestion indentation does not match target line"
+
+
+def test_validator_rejects_top_level_suggestion_whose_first_non_empty_line_is_indented() -> None:
+    validator = FindingValidator({"a.py": "value = int(user_input)\nprint(value)"})
+    finding = _base_finding(suggestion="\n    value = int(user_input) or 0")
+    is_valid, reason, _ = validator.validate(finding)
+    assert not is_valid
+    assert reason == "incoherent_suggestion"

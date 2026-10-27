@@ -1,0 +1,10 @@
+diff --git a/app/config/settings.py b/app/config/settings.py
+--- a/app/config/settings.py
++++ b/app/config/settings.py
+@@ -2,5 +2,5 @@
+ 
+ 
+ def load_settings() -> dict[str, str]:
+-    api_key = os.environ.get("PAYMENTS_API_KEY", "")
++    api_key = os.environ.get("PAYMENTS_API_KEY", "sk_live_51HkQZ2eZvKYlo2C9x8mJ7q")
+     return {"api_key": api_key, "region": os.environ.get("REGION", "us-east-1")}

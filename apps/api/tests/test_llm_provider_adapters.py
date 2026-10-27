@@ -736,3 +736,33 @@ async def test_openai_structured_output_multiple_tool_calls_uses_first_matching(
     )
 
     assert out.payload == {"summary": "found", "findings": []}
+
+
+def test_anthropic_render_system_caches_only_static_block() -> None:
+    from app.agent.prompts.system import build_system_prompt
+
+    adapter = get_provider_adapter("anthropic")
+    prompt = build_system_prompt([], "diff", "Repo-specific guidance.")
+
+    system = adapter.render_anthropic_system(prompt)
+
+    assert len(system) == 2
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+    assert "Repo-specific guidance." not in system[0]["text"]
+    assert "cache_control" not in system[1]
+    assert "Repo-specific guidance." in system[1]["text"]
+
+
+def test_anthropic_render_system_accepts_explicit_dynamic_block_with_ttl() -> None:
+    from app.llm.providers.base import CacheRequestOptions
+
+    adapter = get_provider_adapter("anthropic")
+
+    system = adapter.render_anthropic_system(
+        "static prefix", CacheRequestOptions(ttl="1h"), dynamic_prompt="per-review facts"
+    )
+
+    assert system[0]["text"] == "static prefix"
+    assert system[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in system[1]
+    assert "per-review facts" in system[1]["text"]

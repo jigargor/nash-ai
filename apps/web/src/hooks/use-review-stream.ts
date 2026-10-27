@@ -38,7 +38,10 @@ export function useReviewStream(reviewId: number, installationId: number, option
           void queryClient.invalidateQueries({ queryKey: ["review", reviewId] });
           void queryClient.invalidateQueries({ queryKey: ["reviews"] });
         }
-        if (parsed.type === "complete") eventSource.close();
+        if (parsed.type === "complete") {
+          eventSource.close();
+          setConnectionState("disconnected");
+        }
       } catch {
         setEvents((previous) => [...previous, { type: "error", message: "Invalid stream event payload" }]);
       }

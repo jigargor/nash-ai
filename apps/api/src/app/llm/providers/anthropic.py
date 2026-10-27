@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.agent.prompts.system import DYNAMIC_PROMPT_MARKER, split_system_prompt
 from app.agent.provider_clients import get_provider_api_key
 from app.llm.catalog.loader import load_baseline_catalog
 from app.llm.errors import coerce_quota_error
@@ -20,18 +21,32 @@ class AnthropicAdapter(BaseProviderAdapter):
     provider = "anthropic"
 
     def render_anthropic_system(
-        self, system_prompt: str, options: CacheRequestOptions | None = None
+        self,
+        system_prompt: str,
+        options: CacheRequestOptions | None = None,
+        *,
+        dynamic_prompt: str | None = None,
     ) -> list[dict[str, Any]]:
-        cache_control: dict[str, str] = {"type": "ephemeral"}
-        if options and options.ttl in {"5m", "1h"}:
-            cache_control["ttl"] = options.ttl
-        return [
+        """Render system blocks; only the static prefix carries ``cache_control``.
+
+        When ``dynamic_prompt`` is not given, the prompt is split on the dynamic-section
+        marker emitted by ``build_system_prompt``. The dynamic block follows uncached so
+        per-review facts/repo instructions never invalidate the static prefix.
+        """
+        static_text = system_prompt
+        dynamic_text = dynamic_prompt or ""
+        if dynamic_prompt is None:
+            static_text, dynamic_text = split_system_prompt(system_prompt)
+        blocks: list[dict[str, Any]] = [
             {
                 "type": "text",
-                "text": system_prompt,
-                "cache_control": cache_control,
+                "text": static_text,
+                "cache_control": anthropic_cache_control(options),
             }
         ]
+        if dynamic_text.strip():
+            blocks.append({"type": "text", "text": _dynamic_block_text(dynamic_text)})
+        return blocks
 
     def parse_usage(self, usage: object) -> LLMUsage:
         parsed = super().parse_usage(usage)
@@ -105,6 +120,21 @@ class AnthropicAdapter(BaseProviderAdapter):
                 return StructuredOutputResult(payload=payload, raw_response=response, usage=usage)
             raise RuntimeError(f"{request.tool_name} tool payload was not a JSON object")
         raise RuntimeError(f"Model did not return {request.tool_name} tool output")
+
+
+def anthropic_cache_control(options: CacheRequestOptions | None = None) -> dict[str, str]:
+    """Ephemeral ``cache_control`` payload, honoring the optional 5m/1h TTL."""
+    cache_control: dict[str, str] = {"type": "ephemeral"}
+    if options and options.ttl in {"5m", "1h"}:
+        cache_control["ttl"] = options.ttl
+    return cache_control
+
+
+def _dynamic_block_text(dynamic_text: str) -> str:
+    stripped = dynamic_text.strip()
+    if stripped.startswith(DYNAMIC_PROMPT_MARKER):
+        return stripped
+    return f"{DYNAMIC_PROMPT_MARKER}\n\n{stripped}"
 
 
 _COUNT_TOKENS_CACHE: dict[str, int] = {}

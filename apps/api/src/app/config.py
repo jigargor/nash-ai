@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     github_app_id: str
     github_webhook_secret: str
+    # Login of the GitHub App bot (e.g. "nash-ai[bot]"). When set, prior-comment lookups match
+    # this login exactly instead of any Bot user.
+    github_app_bot_login: str | None = None
     APP_PRIVATE_KEY_PEM: str | None = None
     APP_PRIVATE_KEY_PEM_path: Path = Path("private-key.pem")
     # Dashboard OAuth (used by Next.js BFF). Optional on the API/worker: workers do not
@@ -69,11 +72,20 @@ class Settings(BaseSettings):
     dashboard_user_jwt_issuer: str = "nash-web-dashboard"
     terms_version: str = "2026-04-29"
     enable_reviews: bool = True
+    # Strangler flag (Phase 4): route the ARQ ``review_pr`` job through
+    # ``app.agent.pipeline.worker_adapter`` (review_pipeline) instead of ``runner.run_review``.
+    # Default False keeps the legacy runner as the production path.
+    use_review_pipeline_worker: bool = False
+    # Requires GitHub App permission checks:write. Falls back to no-op when False/unauthorized.
+    enable_check_runs: bool = True
+    # Cap for untrusted .codereview.yml prompt_additions injected into the system prompt.
+    max_repo_prompt_additions_chars: int = 2_000
     reviews_per_hour_limit: int = 30
+    reviews_per_hour_per_user_limit: int = 20
     daily_token_budget_per_installation: int = 10_000_000
     stale_review_recovery_enabled: bool = True
     stale_review_recovery_running_max_age_minutes: int = 10
-    stale_review_recovery_queued_enabled: bool = False
+    stale_review_recovery_queued_enabled: bool = True
     stale_review_recovery_queued_max_age_minutes: int = 30
     stale_review_recovery_cron_minutes: int = 5
     review_force_actions_enabled: bool = False

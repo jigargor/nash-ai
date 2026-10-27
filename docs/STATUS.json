@@ -1,0 +1,10 @@
+{
+  "phase": "hardening",
+  "baseline": null,
+  "phase5_tenant_isolation": {
+    "missed_issues_rls_migration": "apps/api/alembic/versions/x4y5z6a7b8c9_enable_rls_missed_issues.py",
+    "app_db_role_script": "apps/api/scripts/create_app_db_role.sql",
+    "nobypassrls_note": "RLS policies are only enforced when the API/worker connect as a NOSUPERUSER NOBYPASSRLS role that does not own the tables. The local docker-compose `dev` user is a superuser, so policies are bypassed there. Create `nash_app` with apps/api/scripts/create_app_db_role.sql and point DATABASE_URL at it (keep Alembic on the owner role).",
+    "nobypassrls_enforced_in_ci": false
+  }
+}

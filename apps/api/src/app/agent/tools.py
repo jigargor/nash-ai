@@ -100,6 +100,7 @@ def _normalize_repo_path(raw_path: object) -> str:
     return path
 
 
+MAX_SEARCH_LOCAL_HITS = 50
 MAX_TOOL_RESULT_CHARS = 20_000 * 4  # ~20k tokens, conservative char cap
 
 
@@ -186,28 +187,50 @@ async def execute_tool(name: str, tool_input: dict[str, Any], context: dict[str,
             pattern = tool_input["pattern"]
             path_glob = tool_input.get("path_glob")
             fetched_files = context.get("fetched_files")
+            hits: list[dict[str, object]] = []
             if isinstance(fetched_files, dict) and fetched_files:
-                import re as _re
-
                 try:
-                    regex = _re.compile(str(pattern))
-                except _re.error as exc:
+                    regex = re.compile(str(pattern))
+                except re.error as exc:
                     return json.dumps({"error": f"invalid regex: {exc}"})
-                hits: list[dict[str, object]] = []
                 for file_path, content in fetched_files.items():
                     if path_glob and str(path_glob) not in str(file_path):
                         continue
                     for idx, line in enumerate(str(content).split("\n"), start=1):
                         if regex.search(line):
                             hits.append({"path": file_path, "line": idx, "text": line[:200]})
-                            if len(hits) >= 50:
+                            if len(hits) >= MAX_SEARCH_LOCAL_HITS:
                                 break
-                    if len(hits) >= 50:
+                    if len(hits) >= MAX_SEARCH_LOCAL_HITS:
                         break
-                return _truncate_tool_result(json.dumps(hits))
-            items = await gh.search_code(owner, repo, pattern, path_glob)
-            normalized = [{"path": item.get("path"), "sha": item.get("sha")} for item in items]
-            return _truncate_tool_result(json.dumps(normalized))
+            # Always consult repo-wide search too: fetched_files only covers files already read,
+            # so a local hit must not suppress cross-file matches the model has not opened.
+            remote_hits: list[dict[str, object]] = []
+            search_code = getattr(gh, "search_code", None)
+            if callable(search_code):
+                try:
+                    items = await search_code(owner, repo, pattern, path_glob)
+                except Exception as exc:
+                    if not hits:
+                        raise
+                    items = []
+                    hits.append({"warning": f"repo search unavailable: {exc}"[:200]})
+                remote_hits = [
+                    {"path": item.get("path"), "sha": item.get("sha")}
+                    for item in items
+                    if isinstance(item, dict)
+                ]
+            local_paths = {hit.get("path") for hit in hits if "path" in hit}
+            merged: list[dict[str, object]] = list(hits)
+            seen_remote: set[object] = set()
+            for remote in remote_hits:
+                remote_path = remote.get("path")
+                # Local hits carry line numbers and are strictly more informative; dedupe by path.
+                if remote_path in local_paths or remote_path in seen_remote:
+                    continue
+                seen_remote.add(remote_path)
+                merged.append(remote)
+            return _truncate_tool_result(json.dumps(merged))
 
         if name == "get_file_history":
             path = _normalize_repo_path(tool_input["path"])

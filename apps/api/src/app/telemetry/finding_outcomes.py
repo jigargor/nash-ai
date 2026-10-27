@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
@@ -496,8 +497,15 @@ async def list_review_finding_outcomes(
 async def summarize_finding_outcomes(
     *,
     installation_id: int | None = None,
+    installation_ids: Sequence[int] | None = None,
     repo_full_name: str | None = None,
 ) -> dict[str, object]:
+    """Aggregate classified finding outcomes.
+
+    ``installation_id`` scopes to one tenant. Otherwise ``installation_ids`` (when provided)
+    restricts the aggregate to exactly those tenants - API callers MUST pass the caller's
+    allowed installations. Only internal/system callers may omit both (all tenants).
+    """
     rows: list[tuple[FindingOutcome, Review]] = []
     async with AsyncSessionLocal() as session:
         if installation_id is not None:
@@ -508,9 +516,14 @@ async def summarize_finding_outcomes(
                 stmt = stmt.where(Review.repo_full_name == repo_full_name)
             rows = list((await session.execute(stmt)).tuples().all())
         else:
-            installation_rows = await session.scalars(select(Review.installation_id).distinct())
-            installation_ids = [int(item) for item in installation_rows]
-            for scoped_installation_id in installation_ids:
+            if installation_ids is not None:
+                scoped_installation_ids = sorted({int(item) for item in installation_ids})
+            else:
+                installation_rows = await session.scalars(
+                    select(Review.installation_id).distinct()
+                )
+                scoped_installation_ids = [int(item) for item in installation_rows]
+            for scoped_installation_id in scoped_installation_ids:
                 await set_installation_context(session, scoped_installation_id)
                 stmt = select(FindingOutcome, Review).join(Review, Review.id == FindingOutcome.review_id)
                 stmt = stmt.where(Review.installation_id == scoped_installation_id)

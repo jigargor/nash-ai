@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { actionFetchReview } from "@/app/actions/dashboard-api";
+import { fetchReview } from "@/lib/api/reviews";
 import { isReviewInFlightStatus } from "@/lib/review-status";
 
 interface UseReviewOptions {
@@ -12,7 +12,8 @@ interface UseReviewOptions {
 export function useReview(reviewId: number, installationId?: number, options?: UseReviewOptions) {
   return useQuery({
     queryKey: ["review", reviewId, installationId ?? null],
-    queryFn: () => actionFetchReview(reviewId, installationId),
+    // Browser fetch to the same-origin BFF: polling avoids a Server Action + loopback hop per tick.
+    queryFn: () => fetchReview(reviewId, installationId),
     enabled: Number.isFinite(reviewId) && (options?.enabled ?? true),
     refetchInterval: (query) => (isReviewInFlightStatus(query.state.data?.status) ? 3000 : false),
   });

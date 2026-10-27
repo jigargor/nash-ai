@@ -10,23 +10,20 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from fnmatch import fnmatch
 from time import monotonic
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-from app.agent.anchors import attach_anchor_metadata
 from app.agent.constants import PROMPT_VERSION, REPAIR_SEARCH_WINDOW
-from app.agent.dedupe import SEVERITY_RANK, dedupe_findings
+from app.agent.context_builder import ContextBundle, build_context_bundle
 from app.agent.diff_parser import FileInDiff, parse_diff, right_side_diff_line_set
 from app.agent.finalize import finalize_review
 from app.agent.loop import run_agent
 from app.agent.pipeline.delivery_sinks import DryRunDeliverySink
 from app.agent.pipeline.isolation import with_isolation
 from app.agent.pipeline.ports import DeliveryResult, DeliverySink, GitHubReader, Persistence
-from app.agent.policy import apply_policy_filters
+from app.agent.pipeline.validation_stage import matches_ignore, run_validation_stage
 from app.agent.prompts.system import build_system_prompt, load_verified_fact_ids
-from app.agent.repair import repair_findings_from_files
 from app.agent.review_config import DEFAULT_MODEL_NAME, DEFAULT_MODEL_PROVIDER, ReviewConfig
 from app.agent.schema import (
     DroppedFinding,
@@ -37,10 +34,12 @@ from app.agent.schema import (
     ToolTraceEntry,
 )
 from app.agent.tool_trace import extract_tool_call_history, extract_tool_usage_by_file
-from app.agent.validator import FindingValidator
 from app.delivery.ids import assign_finding_ids
 from app.observability import get_observer
 from app.observability.observer import ReviewTrace, StageSpan
+
+if TYPE_CHECKING:
+    from app.github.client import GitHubClient
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +51,33 @@ DEFAULT_STAGE_DEADLINES_S: dict[str, float] = {
     "editor": 90.0,
     "delivery": 60.0,
 }
+
+
+CONTEXT_BUNDLE_DEADLINE_S = 60.0
+
+
+async def _build_bundle(
+    github: GitHubReader,
+    pr_context: PRContext,
+    files_in_diff: list[FileInDiff],
+    config: ReviewConfig,
+) -> ContextBundle:
+    # build_context_bundle only calls ``get_file_content`` (via safe_fetch_file), which the
+    # GitHubReader port provides; the cast satisfies its nominal GitHubClient annotation.
+    return await build_context_bundle(
+        cast("GitHubClient", github),
+        pr_context.owner,
+        pr_context.repo,
+        pr_context.head_sha,
+        files_in_diff,
+        budgets=config.budgets,
+        packaging=config.packaging,
+        repo_segments=(
+            [f"Repository additions: {(pr_context.prompt_additions or config.prompt_additions or '').strip()}"]
+            if (pr_context.prompt_additions or config.prompt_additions)
+            else []
+        ),
+    )
 
 
 def _render_diff(files_in_diff: list[FileInDiff], fallback: str) -> str:
@@ -143,83 +169,6 @@ def _offline_tool_executor(files: dict[str, str]) -> Callable[..., Awaitable[str
     return _run
 
 
-def _matches_ignore(path: str, patterns: list[str]) -> bool:
-    return any(fnmatch(path, pattern) for pattern in patterns)
-
-
-def _apply_config_filters(
-    findings: list[Finding], config: ReviewConfig, ignore_paths: list[str]
-) -> tuple[list[Finding], list[DroppedFinding]]:
-    kept: list[Finding] = []
-    drops: list[DroppedFinding] = []
-    min_rank = SEVERITY_RANK.get(config.severity_threshold, 0)
-    for finding in findings:
-        if SEVERITY_RANK.get(finding.severity, 0) < min_rank:
-            drops.append(
-                DroppedFinding.from_finding(
-                    finding, reason="below_severity_threshold", stage="policy"
-                )
-            )
-            continue
-        if config.categories and finding.category not in config.categories:
-            drops.append(
-                DroppedFinding.from_finding(finding, reason="category_not_enabled", stage="policy")
-            )
-            continue
-        if ignore_paths and _matches_ignore(finding.file_path, ignore_paths):
-            drops.append(DroppedFinding.from_finding(finding, reason="ignored_path", stage="policy"))
-            continue
-        kept.append(finding)
-    if len(kept) > config.max_findings_per_pr:
-        ranked = sorted(
-            kept,
-            key=lambda item: (SEVERITY_RANK.get(item.severity, 0), item.confidence),
-            reverse=True,
-        )
-        for extra in ranked[config.max_findings_per_pr :]:
-            drops.append(
-                DroppedFinding.from_finding(extra, reason="max_findings_per_pr", stage="policy")
-            )
-        kept = ranked[: config.max_findings_per_pr]
-    return kept, drops
-
-
-def _validate_findings(
-    findings: list[Finding],
-    *,
-    file_contents: dict[str, str],
-    commentable_lines: set[tuple[str, int]] | None,
-) -> tuple[list[Finding], list[DroppedFinding]]:
-    validator = FindingValidator(file_contents, commentable_lines=commentable_lines)
-    kept: list[Finding] = []
-    drops: list[DroppedFinding] = []
-    for finding in findings:
-        try:
-            ok, reason, detail = validator.validate(finding)
-        except Exception as exc:  # validator.validate never raises; belt and braces
-            drops.append(
-                DroppedFinding.from_finding(
-                    finding,
-                    reason="validator_error",
-                    detail=str(exc),
-                    stage="validation",
-                )
-            )
-            continue
-        if ok:
-            kept.append(finding)
-        else:
-            drops.append(
-                DroppedFinding.from_finding(
-                    finding,
-                    reason=reason or "validator_error",
-                    detail=detail,
-                    stage="validation",
-                )
-            )
-    return kept, drops
-
-
 def _emit_drop_events(
     drops: list[DroppedFinding],
     *,
@@ -287,14 +236,20 @@ async def review_pipeline(
     finalizer: Finalizer | None = None,
     stage_deadlines_s: dict[str, float] | None = None,
     llm_effort: str = "medium",
+    context_seed: dict[str, Any] | None = None,
 ) -> ReviewRunReport:
     """Run the review analysis pipeline for one PR.
+
+    When ``github`` is provided the prompt is built with ``build_context_bundle`` (layered,
+    budgeted context) and agent tools read live from GitHub; without it the pipeline is fully
+    offline (naive diff render + in-memory tool executor). ``context_seed`` becomes the agent
+    context dict (mutated in place) so the worker adapter can inject ``user_provider_keys`` and
+    read token/cost counters back for persistence.
 
     ``attempts`` is an ordered (provider, model) chain; any exception class on an
     attempt falls through to the next one. ``agent_runner``/``finalizer`` allow the
     harness to inject cached or stubbed LLM calls without touching production code.
     """
-    _ = github  # live readers are consumed by app.ingestion.load_pr_context
     started = monotonic()
     config = review_config or ReviewConfig()
     resolved_model = model_name or config.model.name or DEFAULT_MODEL_NAME
@@ -326,11 +281,31 @@ async def review_pipeline(
         files_in_diff = []
     ignore_paths = [*config.ignore_paths, *pr_context.ignore_paths]
     if ignore_paths:
-        files_in_diff = [f for f in files_in_diff if not _matches_ignore(f.path, ignore_paths)]
+        files_in_diff = [f for f in files_in_diff if not matches_ignore(f.path, ignore_paths)]
     commentable = right_side_diff_line_set(files_in_diff)
     if pr_context.commentable_lines:
         commentable = set(pr_context.commentable_lines)
+
+    # Layered context (surrounding code, anchors, budgets) when a live reader is available;
+    # otherwise (eval harness / offline) fall back to the naive line-numbered diff render.
+    context_source = "naive_diff"
+    context_telemetry: dict[str, object] = {}
+    bundle_files: dict[str, str] = {}
     rendered_diff = _render_diff(files_in_diff, pr_context.diff_text)
+    if github is not None and files_in_diff:
+        bundle = await with_isolation(
+            "ingestion.context_bundle",
+            lambda: _build_bundle(github, pr_context, files_in_diff, config),
+            fallback=None,
+            errors_out=exceptions,
+            timeout_s=CONTEXT_BUNDLE_DEADLINE_S,
+        )
+        if bundle is not None and bundle.rendered.strip():
+            rendered_diff = bundle.rendered
+            bundle_files = dict(bundle.fetched_files)
+            context_telemetry = bundle.telemetry.as_dict()
+            context_source = "context_bundle"
+    files_at_head = {**bundle_files, **pr_context.files_at_head}
     system_prompt = build_system_prompt(
         [],
         pr_context.diff_text,
@@ -339,7 +314,8 @@ async def review_pipeline(
     user_prompt = _build_user_prompt(pr_context, rendered_diff)
     stage_latencies["context_packaging"] = int((monotonic() - ingest_started) * 1000)
 
-    context: dict[str, Any] = {
+    context: dict[str, Any] = context_seed if context_seed is not None else {}
+    base_context: dict[str, Any] = {
         "run_id": run_id,
         "review_id": review_id or -1,
         "installation_id": installation_id,
@@ -351,8 +327,7 @@ async def review_pipeline(
         "output_tokens": 0,
         "tokens_used": 0,
         "cost_usd": 0.0,
-        "fetched_files": dict(pr_context.files_at_head),
-        "offline_tool_executor": _offline_tool_executor(pr_context.files_at_head),
+        "fetched_files": dict(files_at_head),
         "llm_effort": llm_effort,
         "model_role": "primary_review",
         "stage_deadline_s": deadlines["primary_review"],
@@ -360,6 +335,12 @@ async def review_pipeline(
         "files_in_diff": files_in_diff,
         "tool_trace": [],
     }
+    context.update(base_context)
+    if github is not None:
+        # Live reader: tools hit GitHub (read-only) exactly like the legacy runner.
+        context["github_client"] = github
+    else:
+        context["offline_tool_executor"] = _offline_tool_executor(files_at_head)
 
     observer = get_observer()
     trace: ReviewTrace = observer.start_review_trace(
@@ -463,51 +444,18 @@ async def review_pipeline(
     draft_summary = result.summary
 
     async def _validate_stage() -> tuple[list[Finding], list[DroppedFinding]]:
-        repaired = repair_findings_from_files(
+        outcome = run_validation_stage(
             draft_findings,
-            file_contents,
+            summary=draft_summary,
+            file_contents=file_contents,
+            files_in_diff=files_in_diff,
             commentable_lines=commentable,
-            window=REPAIR_SEARCH_WINDOW,
-        )
-        anchored = attach_anchor_metadata(repaired, files_in_diff)
-        kept, stage_drops = _validate_findings(
-            anchored, file_contents=file_contents, commentable_lines=commentable
-        )
-        policy_result, confidence_dropped, evidence_rejections, _ = apply_policy_filters(
-            ReviewResult(findings=kept, summary=draft_summary),
-            threshold=config.confidence_threshold,
+            config=config,
+            ignore_paths=ignore_paths,
             tool_call_history=tool_call_history,
             known_fact_ids=load_verified_fact_ids(),
         )
-        for item in confidence_dropped:
-            stage_drops.append(
-                DroppedFinding(
-                    finding=item if isinstance(item, dict) else None,
-                    reason="below_confidence_threshold",
-                    detail=json.dumps(item, default=str),
-                    stage="policy",
-                )
-            )
-        for rejected_finding, reason in evidence_rejections:
-            stage_drops.append(
-                DroppedFinding.from_finding(
-                    rejected_finding,
-                    reason="evidence_rejected",
-                    detail=reason,
-                    stage="policy",
-                )
-            )
-        deduped = dedupe_findings(policy_result.findings)
-        if len(deduped) < len(policy_result.findings):
-            kept_keys = {id(f) for f in deduped}
-            for finding in policy_result.findings:
-                if id(finding) not in kept_keys:
-                    stage_drops.append(
-                        DroppedFinding.from_finding(finding, reason="duplicate", stage="dedupe")
-                    )
-        final_kept, config_drops = _apply_config_filters(deduped, config, ignore_paths)
-        stage_drops.extend(config_drops)
-        return final_kept, stage_drops
+        return outcome.kept, outcome.drops
 
     validated = await with_isolation(
         "validation",
@@ -706,6 +654,8 @@ async def review_pipeline(
             "generated_findings": generated_count,
             "commentable_line_count": len(commentable),
             "files_in_diff": len(files_in_diff),
+            "context_source": context_source,
+            "context_telemetry": context_telemetry,
             "repair_window": REPAIR_SEARCH_WINDOW,
             "diff_cross_check_warnings": list(pr_context.diff_cross_check_warnings),
             "agent_metrics": agent_metrics if isinstance(agent_metrics, dict) else {},

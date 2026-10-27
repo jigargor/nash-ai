@@ -1,0 +1,11 @@
+{
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "message": "Hard-coded live API key committed as a default value.",
+      "file_path": "app/config/settings.py",
+      "line_start": 5
+    }
+  ]
+}

@@ -1,3 +1,10 @@
+"""DEPRECATED: unused; scheduled for removal.
+
+No production module imports ``run_consistency_probe`` (only ``tests/test_consistency_probe.py``
+does). ``consistency_probe_schema`` is still used by ``suppression_audit`` and stays. Kept (not
+deleted) because ``ReviewConfig.consistency_probe`` still parses ``.codereview.yml`` settings.
+"""
+
 from __future__ import annotations
 
 import json

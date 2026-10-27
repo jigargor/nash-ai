@@ -6,7 +6,11 @@ import pytest
 
 from app.agent.repair import repair_finding, repair_findings_from_files
 from app.agent.schema import Finding
-from app.agent.tool_trace import extract_tool_call_history, extract_tool_usage_by_file
+from app.agent.tool_trace import (
+    extract_tool_call_history,
+    extract_tool_usage_by_file,
+    extract_tool_usage_with_context,
+)
 
 FILE_PATH = "app.py"
 FILE_LINES = [
@@ -326,3 +330,107 @@ def test_extract_helpers_with_no_tool_blocks_return_empty(
 ) -> None:
     assert extract_tool_usage_by_file(messages) == set()
     assert extract_tool_call_history(messages) == []
+
+
+# ---------------------------------------------------------------------------
+# OpenAI / Gemini tool_calls transcripts
+# ---------------------------------------------------------------------------
+
+
+def _openai_transcript() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "review"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "fetch_file_content",
+                        "arguments": '{"path": "src/auth.py"}',
+                    },
+                },
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "search_codebase", "arguments": '{"pattern": "jwt"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "def login(): ..."},
+    ]
+
+
+def test_extract_tool_usage_by_file_parses_openai_tool_calls() -> None:
+    assert extract_tool_usage_by_file(_openai_transcript()) == {"src/auth.py"}
+
+
+def test_extract_tool_call_history_parses_openai_tool_calls() -> None:
+    history = extract_tool_call_history(_openai_transcript())
+
+    assert history == [
+        {"name": "fetch_file_content", "input": {"path": "src/auth.py"}},
+        {"name": "search_codebase", "input": {"pattern": "jwt"}},
+    ]
+
+
+def test_openai_tool_calls_skip_malformed_entries() -> None:
+    messages: list[dict[str, object]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                "not-a-dict",
+                {"function": {"arguments": '{"path": "a.py"}'}},
+                {"function": {"name": "fetch_file_content", "arguments": "{not json"}},
+                {"function": {"name": "fetch_file_content", "arguments": '["a.py"]'}},
+                {"function": {"name": "fetch_file_content", "arguments": '{"path": "ok.py"}'}},
+            ],
+        },
+        {"role": "assistant", "tool_calls": "nope"},
+    ]
+
+    assert extract_tool_usage_by_file(messages) == {"ok.py"}
+    assert [call["name"] for call in extract_tool_call_history(messages)] == [
+        "fetch_file_content",
+        "fetch_file_content",
+        "fetch_file_content",
+    ]
+
+
+def test_openai_tool_calls_accept_object_style_function() -> None:
+    call = SimpleNamespace(
+        function=SimpleNamespace(name="read_file_range", arguments='{"path": "lib/x.py"}')
+    )
+    messages: list[dict[str, object]] = [{"role": "assistant", "tool_calls": [call]}]
+
+    assert extract_tool_usage_by_file(messages) == {"lib/x.py"}
+
+
+def test_usage_with_context_supplements_history_from_tool_trace() -> None:
+    context: dict[str, object] = {
+        "tool_trace": [
+            {"tool_name": "fetch_file_content", "success": True},
+            {"tool_name": "lookup_dependency", "success": True},
+            {"tool_name": "get_file_history", "success": False},
+        ]
+    }
+
+    paths, history = extract_tool_usage_with_context(_openai_transcript(), context)
+
+    assert paths == {"src/auth.py"}
+    assert {"name": "lookup_dependency", "input": {}} in history
+    assert all(call["name"] != "get_file_history" for call in history)
+    # Message-derived entries are authoritative and not duplicated by the trace.
+    assert sum(1 for call in history if call["name"] == "fetch_file_content") == 1
+
+
+def test_usage_with_context_without_context_matches_message_parsing() -> None:
+    messages = _openai_transcript()
+
+    assert extract_tool_usage_with_context(messages, None) == (
+        extract_tool_usage_by_file(messages),
+        extract_tool_call_history(messages),
+    )

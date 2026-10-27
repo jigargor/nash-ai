@@ -1098,3 +1098,138 @@ async def test_run_chunked_review_skips_failed_chunk_and_returns_result(
     assert isinstance(result, ReviewResult)
     assert result.findings == []
     assert "Chunked coverage note." in result.summary
+
+
+def _debate_finding(
+    file_path: str = "a.py",
+    *,
+    category: str = "correctness",
+    line_start: int = 1,
+    line_end: int | None = None,
+    message: str = "Potential bug in this statement.",
+    severity: str = "medium",
+    confidence: int = 90,
+) -> Finding:
+    finding = _finding(file_path, confidence=confidence)
+    finding.category = category  # type: ignore[assignment]
+    finding.line_start = line_start
+    finding.line_end = line_end
+    finding.message = message
+    if severity == "high":
+        finding.severity = "high"
+    return finding
+
+
+def test_merge_debate_results_matches_by_overlapping_range_not_message_text() -> None:
+    primary = ReviewResult(
+        findings=[_debate_finding(line_start=10, line_end=14, message="Unchecked input here.")],
+        summary="Primary",
+    )
+    challenger = ReviewResult(
+        findings=[
+            _debate_finding(
+                line_start=12,
+                line_end=12,
+                message="User input is never validated before use.",
+                confidence=95,
+            )
+        ],
+        summary="Challenger",
+    )
+
+    merged = _merge_debate_results(primary=primary, challenger=challenger, tie_break=None)
+
+    assert len(merged.findings) == 1
+    assert merged.findings[0].confidence == 95
+
+
+def test_merge_debate_results_does_not_match_across_category_or_disjoint_lines() -> None:
+    primary = ReviewResult(findings=[_debate_finding(line_start=1, line_end=3)], summary="P")
+    other_category = ReviewResult(
+        findings=[_debate_finding(line_start=2, category="security")], summary="C"
+    )
+    disjoint = ReviewResult(findings=[_debate_finding(line_start=40)], summary="C")
+
+    assert not _merge_debate_results(primary=primary, challenger=other_category, tie_break=None).findings
+    assert not _merge_debate_results(primary=primary, challenger=disjoint, tie_break=None).findings
+
+
+def test_merge_debate_results_counts_one_vote_per_stage() -> None:
+    primary = ReviewResult(
+        findings=[_debate_finding(line_start=1), _debate_finding(line_start=1, line_end=2)],
+        summary="P",
+    )
+    challenger = ReviewResult(findings=[], summary="C")
+
+    assert _merge_debate_results(primary=primary, challenger=challenger, tie_break=None).findings == []
+
+
+def test_merge_debate_results_high_severity_bypass_requires_validated_primary() -> None:
+    primary = ReviewResult(findings=[_debate_finding(severity="high")], summary="P")
+    challenger = ReviewResult(findings=[], summary="C")
+
+    unvalidated = _merge_debate_results(primary=primary, challenger=challenger, tie_break=None)
+    validated = _merge_debate_results(
+        primary=primary, challenger=challenger, tie_break=None, primary_validated=True
+    )
+
+    assert unvalidated.findings == []
+    assert len(validated.findings) == 1
+    assert validated.findings[0].severity == "high"
+
+
+def test_merge_debate_results_challenger_only_high_severity_cannot_bypass_consensus() -> None:
+    primary = ReviewResult(findings=[], summary="P")
+    challenger = ReviewResult(findings=[_debate_finding("new.py", severity="high")], summary="C")
+
+    merged = _merge_debate_results(
+        primary=primary, challenger=challenger, tie_break=None, primary_validated=True
+    )
+
+    assert merged.findings == []
+
+
+def test_calculate_conflict_score_uses_overlapping_ranges() -> None:
+    primary = [_debate_finding(line_start=1, line_end=5, message="one phrasing")]
+    challenger = [_debate_finding(line_start=3, message="different phrasing")]
+
+    assert _calculate_conflict_score(primary, challenger) == 0
+
+def test_pr_prompt_metadata_extracts_title_body_and_commit_messages() -> None:
+    from app.agent.runner import _pr_prompt_metadata
+
+    title, body, commits = _pr_prompt_metadata(
+        {"title": "T", "body": None}, [{"commit": {"message": "fix: x"}}, {"sha": "abc"}]
+    )
+
+    assert (title, body) == ("T", "")
+    assert commits == ["fix: x", ""]
+    assert _pr_prompt_metadata(None, None) == (None, None, None)
+
+
+def test_chunked_validator_drops_findings_not_anchored_in_file_content() -> None:
+    from app.agent.runner import _build_chunked_validator, _merge_fetched_files_into_context
+
+    context: dict = {"fetched_files": {"tool_fetched.py": "x = 1"}}
+    merged = _merge_fetched_files_into_context(context, {"ok.py": "x = 1"})
+    assert set(merged) == {"tool_fetched.py", "ok.py"}
+    assert context["fetched_files"] is merged
+
+    diff_file = FileInDiff(
+        path="ok.py",
+        language="Python",
+        is_new=False,
+        is_deleted=False,
+        numbered_lines=[NumberedLine(new_line_no=1, old_line_no=1, kind="add", content="x = 1")],
+        context_window=[],
+    )
+    validator = _build_chunked_validator(context, [diff_file])
+    stale = _finding("ok.py")
+    stale.target_line_content = "something else entirely"
+    result = ReviewResult(findings=[_finding("ok.py"), stale], summary="s")
+
+    validated, dropped, generated = _validate_result(result, validator)
+
+    assert generated == 2
+    assert len(validated.findings) == 1
+    assert dropped[0][1] == "target_line_mismatch"

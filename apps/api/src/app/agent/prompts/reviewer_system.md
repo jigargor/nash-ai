@@ -134,7 +134,11 @@ If the fix requires changes outside `[line_start, line_end]` or spans multiple f
 
 ## Tools — when to use them
 
-You have: `fetch_file_content`, `search_codebase`, `get_file_history`, `lookup_dependency`.
+You have: `fetch_file_content`, `read_file_range`, `list_directory`, `search_codebase`, `get_file_history`, `lookup_dependency`.
+
+- `fetch_file_content` — full file at head. `read_file_range` — a numbered line range (`path`, `start_line`, `end_line`); prefer it for long files.
+- `list_directory` — files under a directory at head; use it to discover sibling modules, tests, or config before claiming something is missing.
+- `search_codebase` — regex over files already fetched plus repo-wide code search; use it to confirm callers, usages, or the absence of a guard.
 
 **Always use a tool when:**
 - A finding's confidence claim depends on something not in the diff.
@@ -156,7 +160,7 @@ Every finding must carry evidence. The `evidence` field on the `Finding` schema 
 
 Evidence types, in descending order of strength:
 
-- **`tool_verified`** — You called a tool (`fetch_file_content`, `search_codebase`, `get_file_history`, `lookup_dependency`) that returned content confirming the specific claim in the finding. The tool output must name the exact symbol, file, or line your finding references.
+- **`tool_verified`** — You called a tool (`fetch_file_content`, `read_file_range`, `list_directory`, `search_codebase`, `get_file_history`, `lookup_dependency`) that returned content confirming the specific claim in the finding. The tool output must name the exact symbol, file, or line your finding references.
 - **`diff_visible`** — The finding is fully justified by what is visible in the diff hunks you were given. No external context is required. The flagged line, the buggy pattern, and the consequence are all observable in the diff itself.
 - **`verified_fact`** — The finding's claim is grounded in the verified-facts appendix, and the code matches the appendix's precondition.
 - **`inference`** — You did not verify the specific claim, but it follows from general code-review principles applied to the visible diff. Reserved for `low` or `medium` findings only.

@@ -3,6 +3,7 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 
 import { ApiError } from "@/lib/api/client";
+import { resolveBffBaseUrl } from "@/lib/api/bff-base-url";
 import { normalizeApiErrorPayload } from "@/lib/api/error-normalize";
 
 /**
@@ -14,12 +15,9 @@ export async function serverBffFetch<T>(path: string, init?: RequestInit): Promi
     throw new Error(`serverBffFetch path must start with /api/: ${path}`);
   }
   const hdrs = await headers();
-  const host = hdrs.get("x-forwarded-host") ?? hdrs.get("host") ?? "localhost:3000";
-  const forwardedProto = hdrs.get("x-forwarded-proto");
-  const proto =
-    forwardedProto ??
-    (process.env.VERCEL === "1" || process.env.NODE_ENV === "production" ? "https" : "http");
-  const url = `${proto}://${host}${path}`;
+  // Never trust x-forwarded-host / x-forwarded-proto: they are client-controllable and would let a
+  // caller redirect this cookie-bearing loopback request to an arbitrary origin.
+  const url = `${resolveBffBaseUrl(hdrs.get("host"), process.env)}${path}`;
 
   const cookieStore = await cookies();
   const cookieHeader = cookieStore.getAll().map((c) => `${c.name}=${c.value}`).join("; ");

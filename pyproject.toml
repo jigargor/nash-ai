@@ -23,3 +23,12 @@ override-dependencies = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+# Mirrors apps/api/pyproject.toml [tool.mypy] so pre-commit (which runs from the repo root with
+# `--config-file pyproject.toml`) enforces the same strictness as CI (`cd apps/api && mypy src`).
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "apps/api/src"
+strict = true
+warn_return_any = false
+disallow_any_generics = false

@@ -51,6 +51,11 @@ class _FakeRedis:
         self.locks.add(key)
         return True
 
+    async def delete(self, key: str) -> int:
+        existed = key in self.locks
+        self.locks.discard(key)
+        return int(existed)
+
 
 def _payload(
     action: str = "opened",
@@ -602,3 +607,38 @@ async def test_queue_pull_request_review_skips_when_daily_budget_is_exhausted(
     await queue_pull_request_review(redis, payload)
 
     assert redis.calls == []
+
+
+@pytest.mark.anyio
+async def test_queue_pull_request_review_supersedes_older_queued_review_on_new_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = _FakeRedis()
+    first_payload = _payload("opened")
+    second_payload = _payload("synchronize")
+
+    async def _allow(*_args, **_kwargs) -> bool:
+        return True
+
+    async def _daily_usage(*_args, **_kwargs) -> int:
+        return 0
+
+    monkeypatch.setattr("app.webhooks.handlers.check_installation_review_rate_limit", _allow)
+    monkeypatch.setattr("app.webhooks.handlers.current_daily_token_usage", _daily_usage)
+
+    await queue_pull_request_review(redis, first_payload)
+    await queue_pull_request_review(redis, second_payload)
+
+    async with AsyncSessionLocal() as session:
+        await set_installation_context(session, first_payload.installation.id)
+        old_review = await session.scalar(
+            select(Review).where(Review.pr_head_sha == first_payload.pull_request.head.sha)
+        )
+        new_review = await session.scalar(
+            select(Review).where(Review.pr_head_sha == second_payload.pull_request.head.sha)
+        )
+
+    assert old_review is not None and new_review is not None
+    assert old_review.status == "superseded"
+    assert new_review.status == "queued"
+    assert len(redis.calls) == 2

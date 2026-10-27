@@ -283,7 +283,7 @@ async def test_execute_tool_search_codebase_normalizes_items() -> None:
 
 
 @pytest.mark.anyio
-async def test_execute_tool_search_codebase_uses_regex_over_fetched_files() -> None:
+async def test_execute_tool_search_codebase_merges_fetched_files_and_github_search() -> None:
     gh = _FakeGitHubClient()
     fetched = {
         "app.py": "import jwt\ntoken = jwt.decode(raw)\nother = jwt.encode(x)",
@@ -297,8 +297,41 @@ async def test_execute_tool_search_codebase_uses_regex_over_fetched_files() -> N
     assert json.loads(output) == [
         {"path": "app.py", "line": 2, "text": "token = jwt.decode(raw)"},
         {"path": "lib/auth.py", "line": 1, "text": "jwt.decode(token, verify=False)"},
+        # Repo-wide hits for files the model has not fetched are not suppressed by local hits.
+        {"path": "a.py", "sha": "123"},
+        {"path": r"jwt\.decode\(.py", "sha": "456"},
     ]
-    assert gh.calls == []
+    assert gh.calls == [("search_code", r"jwt\.decode\(", None)]
+
+
+@pytest.mark.anyio
+async def test_execute_tool_search_codebase_dedupes_remote_hits_already_found_locally() -> None:
+    gh = _FakeGitHubClient()
+    context = _context(gh, fetched_files={"a.py": "needle here"})
+
+    output = await tools.execute_tool("search_codebase", {"pattern": "needle"}, context)
+
+    assert json.loads(output) == [
+        {"path": "a.py", "line": 1, "text": "needle here"},
+        {"path": "needle.py", "sha": "456"},
+    ]
+
+
+@pytest.mark.anyio
+async def test_execute_tool_search_codebase_keeps_local_hits_when_github_search_fails() -> None:
+    class _FailingSearchClient(_FakeGitHubClient):
+        async def search_code(
+            self, _owner: str, _repo: str, pattern: str, _path_glob: str | None = None
+        ) -> list[dict]:
+            raise RuntimeError("rate limited")
+
+    context = _context(_FailingSearchClient(), fetched_files={"app.py": "needle"})
+
+    output = await tools.execute_tool("search_codebase", {"pattern": "needle"}, context)
+
+    hits = json.loads(output)
+    assert hits[0] == {"path": "app.py", "line": 1, "text": "needle"}
+    assert "rate limited" in hits[1]["warning"]
 
 
 @pytest.mark.anyio
@@ -310,7 +343,8 @@ async def test_execute_tool_search_codebase_path_glob_filters_fetched_files() ->
         "search_codebase", {"pattern": "jwt", "path_glob": "lib/"}, context
     )
 
-    assert json.loads(output) == [{"path": "lib/auth.py", "line": 1, "text": "jwt.decode(b)"}]
+    local_hits = [hit for hit in json.loads(output) if "line" in hit]
+    assert local_hits == [{"path": "lib/auth.py", "line": 1, "text": "jwt.decode(b)"}]
 
 
 @pytest.mark.anyio
@@ -319,7 +353,7 @@ async def test_execute_tool_search_codebase_truncates_long_matching_lines() -> N
 
     output = await tools.execute_tool("search_codebase", {"pattern": "needle"}, context)
 
-    hits = json.loads(output)
+    hits = [hit for hit in json.loads(output) if "line" in hit]
     assert len(hits) == 1
     assert len(hits[0]["text"]) == 200
 
@@ -335,7 +369,7 @@ async def test_execute_tool_search_codebase_caps_hits_at_fifty() -> None:
 
     output = await tools.execute_tool("search_codebase", {"pattern": "hit"}, context)
 
-    hits = json.loads(output)
+    hits = [hit for hit in json.loads(output) if "line" in hit]
     assert len(hits) == 50
     assert {hit["path"] for hit in hits} == {"a.py", "b.py"}
 

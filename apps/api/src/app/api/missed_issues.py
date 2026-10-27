@@ -11,16 +11,21 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
-from app.api.router import _allowed_installation_ids, _require_installation_access, _verify_api_access
+from app.api.router import (
+    _allowed_installation_ids,
+    _load_review_for_user,
+    _require_installation_access,
+    _verify_api_access,
+)
 from app.categories import CanonicalCategory
-from app.db.models import MissedIssue, Review, User
-from app.db.session import get_db, set_installation_context
+from app.db.models import MissedIssue, User
+from app.db.session import get_db, set_installation_context, set_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +110,8 @@ def _to_response(row: MissedIssue) -> MissedIssueResponse:
 async def _get_user_row_id(
     session: AsyncSession, github_id: int
 ) -> int | None:
+    # `users` is RLS-protected by caller identity; scope the read to the caller's own row.
+    await set_user_context(session, github_id)
     return await session.scalar(
         select(User.id).where(User.github_id == github_id).where(User.deleted_at.is_(None))
     )
@@ -121,13 +128,10 @@ async def create_missed_issue(
     Auth: requires X-Dashboard-User-Token.
     Tenant: verifies the authenticated user has access to the review's installation.
     """
-    review = await session.scalar(select(Review).where(Review.id == body.review_id))
-    if review is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-
     allowed = await _allowed_installation_ids(session, current_user)
-    _require_installation_access(allowed, review.installation_id)
-
+    # Tenant context is set (per allowed installation) BEFORE the review is queried, so the
+    # lookup works under FORCE RLS and never reads a review outside the caller's tenants.
+    review = await _load_review_for_user(session, body.review_id, None, allowed)
     await set_installation_context(session, review.installation_id)
 
     reporter_id = await _get_user_row_id(session, current_user.github_id)
@@ -175,20 +179,33 @@ async def list_missed_issues(
     stmt = select(MissedIssue)
 
     if review_id is not None:
-        review = await session.scalar(select(Review).where(Review.id == review_id))
-        if review is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-        _require_installation_access(allowed, review.installation_id)
-        stmt = stmt.where(MissedIssue.review_id == review_id)
-    elif installation_id is not None:
-        _require_installation_access(allowed, installation_id)
-        stmt = stmt.where(MissedIssue.installation_id == installation_id)
-    else:
-        stmt = stmt.where(MissedIssue.installation_id.in_(allowed))
+        review = await _load_review_for_user(session, review_id, installation_id, allowed)
+        stmt = stmt.where(MissedIssue.review_id == review_id).where(
+            MissedIssue.installation_id == review.installation_id
+        )
+        stmt = stmt.order_by(MissedIssue.created_at.desc())
+        rows = (await session.scalars(stmt)).all()
+        return [_to_response(r) for r in rows]
 
-    stmt = stmt.order_by(MissedIssue.created_at.desc())
-    rows = (await session.scalars(stmt)).all()
-    return [_to_response(r) for r in rows]
+    if installation_id is not None:
+        _require_installation_access(allowed, installation_id)
+        scoped_ids = [installation_id]
+    else:
+        scoped_ids = sorted(allowed)
+
+    # RLS allows exactly one tenant per statement, so query each allowed installation under
+    # its own context and merge. Results never include installations outside ``allowed``.
+    collected: list[MissedIssue] = []
+    for scoped_id in scoped_ids:
+        await set_installation_context(session, scoped_id)
+        scoped_rows = await session.scalars(
+            stmt.where(MissedIssue.installation_id == scoped_id).order_by(
+                MissedIssue.created_at.desc()
+            )
+        )
+        collected.extend(scoped_rows.all())
+    collected.sort(key=lambda row: row.created_at, reverse=True)
+    return [_to_response(r) for r in collected]
 
 
 @router.get("/export", response_model=MissedIssueExport)
@@ -209,6 +226,7 @@ async def export_missed_issues(
     """
     allowed = await _allowed_installation_ids(session, current_user)
     _require_installation_access(allowed, installation_id)
+    await set_installation_context(session, installation_id)
 
     rows = (
         await session.scalars(

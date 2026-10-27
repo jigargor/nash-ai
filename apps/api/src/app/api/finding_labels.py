@@ -22,7 +22,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.api.auth import CurrentDashboardUser, get_current_dashboard_user
 from app.config import settings
 from app.db.models import FindingLabel, InstallationUser, Review, User
-from app.db.session import AsyncSessionLocal, set_installation_context
+from app.db.session import AsyncSessionLocal, set_installation_context, set_user_context
 
 
 FindingLabelValue = Literal[
@@ -88,6 +88,8 @@ router = APIRouter(
 
 async def _get_allowed_installation_ids(current_user: CurrentDashboardUser) -> set[int]:
     async with AsyncSessionLocal() as session:
+        # `users` has strict per-caller RLS; scope the membership join to the caller.
+        await set_user_context(session, current_user.github_id)
         rows = (
             await session.execute(
                 select(InstallationUser.installation_id)
@@ -102,21 +104,44 @@ async def _get_allowed_installation_ids(current_user: CurrentDashboardUser) -> s
 async def _resolve_review_installation(
     review_id: int,
     current_user: CurrentDashboardUser,
+    installation_id: int | None = None,
 ) -> tuple[Review, int]:
-    """Return (review, installation_id) after verifying user access."""
+    """Return (review, installation_id) after verifying user access.
+
+    ``reviews`` is FORCE-RLS protected, so tenant context MUST be set before the review is
+    read. The review's installation is unknown up front, so we never do a context-less
+    ``session.get``: instead we only probe installations the caller is a member of (or just
+    the one passed via ``installation_id``), setting context for each candidate first.
+    """
     allowed = await _get_allowed_installation_ids(current_user)
+    if installation_id is not None:
+        if installation_id not in allowed:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
+        candidates = [installation_id]
+    else:
+        candidates = sorted(allowed)
+
+    review: Review | None = None
+    resolved_installation_id: int | None = None
     async with AsyncSessionLocal() as session:
-        review = await session.get(Review, review_id)
-    if review is None:
+        for candidate_id in candidates:
+            await set_installation_context(session, candidate_id)
+            review = await session.scalar(
+                select(Review)
+                .where(Review.id == review_id)
+                .where(Review.installation_id == candidate_id)
+            )
+            if review is not None:
+                resolved_installation_id = candidate_id
+                break
+    if review is None or resolved_installation_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-    installation_id = int(review.installation_id)
-    if installation_id not in allowed:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found")
-    return review, installation_id
+    return review, resolved_installation_id
 
 
 async def _get_labeler_user_id(current_user: CurrentDashboardUser) -> int | None:
     async with AsyncSessionLocal() as session:
+        await set_user_context(session, current_user.github_id)
         row = await session.scalar(
             select(User.id)
             .where(User.github_id == current_user.github_id)
@@ -148,6 +173,7 @@ async def label_finding(
     review_id: int,
     finding_index: int,
     payload: LabelFindingRequest,
+    installation_id: int | None = Query(default=None, ge=1),
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> FindingLabelResponse:
     """Create or update the human label for a single finding.
@@ -155,7 +181,9 @@ async def label_finding(
     Auth: requires authenticated dashboard user.
     Tenant isolation: user must belong to the installation that owns the review.
     """
-    review, installation_id = await _resolve_review_installation(review_id, current_user)
+    review, installation_id = await _resolve_review_installation(
+        review_id, current_user, installation_id
+    )
 
     finding = _finding_at_index(review, finding_index)
     if finding is None:
@@ -215,6 +243,7 @@ async def label_finding(
 )
 async def list_finding_labels(
     review_id: int,
+    installation_id: int | None = Query(default=None, ge=1),
     current_user: CurrentDashboardUser = Depends(get_current_dashboard_user),
 ) -> list[FindingLabelResponse]:
     """Return all human labels for every finding in a review.
@@ -222,7 +251,9 @@ async def list_finding_labels(
     Auth: requires authenticated dashboard user.
     Tenant isolation: user must belong to the installation that owns the review.
     """
-    _, installation_id = await _resolve_review_installation(review_id, current_user)
+    _, installation_id = await _resolve_review_installation(
+        review_id, current_user, installation_id
+    )
 
     async with AsyncSessionLocal() as session:
         await set_installation_context(session, installation_id)
