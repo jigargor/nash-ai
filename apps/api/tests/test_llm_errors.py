@@ -81,6 +81,23 @@ def test_coerce_quota_error_non_quota_400_returns_none() -> None:
     assert result is None
 
 
+def test_coerce_quota_error_bare_error_code_400_returns_none() -> None:
+    exc = _exc_with_status(400, "Error code: 400")
+
+    result = coerce_quota_error(exc, provider="anthropic", model="claude-haiku-5-5")
+
+    assert result is None
+
+
+def test_is_invalid_model_or_param_error_for_400() -> None:
+    from app.llm.errors import invalid_request_fallback_reason, is_invalid_model_or_param_error
+
+    exc = _exc_with_status(400, "Error code: 400 - temperature is not supported")
+
+    assert is_invalid_model_or_param_error(exc) is True
+    assert invalid_request_fallback_reason(exc) == "invalid_model_or_param"
+
+
 def test_coerce_quota_error_plain_exception_returns_none() -> None:
     exc = ValueError("something unexpected")
 

@@ -96,11 +96,16 @@ def _model_ids(page: object) -> set[str]:
     return model_ids
 
 
-async def _run() -> int:
+async def _run(*, static_only: bool = False) -> int:
     catalog = load_baseline_catalog()
     errors = verify_catalog(catalog)
-    live_errors, summaries = await verify_live_models(catalog)
-    errors.extend(live_errors)
+    summaries: list[str] = []
+    if static_only:
+        summaries.append("live: skipped (--static-only)")
+    else:
+        live_errors, live_summaries = await verify_live_models(catalog)
+        errors.extend(live_errors)
+        summaries.extend(live_summaries)
 
     print(f"Catalog: {len(catalog.models)} models across {len(catalog.providers)} providers")
     for summary in summaries:
@@ -114,8 +119,12 @@ async def _run() -> int:
     return 0
 
 
-def main() -> int:
-    return asyncio.run(_run())
+def main(argv: list[str] | None = None) -> int:
+    import sys
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    static_only = "--static-only" in args
+    return asyncio.run(_run(static_only=static_only))
 
 
 if __name__ == "__main__":

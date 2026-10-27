@@ -14,7 +14,8 @@ def test_baseline_catalog_validates_and_hashes() -> None:
     catalog = load_baseline_catalog()
 
     assert {"anthropic", "openai", "gemini"}.issubset(catalog.provider_ids())
-    assert catalog.find_model("anthropic", "claude-sonnet-5") is not None
+    assert catalog.find_model("anthropic", "claude-sonnet-5-5") is not None
+    assert catalog.find_model("anthropic", "claude-haiku-5-5") is not None
     assert catalog.find_model("gemini", "gemini-3.6-flash") is not None
     assert len(baseline_catalog_hash(catalog)) == 40
 
@@ -27,7 +28,7 @@ def test_router_resolves_default_primary_role_from_available_provider() -> None:
     )
 
     assert resolution.provider == "anthropic"
-    assert resolution.model == "claude-sonnet-5"
+    assert resolution.model == "claude-sonnet-5-5"
     assert resolution.role == "primary_review"
     assert resolution.explicit_pin is False
 
@@ -97,7 +98,7 @@ def test_router_supports_role_tier_config_without_model_pin() -> None:
     )
 
     assert resolution.provider == "anthropic"
-    assert resolution.model == "claude-haiku-4-5"
+    assert resolution.model == "claude-haiku-5-5"
     assert resolution.tier == "economy"
 
 
@@ -114,7 +115,7 @@ def test_fast_path_prefers_lowest_cost_economy_model() -> None:
     )
 
     assert resolution.provider == "anthropic"
-    assert resolution.model == "claude-haiku-4-5"
+    assert resolution.model == "claude-haiku-5-5"
 
 
 def test_resolve_model_attempt_chain_rotates_providers_then_lower_tiers() -> None:

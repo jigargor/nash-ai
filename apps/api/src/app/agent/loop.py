@@ -15,7 +15,7 @@ from app.agent.review_config import DEFAULT_MODEL_NAME, ModelProvider
 from app.agent.tools import TOOLS, execute_tool, tool_result_succeeded
 from app.llm.errors import coerce_quota_error
 from app.llm.providers import CacheRequestOptions, get_provider_adapter, record_usage
-from app.llm.providers.anthropic import anthropic_cache_control
+from app.llm.providers.anthropic import anthropic_cache_control, anthropic_create_kwargs
 from app.observability import create_async_anthropic_client
 from app.observability.deepeval_tracing import observe_span, update_deepeval_span
 from app.observability.events import LLMUsage as ObserverLLMUsage
@@ -102,10 +102,19 @@ async def _run_agent_anthropic(
             response = await client.messages.create(
                 model=model_name,
                 max_tokens=4096,
-                temperature=0,
                 system=anthropic_system,
                 tools=anthropic_tools,
                 messages=messages,  # type: ignore[arg-type]
+                **anthropic_create_kwargs(
+                    model_name,
+                    temperature=0,
+                    model_role=context.get("model_role")
+                    if isinstance(context.get("model_role"), str)
+                    else None,
+                    effort=context.get("llm_effort")
+                    if isinstance(context.get("llm_effort"), str)
+                    else None,
+                ),
             )
         except Exception as exc:
             quota_error = coerce_quota_error(exc, provider="anthropic", model=model_name)

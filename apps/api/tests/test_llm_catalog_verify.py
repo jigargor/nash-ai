@@ -7,10 +7,7 @@ from app.llm.catalog.verify import verify_catalog
 def test_baseline_catalog_passes_static_verification() -> None:
     catalog = load_baseline_catalog()
 
-    assert verify_catalog(
-        catalog,
-        now=datetime(2026, 9, 2, tzinfo=timezone.utc),
-    ) == []
+    assert verify_catalog(catalog, now=datetime.now(timezone.utc)) == []
 
 
 def test_verify_catalog_rejects_unknown_model_without_replacement() -> None:

@@ -12,6 +12,18 @@ _QUOTA_KEYWORDS = (
     "overloaded",
 )
 
+_INVALID_MODEL_OR_PARAM_KEYWORDS = (
+    "invalid_request",
+    "invalid_request_error",
+    "not_found_error",
+    "model not found",
+    "does not exist",
+    "unsupported parameter",
+    "unsupported_parameter",
+    "unknown parameter",
+    "invalid model",
+)
+
 
 class LLMQuotaOrRateLimitError(RuntimeError):
     def __init__(
@@ -58,10 +70,34 @@ def _parse_rate_limit_reset_hint_from_exc(exc: BaseException) -> str | None:
     return rate_limit_backoff.parse_rate_limit_reset_http_date(exc)
 
 
+def is_invalid_model_or_param_error(exc: Exception) -> bool:
+    """True for hard request failures (bad model id / unsupported params), not quota."""
+    status_code = _status_code_from_error(exc)
+    if status_code == 400:
+        return True
+    message = str(exc).lower()
+    if "error code: 400" in message or "status code: 400" in message:
+        return True
+    if status_code in {404, 422} and any(
+        token in message for token in _INVALID_MODEL_OR_PARAM_KEYWORDS
+    ):
+        return True
+    return any(token in message for token in _INVALID_MODEL_OR_PARAM_KEYWORDS)
+
+
+def invalid_request_fallback_reason(exc: Exception) -> str | None:
+    if is_invalid_model_or_param_error(exc):
+        return "invalid_model_or_param"
+    return None
+
+
 def _has_quota_signal(exc: Exception) -> bool:
     status_code = _status_code_from_error(exc)
     if status_code == 429:
         return True
+    # HTTP 400 / invalid model-or-param requests are never quota/rate-limit.
+    if status_code == 400 or is_invalid_model_or_param_error(exc):
+        return False
     message = str(exc).lower()
     return any(token in message for token in _QUOTA_KEYWORDS)
 

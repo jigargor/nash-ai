@@ -101,7 +101,10 @@ from app.github.client import GitHubClient
 from app.github.comments import post_review
 from app.llm.router import ModelResolution, ReviewModelRole, resolve_model_for_role
 from app.llm.router import ModelRoleRoutingConfig, resolve_model_attempt_chain
-from app.llm.errors import LLMQuotaOrRateLimitError
+from app.llm.errors import (
+    LLMQuotaOrRateLimitError,
+    invalid_request_fallback_reason,
+)
 from app.llm.rate_limit_backoff import sleep_after_llm_rate_limit
 from app.llm.types import ModelProvider
 from app.observability import ObservationContext, get_observer, record_review_trace
@@ -611,6 +614,7 @@ async def _run_fast_path_stage(
     for attempt_index, attempt in enumerate(fast_attempts):
         fallback_reason = attempt.fallback_reason
         try:
+            context["model_role"] = "fast_path"
             decision, classified, _, _ = await run_fast_path_prepass(
                 files_in_diff=files_in_diff,
                 diff_text=diff_text,
@@ -1293,8 +1297,10 @@ async def run_review(
         if primary_span is not None:
             context["_observation_stage_span"] = primary_span
         last_primary_error: Exception | None = None
+        primary_saw_non_quota = False
         for attempt_index, attempt in enumerate(primary_attempts):
             try:
+                context["model_role"] = "primary_review"
                 messages = await run_agent(
                     system_prompt,
                     user_prompt,
@@ -1331,6 +1337,13 @@ async def run_review(
                 continue
             except Exception as exc:
                 last_primary_error = exc
+                primary_saw_non_quota = True
+                reason = invalid_request_fallback_reason(exc)
+                if reason is not None:
+                    context.setdefault("debug_artifacts", {})
+                    debug_artifacts = context.get("debug_artifacts")
+                    if isinstance(debug_artifacts, dict):
+                        debug_artifacts["last_primary_fallback_reason"] = reason
                 logger.warning(
                     "Primary provider error fallback review_id=%s provider=%s model=%s err=%s",
                     review_id,
@@ -1341,11 +1354,22 @@ async def run_review(
                 continue
         else:
             if primary_span is not None:
-                observer.finish_stage(primary_span, status="rate_limited")
+                finish_status = (
+                    "rate_limited"
+                    if isinstance(last_primary_error, LLMQuotaOrRateLimitError)
+                    and not primary_saw_non_quota
+                    else "failed"
+                )
+                observer.finish_stage(primary_span, status=finish_status)
                 context.pop("_observation_stage_span", None)
-            raise RuntimeError(
-                f"All primary provider attempts failed due to quota/rate-limit: {last_primary_error}"
-            )
+            if (
+                isinstance(last_primary_error, LLMQuotaOrRateLimitError)
+                and not primary_saw_non_quota
+            ):
+                raise RuntimeError(
+                    f"All primary provider attempts failed due to quota/rate-limit: {last_primary_error}"
+                )
+            raise RuntimeError(f"All primary provider attempts failed: {last_primary_error}")
         _hydrate_cache_read_ratio_by_layer(context_bundle.telemetry, context)
         await _record_model_audit(
             context=context,
@@ -1636,6 +1660,7 @@ async def run_review(
             last_editor_error: Exception | None = None
             for attempt_index, attempt in enumerate(editor_attempts):
                 try:
+                    context["model_role"] = "editor"
                     edited_result = await run_editor(
                         draft=draft_result,
                         pr_context={
@@ -1673,6 +1698,12 @@ async def run_review(
                     continue
                 except Exception as exc:
                     last_editor_error = exc
+                    reason = invalid_request_fallback_reason(exc)
+                    if reason is not None:
+                        context.setdefault("debug_artifacts", {})
+                        debug_artifacts = context.get("debug_artifacts")
+                        if isinstance(debug_artifacts, dict):
+                            debug_artifacts["last_editor_fallback_reason"] = reason
                     logger.warning(
                         "Editor provider error fallback review_id=%s provider=%s model=%s err=%s",
                         review_id,

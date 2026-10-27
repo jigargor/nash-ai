@@ -223,12 +223,14 @@ async def _generate_yaml_with_model(
     )
     if model_provider == "anthropic":
         client = create_async_anthropic_client(get_provider_api_key("anthropic"))
+        from app.llm.providers.anthropic import anthropic_create_kwargs
+
         anthropic_response = await client.messages.create(
             model=model_name,
             max_tokens=2200,
-            temperature=0,
             system=[{"type": "text", "text": DEFAULT_TEMPLATE_PROMPT}],
             messages=[{"role": "user", "content": user_prompt}],
+            **anthropic_create_kwargs(model_name, temperature=0, model_role="config_generator"),
         )
         text_blocks = [
             str(getattr(block, "text", "")).strip()
